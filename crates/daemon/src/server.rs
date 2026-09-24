@@ -49,7 +49,7 @@ impl InstanceLock {
     pub fn acquire(home: &Path) -> Result<Self, DaemonError> {
         let dir = transport::run_dir(home);
         std::fs::create_dir_all(&dir).map_err(io(format!("no se pudo crear {}", dir.display())))?;
-        let lock_path = dir.join("symphonyd.lock");
+        let lock_path = transport::lock_path(home);
         let pid_path = dir.join("symphonyd.pid");
         let file = OpenOptions::new()
             .create(true)

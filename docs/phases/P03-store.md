@@ -47,6 +47,9 @@
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
 
+### Arreglo: carrera stop → autoarranque (P03.S5)
+- La CI de macOS mostró que `daemon stop` daba por detenido al daemon cuando desaparecía su socket, pero el proceso seguía cerrando la base con el lock tomado; el siguiente autoarranque fallaba con "ya hay un daemon". Ahora `stop` espera a que se libere el **lock de instancia** y el autoarranque (`ensure_running`) espera a que el socket conteste o el lock quede libre antes de lanzar otro daemon.
+
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|

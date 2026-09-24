@@ -153,13 +153,55 @@ fn detach(cmd: &mut Command) {
     cmd.process_group(0);
 }
 
+/// Resultado de asegurar que haya un daemon corriendo.
+pub enum Ensured {
+    /// Ya había uno; aquí está la conexión.
+    Running(Connection<LocalStream>),
+    /// Se arrancó uno nuevo con este pid.
+    Started(u32, Connection<LocalStream>),
+}
+
 /// Conecta con el daemon; si no está vivo, lo arranca.
-pub async fn connect_or_start(home: &Path) -> Result<Connection<LocalStream>, ClientError> {
-    if let Some(conn) = try_connect(home).await {
-        return Ok(conn);
+///
+/// Si el socket no responde pero el lock de instancia está tomado, hay un
+/// daemon arrancando o apagándose: se espera a que conteste o suelte el lock
+/// antes de lanzar otro (si no, el nuevo chocaría con el lock).
+pub async fn ensure_running(home: &Path) -> Result<Ensured, ClientError> {
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        if let Some(conn) = try_connect(home).await {
+            return Ok(Ensured::Running(conn));
+        }
+        if !transport::daemon_lock_held(home) {
+            let pid = start_daemon(home).await?;
+            return Ok(Ensured::Started(pid, transport::connect(home).await?));
+        }
+        if Instant::now() > deadline {
+            return Err(ClientError::StartTimeout {
+                secs: START_TIMEOUT.as_secs(),
+                logs: home.join("logs").display().to_string(),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    start_daemon(home).await?;
-    Ok(transport::connect(home).await?)
+}
+
+pub async fn connect_or_start(home: &Path) -> Result<Connection<LocalStream>, ClientError> {
+    match ensure_running(home).await? {
+        Ensured::Running(conn) | Ensured::Started(_, conn) => Ok(conn),
+    }
+}
+
+/// Espera a que el daemon termine del todo (lock liberado), no solo a que cierre el socket.
+pub async fn wait_stopped(home: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while transport::daemon_lock_held(home) {
+        if Instant::now() > deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    true
 }
 
 pub async fn call(

@@ -1,6 +1,6 @@
 mod client;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use miette::IntoDiagnostic;
@@ -65,15 +65,12 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
         },
         Some(Cmd::Daemon {
             action: DaemonCmd::Start,
-        }) => match client::try_connect(home).await {
-            Some(mut conn) => {
+        }) => match client::ensure_running(home).await? {
+            client::Ensured::Running(mut conn) => {
                 let status = client::call(&mut conn, "status", json!({})).await?;
                 println!("daemon: ya estaba corriendo (pid {})", status["pid"]);
             }
-            None => {
-                let pid = client::start_daemon(home).await?;
-                println!("daemon: iniciado (pid {pid})");
-            }
+            client::Ensured::Started(pid, _) => println!("daemon: iniciado (pid {pid})"),
         },
         Some(Cmd::Daemon {
             action: DaemonCmd::Stop,
@@ -82,14 +79,8 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
             Some(mut conn) => {
                 client::call(&mut conn, "shutdown", json!({})).await?;
                 drop(conn);
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while client::try_connect(home).await.is_some() {
-                    if Instant::now() > deadline {
-                        miette::bail!(
-                            "el daemon recibió la orden de apagarse pero sigue respondiendo"
-                        );
-                    }
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                if !client::wait_stopped(home, Duration::from_secs(10)).await {
+                    miette::bail!("el daemon recibió la orden de apagarse pero sigue corriendo");
                 }
                 println!("daemon: detenido");
             }
