@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P04 · Git, worktrees y procesos (rama `phase/p04-git-process`)
-**Paso actual:** P04.S5 · `fake-agent` (testkit)
+**Paso actual:** P04.S7 · Cierre
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (102 tests)
+- `cargo xtask check`: ✅ (111 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -17,11 +17,13 @@
 - [x] P04.S2 Estrategia de dependencias
 - [x] P04.S3 Crate `process`
 - [x] P04.S4 Saneamiento de ANSI
-- [ ] P04.S5 `fake-agent` (testkit)   ← aquí
+- [x] P04.S5 `fake-agent` (testkit)
+- [x] P04.S6 Integración
+- [ ] P04.S7 Cierre   ← aquí
 - (resto de P04 en PLAN.md)
 
 ## Próxima acción concreta
-Ver PLAN P04.S5 (fake-agent).
+Cierre de P04: revisión del diff, merge a `main`, tag `p04-done`.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

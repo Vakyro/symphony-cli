@@ -39,6 +39,18 @@
 - **Cómo se verificó:** 10 tests de ataques (cambio de título con BEL/ST/C1, OSC 52, borrado de pantalla, pantalla alternativa, reset, colores, hyperlinks, DCS/APC, backspace para esconder texto, CR, secuencias sin terminar, texto normal con ñ y emoji) + 3 proptest (salida plana sin controles, salida con color solo con SGR válidos, idempotencia). `cargo xtask check` → 102 passed.
 - **Nota:** no se agregó una crate: STACK §58 no trae una de ANSI y el parser es chico.
 
+### P04.S5 · `fake-agent` (testkit) — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** binario `fake-agent` en `symphony-testkit`, guiado por un guion TOML (`Script`/`Step`): `say`, `edit`, `run`, `wait_input`, `sleep`, `rate_limit`, `quota_exhausted`, `auth_error`, `crash`, `hang`. Emite JSONL al estilo de `claude -p --output-format stream-json` (`system/init`, `assistant`, `tool_use`, `tool_result`, `system/api_retry`, `user`, `error`, `result`), escribe transcript JSONL como Claude Code y llama al hook configurado con el payload JSON por stdin (campos comunes reales), respetando un `deny` de `PreToolUse`. Subcomando `record-hook` para usarlo de hook en tests.
+- **Archivos clave:** `crates/testkit/src/{lib,script}.rs`, `crates/testkit/src/bin/fake-agent.rs`, `crates/testkit/tests/fake_agent.rs`
+- **Cómo se verificó:** 8 tests, uno por escenario (turno normal con hooks y transcript, deny, 429 que sigue, cuota y auth con error tipado y exit 1, crash sin `result` ni `Stop`, cuelgue hasta kill, mensaje por stdin, guion inválido).
+- **Nota:** `symphony hook emit` todavía no existe (P05.S3): el fake-agent llama a cualquier programa de hook, igual que un CLI real.
+
+### P04.S6 · Integración — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `crates/testkit/tests/p04_integration.rs`: repo en `proyecto con espacios/` → worktree `agent-001` → `fake-agent` adentro con `symphony-process` → se lee el stream hasta el mensaje del asistente (el archivo editado aparece en `git status`) → el agente queda colgado → `terminate_tree` → borrar worktree y rama; el repo base queda intacto.
+- **Cómo se verificó:** local y CI en 3 OS.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
