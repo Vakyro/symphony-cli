@@ -4,6 +4,7 @@
 mod config;
 mod enums;
 mod ids;
+mod redact;
 mod transitions;
 
 pub use config::{
@@ -16,4 +17,5 @@ pub use enums::{
     PerformanceProfile, ProviderState, QuotaCertainty, RunEndReason, RunStatus, TaskStatus,
 };
 pub use ids::{AgentId, CheckpointId, InvalidId, ProjectId, RunId, SessionId, TaskId, WorktreeId};
+pub use redact::{REDACTED, redact};
 pub use transitions::InvalidTransition;

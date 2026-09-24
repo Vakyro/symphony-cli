@@ -13,3 +13,13 @@ workspace = true
 [[bin]]
 name = "symphonyd"
 path = "src/main.rs"
+
+[dependencies]
+symphony-core = { path = "../core" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

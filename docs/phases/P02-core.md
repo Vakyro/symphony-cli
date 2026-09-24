@@ -30,6 +30,13 @@
 - **Archivos clave:** `crates/core/src/config.rs`; `PerformanceProfile` agregado a `enums.rs`
 - **Cómo se verificó:** `cargo xtask check` → 31 passed (crear en frío, defaults parciales, editar sin perder comentarios, una edición inválida no toca el archivo, claves desconocidas y valores fuera de rango, project.toml sin pisar lo existente, plantilla == defaults).
 
+### P02.S4 · Logging y redacción — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** redactor central `symphony_core::redact` (regex, 7 reglas): Authorization/Proxy-Authorization, Cookie/Set-Cookie, Bearer, campos JSON y `NOMBRE=valor` con nombre de credencial, formatos de llaves (Anthropic, OpenAI, GitHub, Google, AWS, Slack) y JWT. Logging del daemon: `tracing` → `RedactingWriter` → archivo rotativo diario `symphonyd.*.log` en `~/.symphony/logs/`, 14 archivos, non-blocking. El daemon pasa a ser lib + bin.
+- **Archivos clave:** `crates/core/src/redact.rs`, `crates/daemon/src/logging.rs`, `crates/daemon/src/lib.rs`
+- **Cómo se verificó:** `cargo xtask check` → 41 passed. Redactor: Bearer, API keys conocidas, cookies, variables de entorno, JSON y texto normal que **no** debe tocarse (`tokens_used=1234`, conteos de tokens). Logging: los campos de span se conservan y los secretos salen redactados; el archivo rotativo queda en el directorio con el secreto redactado.
+- **Notas:** los nombres de credencial solo se aceptan si después de la palabra clave viene `_`/`-` o fin de nombre (así `tokens_used` no se redacta).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -58,6 +65,10 @@
 | ulid | 3 | IDs de entidades | Sí (en ulid 3, `Ulid::new()` pasó a llamarse `Ulid::generate()`) |
 | toml_edit | 0.25.15 (`serde`) | Leer y editar config conservando comentarios | Sí |
 | tempfile | 3.27 (dev) | Tests de config | Sí |
+| regex | 1.13 | Redactor | Sí |
+| tracing | 0.1.44 | Logs estructurados | Sí |
+| tracing-subscriber | 0.3.23 (`fmt`, `env-filter`, `ansi`, `std`) | Formato y filtro | Sí |
+| tracing-appender | 0.2.5 | Archivo rotativo non-blocking | Sí |
 
 ## Métricas
 (benchmarks, tiempos, RAM, cobertura — con comando)
