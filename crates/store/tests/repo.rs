@@ -387,3 +387,23 @@ async fn repositories_through_the_single_writer() {
     assert_eq!(repo::get_project(&reader, project).unwrap().root_path, "/w");
     writer.shutdown();
 }
+
+#[test]
+fn home_rows_show_current_model_per_live_agent() {
+    let f = fixture();
+    let t1 = task(&f);
+    let a1 = agent(&f, t1);
+    let t2 = task(&f);
+    let a2 = agent(&f, t2);
+    repo::open_run(&f.conn, RunId::new(), a1, "anthropic", "claude/sonnet", 10).unwrap();
+    let rows = repo::home_rows(&f.conn, f.project).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        (rows[0].agent_id, rows[0].model_id.as_deref()),
+        (a1, Some("claude/sonnet"))
+    );
+    assert_eq!((rows[1].agent_id, rows[1].model_id.as_deref()), (a2, None));
+    assert_eq!(rows[0].task_code, "T-1");
+    repo::set_agent_state(&f.conn, a2, AgentState::Cancelled, None, 11).unwrap();
+    assert_eq!(repo::home_rows(&f.conn, f.project).unwrap().len(), 1);
+}

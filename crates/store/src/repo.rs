@@ -707,3 +707,45 @@ pub fn open_recovery_count(conn: &Connection) -> Result<u64, RepoError> {
     )?;
     Ok(u64::try_from(n).unwrap_or(0))
 }
+
+// --- consultas de vistas (DB §5) --------------------------------------------
+
+/// Una fila de la vista Home: agente vivo + su run abierto (modelo actual) + su task.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HomeRow {
+    pub agent_id: AgentId,
+    pub number: i64,
+    pub state: AgentState,
+    pub state_reason: Option<String>,
+    pub task_code: String,
+    pub task_title: String,
+    /// `None` si el agente no tiene executor vivo (p. ej. `WAITING_PROVIDER`).
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+}
+
+/// Home (DB §5): agentes activos + run abierto + modelo + task. `provider_health`
+/// y `resource_samples` se suman en sus fases (4 y 2).
+pub fn home_rows(conn: &Connection, project: ProjectId) -> Result<Vec<HomeRow>, RepoError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT a.id, a.number, a.state, a.state_reason, t.code, t.title, r.provider_id, r.model_id
+         FROM agents a
+         JOIN tasks t ON t.id = a.task_id
+         LEFT JOIN agent_runs r ON r.agent_id = a.id AND r.ended_at IS NULL
+         WHERE a.project_id = ?1 AND a.archived_at IS NULL AND a.state NOT IN ('COMPLETED','CANCELLED')
+         ORDER BY a.number",
+    )?;
+    let rows = stmt.query_map([project.to_string()], |r| {
+        Ok(HomeRow {
+            agent_id: col(r, 0)?,
+            number: r.get(1)?,
+            state: col(r, 2)?,
+            state_reason: r.get(3)?,
+            task_code: r.get(4)?,
+            task_title: r.get(5)?,
+            provider_id: r.get(6)?,
+            model_id: r.get(7)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}

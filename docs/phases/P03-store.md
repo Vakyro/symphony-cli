@@ -43,6 +43,11 @@
 - **Cómo se verificó:** test con el binario real: se deja una sesión `ACTIVE` de un daemon muerto (pid 999999) → `symphonyd` arranca → `status.recovery_open == 1`, la sesión queda `INTERRUPTED`, el recovery item nombra el pid → un segundo arranque no duplica. `cargo xtask check` → 73 passed.
 - **Decisión:** no se revisa si el pid sigue vivo. Con el lock de instancia tomado, ningún daemon anterior del mismo home puede estar vivo; además, los pids se reusan.
 
+### P03.S6 · Benchmarks — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `crates/store/benches/store.rs` (Criterion). Inserción de eventos de punta a punta por el `Writer` (spawn del hilo, envío por canal, lotes, `flush`) y la consulta de Home (`repo::home_rows`, nueva) con 50 agentes vivos, cada uno con su run abierto, y 100k eventos en la base.
+- **Cómo se verificó:** `cargo bench -p symphony-store --bench store` en la laptop de Leo (i7-8650U, Windows 11, SSD).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -75,6 +80,15 @@
 | zstd | 0.14 | Compresión de blobs | Sí |
 
 ## Métricas
+Línea base P03 (laptop de Leo, `cargo bench -p symphony-store --bench store`):
+
+| Benchmark | Tiempo (intervalo) | Throughput |
+|---|---|---|
+| Insertar 10 000 eventos por el Writer | 166–181 ms | ~58 000 eventos/s |
+| Insertar 100 000 eventos por el Writer | 1.50–1.54 s | ~66 000 eventos/s |
+| Home query, 50 agentes + 100k eventos | 94–97 µs | — |
+
+DB §7 asumía unos 50 eventos cada 100 ms (≈500/s): hay más de 100× de margen.
 (benchmarks, tiempos, RAM, cobertura — con comando)
 
 ## Pruebas
