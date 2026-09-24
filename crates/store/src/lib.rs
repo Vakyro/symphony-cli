@@ -6,6 +6,11 @@ use std::path::Path;
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
+mod writer;
+pub use writer::{
+    BATCH_MAX, NewEvent, WriteFn, Writer, WriterClosed, WriterHandle, WriterStats, open_reader,
+};
+
 /// Migraciones versionadas con `PRAGMA user_version` (DB §6).
 /// `foreign_key_check` hace que una migración con FKs rotas falle al aplicarse.
 const MIGRATION_LIST: &[M<'static>] =
@@ -33,6 +38,8 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("SQLite no aceptó journal_mode=WAL (quedó en `{0}`)")]
     NoWal(String),
+    #[error("el escritor de la base de datos ya no está corriendo")]
+    WriterClosed,
 }
 
 fn configure(conn: &Connection, wal: bool) -> Result<(), StoreError> {

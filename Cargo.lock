@@ -1358,9 +1358,11 @@ version = "0.0.1"
 dependencies = [
  "rusqlite",
  "rusqlite_migration",
+ "serde_json",
  "symphony-core",
  "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

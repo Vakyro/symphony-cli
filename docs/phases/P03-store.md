@@ -17,6 +17,12 @@
 - **Archivos clave:** `migrations/001_core.sql`, `crates/store/src/{lib,tests}.rs`
 - **Cómo se verificó:** `cargo xtask check` → 56 passed (9 del store): esquema exacto de 19 tablas, `user_version = 1`, PRAGMAs, `foreign_key_check` vacío, reapertura idempotente, índices parciales que rechazan duplicados, FKs activas, CHECKs de enums iguales a los enums de `core`, `EXACT`/`PROFILE` exigen su destino, `json_valid`, y **`agents` sin columna de modelo** (CONSTRAINTS A1).
 
+### P03.S2 · Store writer — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `Writer` = hilo `symphony-store-writer` dueño de la única conexión de escritura; canal tokio acotado (4096, backpressure con `send().await`); comandos `Event` (en lotes de hasta 50 por transacción), `Write` (closure en transacción propia, con rollback si falla), `Flush` (devuelve `WriterStats`) y `Shutdown` (escribe lo encolado, `PRAGMA optimize` y termina; los handles que quedan reciben `WriterClosed`). Si un lote falla, se reintenta evento por evento. `open_reader()` abre conexiones de solo lectura con `query_only`.
+- **Archivos clave:** `crates/store/src/writer.rs`, `crates/store/tests/writer.rs`
+- **Cómo se verificó:** 4 productores × 2 500 = **10 000 eventos en ~0.5 s**, 0 fallidos, **orden por productor conservado**, en lotes (menos lotes que eventos). Un lector consulta sin parar durante toda la escritura **sin ningún error** (0 `SQLITE_BUSY`). Un evento con FK rota no tira su lote (9/1). Closure con error → rollback y error al que llamó. `cargo xtask check` → 59 passed.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -26,7 +32,7 @@
 |---|---|---|---|
 
 ## Decisiones tomadas
-- ADR-NNNN: …
+- **Lotes sin espera artificial:** DB §7 dice "cada ~100 ms o cada 50 eventos". El writer escribe **todo lo que haya en cola, hasta 50**, sin esperar. Con carga los lotes se llenan solos (se verificó); sin carga, la latencia baja de ~100 ms a casi 0. El objetivo de DB §7 (latencia baja con varios agentes) se cumple mejor.
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
