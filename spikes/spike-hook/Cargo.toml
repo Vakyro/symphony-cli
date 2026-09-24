@@ -1,0 +1,9 @@
+[package]
+name = "spike-hook"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+interprocess = "2.4"
+serde_json = "1.0.151"

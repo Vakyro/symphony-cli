@@ -1,0 +1,11 @@
+[package]
+name = "spike-process"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+processkit = { version = "3.3", features = ["limits", "stats"] }
+tokio = { version = "1.53", features = ["full"] }
+sysinfo = "0.39.6"
+

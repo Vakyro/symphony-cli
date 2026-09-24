@@ -1,0 +1,30 @@
+# P01.S7: gate de ProcessKit en los 3 OS. Desechable junto con spikes/.
+name: spike-processkit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["phase/p01-*"]
+    paths: ["spikes/spike-process/**", ".github/workflows/spike-processkit.yml"]
+
+jobs:
+  gate:
+    name: gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes
+      - name: run gate
+        shell: bash
+        run: |
+          cd spikes
+          cargo run --release -q -p spike-process | tee -a "$GITHUB_STEP_SUMMARY"

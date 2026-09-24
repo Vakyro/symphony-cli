@@ -1,23 +1,28 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
-**Fase actual:** P01 · Spike de viabilidad (rama `phase/p01-spike`, por crear)
-**Paso actual:** P01.S1 · Rama y bitácora
-**Estado del paso:** PENDIENTE
+**Fase actual:** P02 · Cimientos del core (rama `phase/p02-core`)
+**Paso actual:** P02.S1 · Crate `protocol`
+**Estado del paso:** EN CURSO
+**En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (2 tests)
-- `cargo deny check`: ✅
-- CI en main: sin remoto (workflow listo en `.github/workflows/ci.yml`, no ejecutado)
+- `cargo xtask check`: ✅
+- CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
-- [ ] P01.S1 Rama y bitácora   ← aquí
-- [ ] P01.S2 Investigar los contratos de los CLIs
-- (resto de P01 en PLAN.md)
+- [ ] P02.S1 Crate `protocol`   ← aquí
+- [ ] P02.S2 Crate `core`: tipos de dominio
+- [ ] P02.S3 Config
+- [ ] P02.S4 Logging y redacción
+- [ ] P02.S5 Daemon `symphonyd`
+- [ ] P02.S6 Cliente `symphony`
+- [ ] P02.S7 Integración
+- [ ] P02.S8 Cierre
 
 ## Próxima acción concreta
-`git switch -c phase/p01-spike` desde `main` y crear `docs/phases/P01-spike.md` desde `_TEMPLATE.md`. Antes de gastar suscripciones en P01, confirmar el permiso de Leo.
+Framing `u32` BE + JSON con límite de tamaño, mensajes `Request`/`Response`/`Event`/`Subscribe`, `protocol_version = 1`, codec async sobre `interprocess`; proptest de framing.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
@@ -27,12 +32,12 @@
 - Hipótesis descartadas:
 
 ## Bloqueos y preguntas para Leo
-- ¿Creo el repo remoto en GitHub (privado o público, y con qué nombre) y hago push? Hasta entonces la CI no corre.
-- P01 usa Claude Code y Codex reales en pruebas cortas: ¿hay permiso?
+- (ninguno)
 
 ## Fases
 | Fase | Estado | Tag |
 |---|---|---|
-| P00 | ✅ (CI sin remoto) | p00-done |
-| P01 | ⏳ siguiente | |
-| P02–P16 | ⏳ | |
+| P00 | ✅ | p00-done |
+| P01 | ✅ | p01-done |
+| P02 | 🟡 en curso | |
+| P03–P16 | ⏳ (P08–P16 provisionales hasta P07.S10) | |
