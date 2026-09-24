@@ -41,7 +41,12 @@ pub struct SymphonyHome(PathBuf);
 impl SymphonyHome {
     pub fn resolve() -> Result<Self, ConfigError> {
         if let Some(dir) = std::env::var_os("SYMPHONY_HOME").filter(|v| !v.is_empty()) {
-            return Ok(Self(PathBuf::from(dir)));
+            // Absoluta: el nombre del pipe/socket del daemon se deriva de esta ruta.
+            let dir = std::path::absolute(&dir).map_err(|source| ConfigError::Io {
+                path: dir.into(),
+                source,
+            })?;
+            return Ok(Self(dir));
         }
         std::env::home_dir()
             .map(|h| Self(h.join(".symphony")))

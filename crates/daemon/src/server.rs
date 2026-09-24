@@ -123,8 +123,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         tracing::warn!("había conexiones abiertas al apagar; se cierran");
     }
     drop(listener);
-    #[cfg(unix)]
-    let _ = std::fs::remove_file(transport::run_dir(home).join("symphonyd.sock"));
+    transport::cleanup(home);
     tracing::info!("daemon detenido");
     Ok(())
 }

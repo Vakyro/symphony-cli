@@ -1,0 +1,10 @@
+bin.name = "symphony"
+args = ["xyzzy"]
+status.code = 2
+stderr = """
+error: unrecognized subcommand 'xyzzy'
+
+Usage: symphony[EXE] [COMMAND]
+
+For more information, try '--help'.
+"""

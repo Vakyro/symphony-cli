@@ -34,13 +34,21 @@ async fn call(home: &Path, method: &str, params: Value) -> Outcome {
     }
 }
 
-async fn wait_ready(home: &Path) {
+async fn wait_ready(home: &Path, daemon: &mut Child) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while transport::connect(home).await.is_err() {
-        assert!(
-            Instant::now() < deadline,
-            "el daemon no abrió el socket a tiempo"
-        );
+        let exited = daemon.try_wait().unwrap().is_some();
+        if exited || Instant::now() > deadline {
+            let _ = daemon.kill();
+            let mut stderr = String::new();
+            if let Some(mut e) = daemon.stderr.take() {
+                std::io::Read::read_to_string(&mut e, &mut stderr).unwrap();
+            }
+            panic!(
+                "el daemon no abrió el socket (terminó: {exited}). stderr:
+{stderr}"
+            );
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
@@ -61,7 +69,7 @@ async fn lifecycle_single_instance_and_methods() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("symphony-home");
     let mut first = spawn_daemon(&home);
-    wait_ready(&home).await;
+    wait_ready(&home, &mut first).await;
 
     assert_eq!(
         call(&home, "ping", json!({})).await,
@@ -107,7 +115,7 @@ async fn lifecycle_single_instance_and_methods() {
 
     // El lock se liberó: otro daemon arranca en el mismo home.
     let mut third = spawn_daemon(&home);
-    wait_ready(&home).await;
+    wait_ready(&home, &mut third).await;
     call(&home, "shutdown", json!({})).await;
     assert!(wait_exit(&mut third).success());
 
@@ -126,7 +134,7 @@ async fn bad_frames_close_the_connection_without_killing_the_daemon() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("h");
     let mut daemon = spawn_daemon(&home);
-    wait_ready(&home).await;
+    wait_ready(&home, &mut daemon).await;
 
     // Cabecera que anuncia un frame gigante.
     let conn = transport::connect(&home).await.unwrap();
