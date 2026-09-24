@@ -1,7 +1,7 @@
 # Términos de uso: uso automatizado de los CLIs con suscripción
 
 - **Fecha:** 2026-09-24 · **Agente:** claude-code/opus-5.5 · **Paso:** P01.S2
-- **Estado:** ⚠️ **PENDIENTE DE CONFIRMACIÓN DE LEO.** El agente resume; no decide sobre ToS (PLAN P01.S2).
+- **Estado:** ✅ **Leo aceptó los riesgos para uso personal** (2026-09-24). La distribución a terceros se reevalúa antes de v0.1 (P07).
 
 Esto no es asesoría legal. Es un resumen de las fuentes públicas a la fecha, con citas, para que Leo decida.
 

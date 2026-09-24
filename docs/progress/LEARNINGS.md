@@ -27,3 +27,10 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **Codex exige confianza por hash para cada hook.** Para hooks generados por Symphony: `--dangerously-bypass-hook-trust`. No tocar `CODEX_HOME` (ahí vive `auth.json`).
 - **`codex exec --json` y el rollout en disco son formatos distintos**, y la cuota (`rate_limits`) al menos está en el rollout.
 - En Git Bash, `curl` está redirigido por un hook de context-mode: usa `ctx_fetch_and_index` o `ctx_execute` para bajar páginas.
+
+## Test A (P01.S3) — detalle en `spikes/results/test-a.md`
+
+- **No pases a los CLIs rutas con nombres cortos 8.3** (`C:\Users\LATITU~1\...`, que es lo que devuelve `%TEMP%` en esta máquina). Codex falló leyendo archivos y tardó 3.5× más. Usa rutas largas, sin `\?\`.
+- **Los shims `.cmd` de npm** agregan `cmd.exe` + `conhost.exe` por agente y obligan a escapar los argumentos como batch. En Rust, `Command::new("claude")` no encuentra el `.cmd`: hay que pasar `claude.cmd` o resolver el exe real.
+- **Codex hace `git fetch` (`git-remote-https`) al arrancar** en un repo con remoto.
+- **En PowerShell, `@arr` con un solo elemento** llega distinto al exe nativo: la corrida N=1 del bucle falló con `NotADirectory`. Pasa rutas explícitas.

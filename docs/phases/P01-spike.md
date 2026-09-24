@@ -16,13 +16,21 @@
 - **Qué se hizo:** rama `phase/p01-spike` desde `main` (aa2e22a) y esta bitácora. Leo dio permiso para usar sus suscripciones en P01 (2026-09-24).
 - **Cómo se verificó:** `git branch --show-current` → `phase/p01-spike`.
 
-### P01.S2 · Investigar los contratos de los CLIs — ✅ (ToS pendiente de Leo)
+### P01.S2 · Investigar los contratos de los CLIs — ✅
 - **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
 - **Qué se hizo:** documentación oficial + `--help` de Claude Code 2.1.281 y codex-cli 0.154.0. Hooks, timeouts, inyección por worktree, headless, transcript, modelos, errores/cuota y modos de interacción.
 - **Archivos clave:** `docs/research/cli-claude-code.md`, `docs/research/cli-codex.md`, `docs/research/tos.md`
 - **Cómo se verificó:** citas a docs oficiales y a la salida de `--help`. Lo no probado queda marcado "(docs)" y en la lista "Pendiente de verificar" de cada archivo.
 - **Hallazgos clave:** (1) en los dos CLIs un `PreToolUse` vencido **no bloquea**: retener por hook falla en modo abierto; (2) `--bare` de Claude no usa la suscripción, así que no sirve; (3) hooks por sesión con `claude --settings` y, en Codex, `.codex/hooks.json` + `--dangerously-bypass-hook-trust`; (4) errores tipados (`StopFailure`, `api_retry`) y cuota KNOWN en ambos; (5) mensajes a media tarea: `--input-format stream-json` (Claude) y `codex queue` (Codex); (6) Claude tiene `--bg` + `claude attach`.
-- **Pendiente / notas:** Leo tiene que confirmar `tos.md`.
+- **Pendiente / notas:** Leo aceptó `tos.md` para uso personal (2026-09-24).
+
+### P01.S3 · Test A: recursos — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `spikes/spike-resources` (workspace aparte en `spikes/`) lanza 1–3 CLIs en worktrees de un repo Vite+pnpm y muestrea el árbol de procesos con sysinfo. Se midió también `pnpm install` en frío, con store compartido y `npm install`.
+- **Archivos clave:** `spikes/spike-resources/src/main.rs`, `spikes/results/test-a.md`, `spikes/results/test-a.raw.md`
+- **Cómo se verificó:** 8 corridas (Claude y Codex × N=1,2,3, más la repetición de N=1).
+- **Resultado:** ~200–350 MB reales por agente; con 3 agentes, +~1 GB y CPU media del 80 % solo en el arranque. El arranque de Claude se degrada de 5 s a 18 s. pnpm con store compartido: 2.2 s por worktree.
+- **Dependencias agregadas (solo en spikes):** `sysinfo 0.39.6` (STACK §58).
 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
