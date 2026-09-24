@@ -57,3 +57,10 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **`LimitEvidence.memory` = `Unknown`** aunque el límite bloqueó (Windows). Infiere el OOM por exit code.
 - **Contar procesos en Linux con `sysinfo`:** filtra `thread_kind().is_none()` y los zombies.
 - **Codex en un corte de red** emite `{"type":"error","message":"Reconnecting... n/5 …"}` y luego "waiting for network", y **espera indefinidamente** (65 min en Test D). Hace falta un watchdog de inactividad por agente (P10).
+
+## Test D (P01.S6) — detalle en `spikes/results/test-d.md`
+
+- **6/6 handoffs OK** con un checkpoint incremental por hook + git vivo. Git es lo esencial; el plan y el último mensaje ayudan.
+- **Ningún CLI usa TodoWrite / `update_plan` en headless.** El "qué seguía" sale del último mensaje del asistente en la cola del transcript.
+- **Sandbox `workspace-write` de Codex en Windows:** `node --test` da `EPERM` al leer `C:\Users\<usuario>`. Codex lo termina esquivando, pero pierde minutos.
+- **Mensajes a media tarea:** Claude `-p --input-format stream-json` los procesa dentro del turno. `codex queue` los acepta, pero ni `exec` ni `exec resume` los consumen.

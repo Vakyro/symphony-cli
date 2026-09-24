@@ -2,7 +2,7 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P01 · Spike de viabilidad (rama `phase/p01-spike`)
-**Paso actual:** P01.S6 · Test D: handoff forzado
+**Paso actual:** P01.S8 · Decisión de gate
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
@@ -18,13 +18,13 @@
 - [x] P01.S3 Test A: recursos
 - [x] P01.S4 Test B: event bus de hooks
 - [x] P01.S5 Test C: retener comandos
-- [ ] P01.S6 Test D: handoff forzado   ← aquí
-- [ ] P01.S7 Gate de ProcessKit
-- [ ] P01.S8 Decisión de gate
+- [x] P01.S6 Test D: handoff forzado
+- [x] P01.S7 Gate de ProcessKit
+- [ ] P01.S8 Decisión de gate   ← aquí
 - [ ] P01.S9 Cierre
 
 ## Próxima acción concreta
-Test D: `spikes/scripts/test-d.ps1 <t1|t2|t3> <claude|codex>` (6 corridas). Collector nuevo con checkpoints en `~/symphony-spike/d-events.jsonl`.
+Escribir ADR-0004 (handoff) y ADR-0005 (modo de interacción); ADR-0003 ya está redactado. Tabla de IDEA §7 en la bitácora. Pedirle a Leo que valide el gate.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

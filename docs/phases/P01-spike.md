@@ -54,6 +54,12 @@
 - **Nota:** dos filas ❌ de la primera corrida en CI eran errores de conteo del spike (hilos/zombies en Linux, marcador en el wrapper). Se corrigió la medición, no ProcessKit.
 - **Dependencias agregadas (solo en spikes):** `processkit 3.3` (features `limits`, `stats`), `tokio 1.53` (STACK §58).
 
+### P01.S6 · Test D: handoff forzado — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** checkpoint incremental por hook (`spike-hook`: `checkpoints/<agente>.json`) + `spike-hook handoff`. Driver `spikes/scripts/test-d.ps1`: 3 tareas × 2 sentidos, con kill tras una edición, durante los tests y a mitad de trabajo.
+- **Archivos clave:** `spikes/spike-hook/src/checkpoint.rs`, `spikes/results/test-d.md`, `spikes/results/test-d.raw.md`, `spikes/results/test-d-handoffs/`
+- **Resultado:** 6/6: el sucesor continúa sin reexplicación, los archivos de A quedan idénticos, todos los tests pasan y no hay huérfanos. Hubo un corte de red de 65 min durante T2 Claude→Codex; Codex esperó en silencio y terminó bien.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
