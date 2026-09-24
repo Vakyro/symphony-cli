@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/daemon",
     "crates/cli",
+    "crates/store",
     "crates/testkit",
     "xtask",
 ]
@@ -35,6 +36,8 @@ tokio-util = { version = "0.7.19", features = ["rt"] }
 miette = "7.6"
 clap = { version = "4.6", features = ["derive"] }
 trycmd = "1.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite_migration = "2.6"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

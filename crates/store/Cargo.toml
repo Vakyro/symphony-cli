@@ -1,0 +1,20 @@
+[package]
+name = "symphony-store"
+description = "Persistencia de Symphony: SQLite (un solo escritor) y object store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+rusqlite_migration.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+symphony-core = { path = "../core" }
+tempfile.workspace = true

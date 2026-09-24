@@ -2,22 +2,23 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P03 · Persistencia (rama `phase/p03-store`)
-**Paso actual:** P03.S1 · Crate `store` y migración 001
+**Paso actual:** P03.S2 · Store writer
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (47 tests)
+- `cargo xtask check`: ✅ (56 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
-- [ ] P03.S1 Crate `store` y migración 001   ← aquí
+- [x] P03.S1 Crate `store` y migración 001
+- [ ] P03.S2 Store writer   ← aquí
 - (resto de P03 en PLAN.md)
 
 ## Próxima acción concreta
-`migrations/001_core.sql` con las 19 tablas de Fase 1 (DB §6), copia fiel de DB §3; FKs a tablas futuras como columnas nullable sin FK; PRAGMAs de DB §7. Tests: `foreign_key_check` y rechazo de duplicados en los índices parciales.
+Ver PLAN P03.S2 (store writer).
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
