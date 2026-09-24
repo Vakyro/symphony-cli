@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA CON PENDIENTES (CI sin remoto) |
 | Rama | phase/p00-bootstrap |
-| Inicio / cierre | 2026-09-24 / — |
-| Agentes que trabajaron | claude-code/opus-5.5 (S0–S4) |
-| Tag | — |
+| Inicio / cierre | 2026-09-24 / 2026-09-24 |
+| Agentes que trabajaron | claude-code/opus-5.5 (S0–S9) |
+| Tag | p00-done |
 | Docs usados | PLAN §0–§7 y Apéndices A–D; IDEA §3, §5, §10 |
 
 ## Pasos
@@ -67,16 +67,24 @@
 - **Qué se hizo:** `.github/workflows/ci.yml` con tres jobs: `check` en matriz ubuntu/windows/macos (`cargo xtask check`, nextest precompilado, `Swatinem/rust-cache`), `msrv` (`cargo +1.95 check`) y `deny` (`cargo-deny-action`). En `deny.toml`: `unused-allowed-license = "allow"` y `allow-wildcard-paths = true` (para los path deps del workspace).
 - **Cómo se verificó:** local: `cargo xtask check` ✅ y `cargo deny check` → `advisories ok, bans ok, licenses ok, sources ok`. **Workflow no ejecutado:** no hay remoto. Falta que Leo decida si lo crea.
 
+### P00.S9 · Cierre — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** revisión del diff de la fase, merge a `main` con merge commit y tag `p00-done`. Sin push: no hay remoto.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
+| Workspace compila en la máquina de Leo (Windows, MSVC) | `cargo xtask check` | fmt ok, clippy ok, 2 tests passed |
+| `symphony --version` | `cargo run -p symphony-cli -- --version` + test `version.rs` | `symphony 0.0.1` |
+| Políticas de dependencias | `cargo deny check` | advisories, bans, licenses, sources ok |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|
+| CI nunca ejecutada | Linux y macOS no están verificados | — | Correr cuando Leo cree el remoto |
 
 ## Decisiones tomadas
-- (ninguna todavía)
+- ADR-0001: versiones de crates y MSRV 1.95.
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
@@ -84,16 +92,23 @@
 | PLAN P00.S2 | `.gitignore` con la lista de reglas | Se agregó `graphify-smart-out/` y un `.gitattributes` con `eol=lf` | Salida de herramienta local; la máquina tiene `autocrlf=true` y sin esto rustfmt/CI verían diffs de CRLF |
 | PLAN P00.S2 | Primer commit solo de init | Incluye también el spec, luego movido en S3 | Único modo de dejar `git status` limpio sin ignorar el spec |
 | IDEA §6 | Routing y latencia de eventos "en milisegundos" | CONSTRAINTS R3/R4 fijan objetivos p99 < 10 ms y < 50 ms | Hace falta un número para que el presupuesto sea verificable. Se ajusta con ADR si la medición real no aplica |
+| PLAN P00.S4 | `docs/research/.gitkeep` | No se creó | La carpeta ya tiene archivos |
 
 ## Dependencias agregadas
 | Crate | Versión | Para qué | ¿Estaba en STACK §58? |
 |---|---|---|---|
+| (ninguna) | | Los binarios usan solo std | |
 
 ## Métricas
+(ninguna: no hay runtime todavía)
 
 ## Pruebas
+- Comando(s): `cargo xtask check`, `cargo deny check`
+- Totales: 2 passed, 0 failed
 
 ## Estado final
+Repo, workspace Rust y archivos de coordinación listos. El entorno de Windows de Leo compila (Rust 1.98.1 + MSVC 14.43, instalados en esta sesión). Las 29 crates del stack existen sin reemplazos (ADR-0001). La CI está escrita pero no ha corrido porque falta el remoto. Siguiente: P01 (spike), que requiere permiso para usar las suscripciones.
 
 ## Notas para el siguiente agente
 - La máquina de Leo usa PowerShell y Git Bash. Lanzar CLIs desde Git Bash bloquea al padre (LEARNINGS H4).
+- `cargo` no está en el PATH de shells que se abrieron antes de instalar rustup: antepón `$HOME/.cargo/bin` o abre una terminal nueva.

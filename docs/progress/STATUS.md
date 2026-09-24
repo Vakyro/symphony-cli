@@ -1,30 +1,23 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
-**Fase actual:** P00 · Arranque del repositorio (rama `phase/p00-bootstrap`)
-**Paso actual:** P00.S9 · Cierre
-**Estado del paso:** EN CURSO
-**En curso por:** claude-code/opus-5.5 desde 2026-09-24 08:00
+**Fase actual:** P01 · Spike de viabilidad (rama `phase/p01-spike`, por crear)
+**Paso actual:** P01.S1 · Rama y bitácora
+**Estado del paso:** PENDIENTE
 
 ## Salud del repo
 - `cargo xtask check`: ✅ (2 tests)
+- `cargo deny check`: ✅
 - CI en main: sin remoto (workflow listo en `.github/workflows/ci.yml`, no ejecutado)
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
-- [x] P00.S0 Prevalidación (Leo aprobó seguir)
-- [x] P00.S1 Verificar el entorno
-- [x] P00.S2 Crear el repositorio
-- [x] P00.S3 Copiar la documentación
-- [x] P00.S4 Archivos de coordinación
-- [x] P00.S5 CONSTRAINTS.md
-- [x] P00.S6 Esqueleto del workspace
-- [x] P00.S7 Verificar crates del stack
-- [x] P00.S8 CI mínima (workflow listo, no ejecutado: sin remoto)
-- [ ] P00.S9 Cierre   ← aquí
+- [ ] P01.S1 Rama y bitácora   ← aquí
+- [ ] P01.S2 Investigar los contratos de los CLIs
+- (resto de P01 en PLAN.md)
 
 ## Próxima acción concreta
-Cierre de P00: code review del diff, merge a `main` con merge commit, tag `p00-done`. Remoto pendiente de Leo.
+`git switch -c phase/p01-spike` desde `main` y crear `docs/phases/P01-spike.md` desde `_TEMPLATE.md`. Antes de gastar suscripciones en P01, confirmar el permiso de Leo.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
@@ -34,10 +27,12 @@ Cierre de P00: code review del diff, merge a `main` con merge commit, tag `p00-d
 - Hipótesis descartadas:
 
 ## Bloqueos y preguntas para Leo
-- ¿Creo el repo remoto en GitHub (privado/público, nombre) y hago push? Hasta entonces la CI no corre.
+- ¿Creo el repo remoto en GitHub (privado o público, y con qué nombre) y hago push? Hasta entonces la CI no corre.
+- P01 usa Claude Code y Codex reales en pruebas cortas: ¿hay permiso?
 
 ## Fases
 | Fase | Estado | Tag |
 |---|---|---|
-| P00 | 🟡 en curso | |
-| P01–P16 | ⏳ | |
+| P00 | ✅ (CI sin remoto) | p00-done |
+| P01 | ⏳ siguiente | |
+| P02–P16 | ⏳ | |
