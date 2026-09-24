@@ -62,6 +62,11 @@
 - **Cómo se verificó:** ADR-0001 existe con la lista fijada.
 - **Pendiente / notas:** falta confirmar en P04 que ProcessKit cubre límites de recursos por Job Object/cgroup.
 
+### P00.S8 · CI mínima — 🟡 (sin remoto)
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `.github/workflows/ci.yml` con tres jobs: `check` en matriz ubuntu/windows/macos (`cargo xtask check`, nextest precompilado, `Swatinem/rust-cache`), `msrv` (`cargo +1.95 check`) y `deny` (`cargo-deny-action`). En `deny.toml`: `unused-allowed-license = "allow"` y `allow-wildcard-paths = true` (para los path deps del workspace).
+- **Cómo se verificó:** local: `cargo xtask check` ✅ y `cargo deny check` → `advisories ok, bans ok, licenses ok, sources ok`. **Workflow no ejecutado:** no hay remoto. Falta que Leo decida si lo crea.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

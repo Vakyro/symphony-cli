@@ -18,10 +18,14 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.9
+# Las dependencias llegan fase a fase; no avisar por licencias aún no usadas.
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Dependencias por path entre crates del workspace (todas publish = false).
+allow-wildcard-paths = true
 # STACK §36: prohibido en el core. Levantar una prohibición requiere ADR.
 deny = [
     # servidor HTTP en v1

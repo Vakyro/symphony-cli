@@ -17,3 +17,5 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 
 - **Rust en Windows necesita el workload "Desarrollo para el escritorio con C++" de Visual Studio** (link.exe + Windows SDK). Tener VS 2022 instalado no basta: sin ese workload `cargo run` falla con `linker link.exe not found`.
 - **`git config core.autocrlf=true` en la máquina de Leo.** El repo fija `eol=lf` en `.gitattributes` para que rustfmt y la CI no vean diffs de fin de línea.
+- **`cargo install --locked cargo-nextest cargo-deny` tarda más de 10 min en la laptop de Leo.** En CI se usan binarios precompilados (`taiki-e/install-action`, `cargo-deny-action`).
+- **Git Bash + `python -`** abre el stub de la Microsoft Store y se cuelga. No uses python en scripts de shell en esta máquina.

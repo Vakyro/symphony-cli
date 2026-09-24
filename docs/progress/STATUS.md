@@ -2,13 +2,13 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P00 · Arranque del repositorio (rama `phase/p00-bootstrap`)
-**Paso actual:** P00.S8 · CI mínima
+**Paso actual:** P00.S9 · Cierre
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24 08:00
 
 ## Salud del repo
 - `cargo xtask check`: ✅ (2 tests)
-- CI en main: sin remoto
+- CI en main: sin remoto (workflow listo en `.github/workflows/ci.yml`, no ejecutado)
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
@@ -20,11 +20,11 @@
 - [x] P00.S5 CONSTRAINTS.md
 - [x] P00.S6 Esqueleto del workspace
 - [x] P00.S7 Verificar crates del stack
-- [ ] P00.S8 CI mínima   ← aquí
-- [ ] P00.S9 Cierre
+- [x] P00.S8 CI mínima (workflow listo, no ejecutado: sin remoto)
+- [ ] P00.S9 Cierre   ← aquí
 
 ## Próxima acción concreta
-Correr `cargo deny check` y commitear `.github/workflows/ci.yml` (P00.S8). Preguntar a Leo por el remoto antes de hacer push.
+Cierre de P00: code review del diff, merge a `main` con merge commit, tag `p00-done`. Remoto pendiente de Leo.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
@@ -34,7 +34,7 @@ Correr `cargo deny check` y commitear `.github/workflows/ci.yml` (P00.S8). Pregu
 - Hipótesis descartadas:
 
 ## Bloqueos y preguntas para Leo
-- (ninguno)
+- ¿Creo el repo remoto en GitHub (privado/público, nombre) y hago push? Hasta entonces la CI no corre.
 
 ## Fases
 | Fase | Estado | Tag |
