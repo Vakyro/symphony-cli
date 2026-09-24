@@ -294,32 +294,65 @@ impl Supervised {
 
     /// Estadísticas del grupo. Donde el SO no las da, la memoria se suma con sysinfo.
     pub fn stats(&self) -> ProcessStats {
-        let members = self.group.members().unwrap_or_default();
         let from_group = self.group.stats().ok();
-        let memory_bytes = {
-            let mut sys = sysinfo::System::new();
-            let pids: Vec<sysinfo::Pid> =
-                members.iter().map(|p| sysinfo::Pid::from_u32(*p)).collect();
-            sys.refresh_processes_specifics(
-                sysinfo::ProcessesToUpdate::Some(&pids),
-                true,
-                sysinfo::ProcessRefreshKind::nothing().with_memory(),
-            );
-            let total: u64 = pids
-                .iter()
-                .filter_map(|p| sys.process(*p))
-                .map(sysinfo::Process::memory)
-                .sum();
-            (!pids.is_empty()).then_some(total)
-        };
+        let tree = self.tree_pids();
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&tree),
+            true,
+            sysinfo::ProcessRefreshKind::nothing().with_memory(),
+        );
+        let memory: u64 = tree
+            .iter()
+            .filter_map(|p| sys.process(*p))
+            .map(sysinfo::Process::memory)
+            .sum();
         ProcessStats {
+            // Job Object / cgroup cuentan el árbol; un process group de Unix no: ahí se recorre.
             active_processes: from_group
                 .as_ref()
-                .map_or(members.len(), |s| s.active_process_count),
-            memory_bytes,
+                .map_or(0, |s| s.active_process_count)
+                .max(tree.len()),
+            memory_bytes: (!tree.is_empty()).then_some(memory),
             peak_memory_bytes: from_group.as_ref().and_then(|s| s.peak_memory_bytes),
             cpu_time: from_group.and_then(|s| s.total_cpu_time),
         }
+    }
+
+    /// Miembros del grupo más todos los descendientes del proceso raíz (sin hilos ni zombies).
+    fn tree_pids(&self) -> Vec<sysinfo::Pid> {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            sysinfo::ProcessRefreshKind::nothing(),
+        );
+        let alive = |p: &sysinfo::Process| {
+            p.thread_kind().is_none() && p.status() != sysinfo::ProcessStatus::Zombie
+        };
+        let mut children: std::collections::HashMap<sysinfo::Pid, Vec<sysinfo::Pid>> =
+            std::collections::HashMap::new();
+        for (pid, p) in sys.processes() {
+            if let Some(parent) = p.parent().filter(|_| alive(p)) {
+                children.entry(parent).or_default().push(*pid);
+            }
+        }
+        let mut seen: std::collections::HashSet<sysinfo::Pid> = std::collections::HashSet::new();
+        let mut stack: Vec<sysinfo::Pid> = self
+            .group
+            .members()
+            .unwrap_or_default()
+            .into_iter()
+            .map(sysinfo::Pid::from_u32)
+            .collect();
+        stack.extend(self.pid.map(sysinfo::Pid::from_u32));
+        while let Some(pid) = stack.pop() {
+            if !sys.process(pid).is_some_and(alive) || !seen.insert(pid) {
+                continue;
+            }
+            stack.extend(children.get(&pid).into_iter().flatten().copied());
+        }
+        seen.into_iter().collect()
     }
 
     /// Espera a que termine el proceso raíz y devuelve cómo terminó.
