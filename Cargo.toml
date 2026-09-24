@@ -16,8 +16,25 @@ rust-version = "1.95"
 license = "MIT"
 publish = false
 
-# Se llena al usar cada crate (STACK §58). Fuera de §58 → justificar en la bitácora.
+# Se llena al usar cada crate (STACK §58, versiones de ADR-0001). Fuera de §58 → justificar en la bitácora.
 [workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+tokio = { version = "1.53", default-features = false }
+interprocess = { version = "2.4", features = ["tokio"] }
+proptest = "1"
+ulid = "3"
+toml_edit = { version = "0.25.15", features = ["serde"] }
+tempfile = "3.27"
+regex = "1.13"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "ansi", "std"] }
+tracing-appender = "0.2.5"
+tokio-util = { version = "0.7.19", features = ["rt"] }
+miette = "7.6"
+clap = { version = "4.6", features = ["derive"] }
+trycmd = "1.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

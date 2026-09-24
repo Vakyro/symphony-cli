@@ -1,0 +1,5 @@
+bin.name = "symphony"
+stdout = """
+La TUI de Symphony llega en la versión 0.1 (P07).
+Mientras tanto: `symphony status` o `symphony --help`.
+"""
