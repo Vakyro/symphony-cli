@@ -60,6 +60,23 @@
 - **Archivos clave:** `spikes/spike-hook/src/checkpoint.rs`, `spikes/results/test-d.md`, `spikes/results/test-d.raw.md`, `spikes/results/test-d-handoffs/`
 - **Resultado:** 6/6: el sucesor continúa sin reexplicación, los archivos de A quedan idénticos, todos los tests pasan y no hay huérfanos. Hubo un corte de red de 65 min durante T2 Claude→Codex; Codex esperó en silencio y terminó bien.
 
+### P01.S8 · Decisión de gate — 🟡 (falta la validación de Leo)
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** ADR-0003 (retener por hook), ADR-0004 (handoff) y ADR-0005 (modo de interacción). Prueba extra para ADR-0005: mensaje a media tarea (Claude ✅ por stdin; `codex queue` ❌ en exec).
+- **Supuestos de IDEA §7:**
+
+| # | Supuesto | Resultado | Evidencia |
+|---|---|---|---|
+| 1 | 3 CLIs caben en la máquina y se pueden medir | ✅ ~200–350 MB reales por agente, +~1 GB con 3. La CPU se satura en el arranque concurrente, así que conviene escalonar | Test A |
+| 2 | Los hooks se normalizan a un event bus común | ✅ Los dos CLIs, los 4 eventos requeridos, 20 ms por hook | Test B |
+| 3 | Un `PreToolUse` retiene un comando varios minutos | ⚠️ Claude sí (hasta el `timeout`). Codex solo ≤ 60 s; más allá, `deny` + razón o la capa del SO | Test C, ADR-0003 |
+| 4 | Un checkpoint sin resumen permite que otro CLI continúe | ✅ 6/6 | Test D, ADR-0004 |
+| 5 | Headless con suscripción está permitido | ✅ Para uso personal, aceptado por Leo. Riesgo: facturación futura de `-p` | `docs/research/tos.md` |
+| 6 | Estrategia viable para `node_modules` por worktree | ✅ pnpm con store compartido: 2.2 s y sin disco extra | Test A |
+
+- **Gate:** pasa. **Decisión:** seguir con el diseño completo (handoff + scheduler de dos capas). No hace falta el modo "gestor paralelo".
+- **Pendiente:** Leo acepta ADR-0004 y ADR-0005. No se usó la skill `the-council`: el resultado no dejaba dudas (6/6, sin supuestos rotos) y la decisión la valida Leo.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

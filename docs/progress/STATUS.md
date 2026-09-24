@@ -3,7 +3,7 @@
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P01 · Spike de viabilidad (rama `phase/p01-spike`)
 **Paso actual:** P01.S8 · Decisión de gate
-**Estado del paso:** EN CURSO
+**Estado del paso:** LISTO PARA VERIFICAR (Leo valida el gate)
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
@@ -24,7 +24,7 @@
 - [ ] P01.S9 Cierre
 
 ## Próxima acción concreta
-Escribir ADR-0004 (handoff) y ADR-0005 (modo de interacción); ADR-0003 ya está redactado. Tabla de IDEA §7 en la bitácora. Pedirle a Leo que valide el gate.
+Leo valida el gate (ADR-0004 y ADR-0005). Luego P01.S9: code review de `spikes/`, merge a `main` y tag `p01-done`.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
@@ -34,7 +34,7 @@ Escribir ADR-0004 (handoff) y ADR-0005 (modo de interacción); ADR-0003 ya está
 - Hipótesis descartadas:
 
 ## Bloqueos y preguntas para Leo
-- (ninguno)
+- Validar el gate de P01: ADR-0004 (handoff viable) y ADR-0005 (modo headless + attach).
 
 ## Fases
 | Fase | Estado | Tag |
