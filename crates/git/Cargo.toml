@@ -1,0 +1,17 @@
+[package]
+name = "symphony-git"
+description = "Wrapper del CLI de Git para worktrees, status, diff y preflight de merge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

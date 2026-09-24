@@ -1502,6 +1502,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "symphony-git"
+version = "0.0.1"
+dependencies = [
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "symphony-object-store"
 version = "0.0.1"
 dependencies = [

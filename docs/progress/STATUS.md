@@ -2,22 +2,23 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P04 · Git, worktrees y procesos (rama `phase/p04-git-process`)
-**Paso actual:** P04.S1 · Crate `git`
+**Paso actual:** P04.S2 · Estrategia de dependencias
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (74 tests)
+- `cargo xtask check`: ✅ (80 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
-- [ ] P04.S1 Crate `git`   ← aquí
+- [x] P04.S1 Crate `git`
+- [ ] P04.S2 Estrategia de dependencias   ← aquí
 - (resto de P04 en PLAN.md)
 
 ## Próxima acción concreta
-Wrapper del CLI de Git: `worktree add/list/remove`, ramas `symphony/<session>/agent-NNN`, `status --porcelain=v2 -z`, `diff --no-ext-diff` + numstat, commit actual y preflight de merge. Tests con repos temporales, incluidas rutas con espacios.
+Ver PLAN P04.S2.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
