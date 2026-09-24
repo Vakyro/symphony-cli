@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Symphony CLI · Diagrama del stack</title>
+<style>
+:root{
+  --bg:#f3f1ea; --panel:#fbfaf6; --ink:#1c1b18; --muted:#6c685f; --line:#d8d2c4; --zone:#ebe7dc;
+  --ipc:#1f7a6a; --proc:#b0671a; --store:#3d52a0; --net:#b23a5a; --int:#77736a; --fut:#9a958a;
+  --mono: ui-monospace,"Cascadia Code","JetBrains Mono","SF Mono",Consolas,monospace;
+  --sans: "Segoe UI Variable","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#131412; --panel:#1b1c19; --ink:#e9e7e0; --muted:#9b978c; --line:#34362f; --zone:#191a17;
+  --ipc:#5cc4ae; --proc:#e7a257; --store:#8ea0ea; --net:#e7839e; --int:#a9a59a; --fut:#77746b; } }
+:root[data-theme="dark"]{ --bg:#131412; --panel:#1b1c19; --ink:#e9e7e0; --muted:#9b978c; --line:#34362f; --zone:#191a17;
+  --ipc:#5cc4ae; --proc:#e7a257; --store:#8ea0ea; --net:#e7839e; --int:#a9a59a; --fut:#77746b; }
+:root{ box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px); }
+*,*::before,*::after{box-sizing:inherit}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);display:grid;grid-template-rows:auto auto 1fr}
+header{padding:16px 22px 10px;display:flex;flex-wrap:wrap;gap:8px 26px;align-items:baseline;border-bottom:1px solid var(--line)}
+header h1{margin:0;font:600 19px var(--mono)}
+header h1 span{color:var(--muted);font-weight:400}
+header p{margin:0;color:var(--muted);max-width:80ch}
+.bar{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;padding:10px 22px;border-bottom:1px solid var(--line);font-size:13px}
+.bar .grp{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.bar .lbl{color:var(--muted);font:12px var(--mono)}
+.bar button{font:12px var(--mono);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 9px;cursor:pointer}
+.bar button[aria-pressed="true"]{border-color:var(--ink);background:var(--ink);color:var(--bg)}
+.leg{display:inline-flex;align-items:center;gap:6px;font:12px var(--mono);color:var(--muted)}
+.leg i{width:22px;height:0;border-top:2px solid;display:inline-block}
+.stage{overflow:auto;position:relative;min-height:0}
+.canvas{position:relative;transform-origin:0 0}
+.zone{position:absolute;border:1px solid var(--line);background:var(--zone);border-radius:14px}
+.zone b{position:absolute;top:-10px;left:14px;background:var(--bg);padding:0 8px;font:600 12px var(--mono);color:var(--muted);white-space:nowrap}
+.zone.daemon{background:transparent;border:2px solid var(--ink)}
+.zone.daemon b{color:var(--ink);font-size:13px}
+svg.edges{position:absolute;inset:0;overflow:visible;pointer-events:none}
+svg.labels{z-index:3}
+svg.edges path{fill:none;stroke-width:1.6;opacity:.75;transition:opacity .15s}
+svg.edges path.fut{stroke-dasharray:6 5}
+svg.edges text{font:11px var(--mono);fill:var(--ink);paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round;transition:opacity .15s}
+.node{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;cursor:pointer;transition:opacity .15s,box-shadow .15s,border-color .15s;overflow:hidden}
+.node:hover,.node.sel{border-color:var(--ink);box-shadow:0 2px 0 var(--ink)}
+.node h3{margin:0 0 4px;font:600 13px/1.25 var(--mono)}
+.node .t{display:flex;flex-wrap:wrap;gap:3px}
+.node .t span{font:11px var(--mono);padding:1px 6px;border-radius:4px;background:var(--zone);border:1px solid var(--line);white-space:nowrap}
+.node ul{margin:2px 0 0;padding:0;list-style:none;font:12px/1.6 var(--mono)}
+.node ul li::before{content:"▸ ";color:var(--muted)}
+.node .ph{position:absolute;top:7px;right:8px;font:10px var(--mono);color:var(--muted)}
+.node.fut{border-style:dashed}
+.node.ext{border-left:4px solid var(--proc)} .node.cloud{border-left:4px solid var(--net)} .node.disk{border-left:4px solid var(--store)}
+.node.dev{border-left:4px solid var(--int)}
+.dim{opacity:.13!important}
+.faded{opacity:.28}
+.detail{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom,0px));width:min(380px,calc(100vw - 36px));background:var(--panel);border:1px solid var(--ink);border-radius:12px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.18);display:none;z-index:5}
+.detail.on{display:block}
+.detail h2{margin:0 26px 6px 0;font:600 15px var(--mono)}
+.detail .x{position:absolute;top:8px;right:10px;border:0;background:none;color:var(--muted);font:18px var(--mono);cursor:pointer}
+.detail dl{margin:8px 0 0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:13px}
+.detail dt{color:var(--muted);font:12px var(--mono)}
+.detail dd{margin:0}
+.detail .conn{margin-top:10px;font:12px/1.6 var(--mono);color:var(--muted);max-height:180px;overflow:auto}
+.detail .conn b{color:var(--ink);font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <h1>Symphony CLI <span>/ cómo se conecta el stack</span></h1>
+  <p>Cada caja es un componente de la plataforma con su tecnología; cada flecha es una conexión real. Pasa el cursor o toca una caja para ver qué viaja por cada flecha y por qué se eligió esa tecnología.</p>
+</header>
+<div class="bar">
+  <div class="grp"><span class="lbl">Hasta fase</span><span id="phases"></span></div>
+  <div class="grp"><button id="lbls" aria-pressed="false">todas las etiquetas</button><button id="fit">ajustar</button></div>
+  <div class="grp">
+    <span class="leg"><i style="border-color:var(--ipc)"></i>IPC / eventos</span>
+    <span class="leg"><i style="border-color:var(--proc)"></i>procesos</span>
+    <span class="leg"><i style="border-color:var(--store)"></i>disco</span>
+    <span class="leg"><i style="border-color:var(--net)"></i>red</span>
+    <span class="leg"><i style="border-color:var(--int)"></i>interno</span>
+    <span class="leg"><i style="border-color:var(--fut);border-top-style:dashed"></i>futuro</span>
+  </div>
+</div>
+<div class="stage" id="stage"><div class="canvas" id="canvas"><svg class="edges" id="svg"></svg></div></div>
+<div class="detail" id="detail"><button class="x" id="dx" aria-label="Cerrar">×</button><h2 id="dt"></h2><div id="dd"></div><div class="conn" id="dc"></div></div>
+
+<script>
+const W=1980,H=1110;
+const Z=[ // zones
+ {x:20,y:40,w:220,h:690,t:'Interfaces'},
+ {x:262,y:40,w:166,h:690,t:'Transporte local'},
+ {x:450,y:40,w:740,h:690,t:'symphonyd · Rust 2024 + Tokio',c:'daemon'},
+ {x:1212,y:40,w:216,h:690,t:'Puentes y sistema operativo'},
+ {x:1448,y:40,w:256,h:690,t:'Procesos externos'},
+ {x:1724,y:40,w:236,h:690,t:'Nube de proveedores'},
+ {x:450,y:770,w:978,h:150,t:'Disco local · ~/.symphony/'},
+ {x:20,y:960,w:1940,h:130,t:'Construcción y distribución (no corre en tu máquina al usar Symphony)'},
+];
+const C=[475,725,975], R=[90,195,300,405,510,615];
+const g=(c,r)=>({x:C[c],y:R[r],w:200,h:80});
+// n: id, title, techs, phase, kind, desc, why, alt, extra
+const N=[
+ {id:'user',x:40,y:90,w:180,h:60,t:'Tú (desarrollador)',tech:['terminal'],ph:0,desc:'Abres una terminal en tu proyecto y escribes symphony.'},
+ {id:'cli',x:40,y:230,w:180,h:120,t:'symphony CLI / TUI',tech:['clap','Ratatui','Crossterm','miette'],ph:0,desc:'Binario que ves: comandos, dashboard Home, vista de agente, recovery.',why:'Ratatui es el toolkit TUI más sólido de Rust; Crossterm funciona igual en Windows, Linux y macOS.',alt:'Ink/React en Node: metería un runtime Node extra.'},
+ {id:'gui',x:40,y:470,w:180,h:110,t:'GUI de escritorio',tech:['Tauri 2','SolidJS','TypeScript','Vite'],ph:7,fut:1,desc:'Opcional y muy posterior. Muestra el mismo estado que la TUI; no tiene lógica propia.',why:'Tauri usa el WebView del sistema: mucho más ligero que Electron.',alt:'Electron: contradice el bajo consumo.'},
+ {id:'ipc',x:278,y:300,w:134,h:170,t:'IPC local',tech:['interprocess','serde_json'],ph:0,desc:'Named Pipe en Windows, Unix Domain Socket en Linux/macOS. Mensajes JSON con longitud y versión de protocolo. Solo accesible por tu usuario.',why:'Sin puertos ni servidor HTTP: menos superficie de ataque y menos overhead.',alt:'HTTP localhost con Axum.'},
+ {id:'api',...g(0,0),t:'Daemon API',tech:['protocol crate','serde'],ph:0,desc:'Recibe requests (agent.pause, spawn…) y suscripciones de la TUI. Valida tamaño, versión y permisos de cada mensaje.'},
+ {id:'bus',...g(1,0),t:'Event Bus',tech:['Tokio mpsc','broadcast','watch'],ph:0,desc:'Bus en memoria. Todo evento (hook, comando, error) pasa por aquí y se reparte al scheduler, checkpoints, TUI y store.',why:'Cero infraestructura; backpressure con canales acotados.',alt:'Redis Streams / NATS: servidores innecesarios.'},
+ {id:'adp',...g(2,0),t:'Provider Adapters',tech:['5 crates','regex'],ph:0,desc:'Un adapter por CLI (Claude, Codex, Antigravity, Kimi, Copilot). Traducen hooks a eventos estándar, clasifican errores (un 429 no es agotado) y traducen skills al formato de cada CLI.',why:'El core nunca tiene if provider == "claude".',extra:'Phase 0: solo Claude Code y Codex.'},
+ {id:'rt',...g(0,1),t:'Agent Runtime',tech:['tokio-util','enums de estado'],ph:0,desc:'Ciclo de vida del agente (12 estados), checkpoints incrementales, heartbeat/reclaim y failover. Aquí vive AGENT ≠ MODEL.'},
+ {id:'sch',...g(1,1),t:'Scheduler',tech:['Semaphore','BinaryHeap'],ph:0,desc:'Decide qué operación pesada (clases 0–4) corre y cuál espera. Explica por qué algo está en WAITING_RESOURCE.',why:'Reglas propias y deterministas; es lo que realmente permite 3 agentes sin trabar la máquina.',extra:'Test C del spike: ¿el hook puede retener un npm test?'},
+ {id:'ps',...g(2,1),t:'Process Supervisor',tech:['ProcessKit','windows-sys','nix'],ph:0,desc:'Lanza los CLIs, lee stdout/PTY, mata árboles completos sin huérfanos y aplica límites.',why:'Reúne PTY, kill de árbol y límites multiplataforma.',alt:'tokio::process + APIs del OS a mano (plan B si ProcessKit falla en el spike).'},
+ {id:'rout',...g(0,2),t:'Routing',tech:['reglas propias'],ph:1,desc:'Filtro de disponibilidad + scoring determinístico. Modelo exacto se respeta; @profiles eligen entre los disponibles. /explain-route sale de los scores.',alt:'Decision model (Jev/Laya…): solo en fase 6 con benchmark.'},
+ {id:'res',...g(1,2),t:'Resource Manager',tech:['sysinfo'],ph:0,desc:'Muestrea CPU, RAM y procesos. Alimenta al scheduler y la barra System.'},
+ {id:'plg',...g(2,2),t:'Plugin host',tech:['subproceso','JSON versionado'],ph:5,desc:'Plugins de terceros como procesos aparte: si truenan, el daemon sigue vivo.',alt:'.dll/.so dentro del daemon: riesgo de crash y ABI.'},
+ {id:'st',...g(0,3),t:'Store writer',tech:['rusqlite','rusqlite_migration','ULID'],ph:1,desc:'Único escritor de la base. Todos le mandan comandos por canal y escribe en lotes (~100 ms).',why:'Un solo escritor evita bloqueos y simplifica recuperación tras crash.',alt:'SQLx con pool async: complejidad sin beneficio.',extra:'Phase 0 usa events.jsonl + checkpoint.json.'},
+ {id:'wat',...g(1,3),t:'File watcher',tech:['notify','ignore'],ph:2,desc:'Un watcher por proyecto (no por agente), con debounce. Respeta .gitignore.'},
+ {id:'ctx',...g(2,3),t:'Context Engine',tech:['tree-sitter','FTS5/BM25','compresores'],ph:3,desc:'Arma el handoff (L0–L5), colapsa logs/JSON/tests y consolida hechos del proyecto. Todo reversible vía ctx://.',why:'Determinístico: cero inferencia y casi cero RAM.',alt:'Embeddings / vector DB: solo si un benchmark lo exige.'},
+ {id:'obj',...g(0,4),t:'Object store',tech:['BLAKE3','zstd','tempfile'],ph:1,desc:'Guarda logs, diffs y outputs grandes por hash. Escritura atómica: nunca deja archivos a medias.'},
+ {id:'git',...g(1,4),t:'Git module',tech:['git CLI','porcelain v2'],ph:0,desc:'Crea worktrees y ramas por agente, calcula diffs, preflight de merge y detección de conflictos.',why:'Se comporta exactamente como tu Git.',alt:'libgit2: menos fiel a la CLI real.'},
+ {id:'cfg',...g(0,5),t:'Config',tech:['serde','toml_edit'],ph:1,desc:'Lee y edita config.toml y project.toml sin perder tus comentarios.'},
+ {id:'log',...g(1,5),t:'Logging',tech:['tracing','tracing-appender'],ph:1,desc:'Logs estructurados con agent_id/run_id y redacción de secretos. Nada sale de tu máquina.',alt:'Sentry / OpenTelemetry remoto: prohibidos por defecto.'},
+ {id:'hook',x:1230,y:80,w:180,h:90,t:'symphony hook emit',tech:['mismo binario'],ph:0,desc:'Lo invocan los hooks de cada CLI (PreToolUse, PostToolUse, Stop…). No toca la base: manda el evento al daemon por IPC y puede retener el comando si el scheduler lo pide.'},
+ {id:'os',x:1230,y:215,w:180,h:130,t:'Sistema operativo',tech:['Job Objects','cgroups v2','process groups'],ph:0,desc:'Capa que hace cumplir los límites sobre todo el árbol de procesos, incluidos hijos que los hooks no ven.',extra:'macOS: medición + process groups; no promete límites duros.'},
+ {id:'mcp',x:1230,y:395,w:180,h:100,t:'symphony mcp serve',tech:['rmcp'],ph:3,desc:'Broker MCP mínimo por stdio. Cada CLI lo lanza; reenvía context.retrieve/search/lines al daemon. No duplica índices.'},
+ {id:'gcli',x:1230,y:545,w:180,h:80,t:'git',tech:['CLI del sistema'],ph:0,desc:'El Git que ya tienes instalado. Requisito de runtime.'},
+ {id:'clis',x:1465,y:70,w:222,h:250,t:'CLIs oficiales',tech:[],ph:0,kind:'ext',list:['Claude Code','Codex CLI','Antigravity CLI','Kimi Code','Copilot CLI'],desc:'Los executors reales. Cada uno maneja su login y su suscripción; Symphony nunca toca credenciales.',extra:'Phase 0: Claude Code + Codex. El resto en fase 5.'},
+ {id:'tool',x:1465,y:360,w:222,h:100,t:'Toolchains del proyecto',tech:['npm','pnpm','cargo','uv','…'],ph:0,kind:'ext',desc:'Tests, builds e installs que piden los agentes. Son lo que más CPU consume; por eso pasan por el scheduler.'},
+ {id:'xmcp',x:1465,y:490,w:222,h:85,t:'MCP servers externos',tech:['github','playwright','…'],ph:3,kind:'ext',desc:'Los que tú configures en mcp.toml. Una instancia compartida cuando el protocolo lo permite.'},
+ {id:'pexe',x:1465,y:605,w:222,h:80,t:'Plugins de terceros',tech:['ejecutables'],ph:5,kind:'ext',desc:'Validators, transformers o adapters externos aislados en su propio proceso.'},
+ {id:'cloud',x:1740,y:70,w:204,h:250,t:'Proveedores',tech:[],ph:0,kind:'cloud',list:['Anthropic','OpenAI','Google','Moonshot / Kimi','GitHub'],desc:'Solo los CLIs hablan con la nube, con su login oficial. El core de Symphony no hace llamadas de red.',extra:'Direct mode (reqwest + rustls) queda como feature futura aislada.'},
+ {id:'db',x:470,y:805,w:145,h:95,t:'state.db',tech:['SQLite','WAL','FTS5'],ph:1,kind:'disk',desc:'42 tablas del modelo de datos: agentes, runs, eventos, checkpoints, routing, validación, recovery.'},
+ {id:'objd',x:630,y:805,w:145,h:95,t:'objects/',tech:['blobs .zst'],ph:1,kind:'disk',desc:'Originales de todo lo comprimido. Deduplicados por hash.'},
+ {id:'wt',x:790,y:805,w:145,h:95,t:'worktrees/',tech:['una rama por agente'],ph:0,kind:'disk',desc:'Workspaces aislados. Dependencias con store de pnpm o links cuando el lockfile coincide.'},
+ {id:'cfgf',x:950,y:805,w:145,h:95,t:'config.toml',tech:['project.toml','mcp.toml'],ph:1,kind:'disk',desc:'Performance, routing, failover, reserva de cuota y modo de contexto. Editable a mano.'},
+ {id:'logd',x:1110,y:805,w:145,h:95,t:'logs/',tech:['archivos rotativos'],ph:1,kind:'disk',desc:'Diagnóstico local. No se sube a ningún lado.'},
+ {id:'skd',x:1270,y:805,w:145,h:95,t:'skills/',tech:['SKILL.md','skill.toml'],ph:3,kind:'disk',desc:'Fuente canónica de skills; los adapters las traducen a cada CLI.'},
+ {id:'ide',x:40,y:990,w:240,h:80,t:'Desarrollo',tech:['VS Code','rust-analyzer','CodeLLDB','Taplo'],ph:0,kind:'dev',desc:'Tu entorno para construir Symphony.'},
+ {id:'ws',x:320,y:990,w:270,h:80,t:'Cargo workspace',tech:['crates/','cargo xtask','clippy','rustfmt'],ph:0,kind:'dev',desc:'Un crate por subsistema: protocol, core, daemon, store, scheduler, adapters/*…'},
+ {id:'ci',x:630,y:990,w:470,h:80,t:'GitHub Actions · Windows / Linux / macOS',tech:['nextest','trycmd','insta','proptest','cargo-fuzz','Criterion','llvm-cov','cargo-deny'],ph:0,kind:'dev',desc:'Tests reales en los tres sistemas: PTY, pipes y límites de procesos no se pueden mockear. Nunca gasta suscripciones reales (usa fake CLIs).'},
+ {id:'dist',x:1140,y:990,w:230,h:80,t:'Release',tech:['cargo-dist','git-cliff','attestations'],ph:1,kind:'dev',desc:'Instaladores y archivos por OS con checksums.'},
+ {id:'bin',x:1410,y:990,w:300,h:80,t:'Binario symphony',tech:['zip / tar.xz','PowerShell','Homebrew'],ph:1,kind:'dev',desc:'Lo único que instala el usuario final (más git y al menos un CLI). Sin Node, Python, Docker ni servidor de base de datos.'},
+];
+// edges: from,to,label,type,future
+const E=[
+ ['user','cli','comandos / teclado','int'],
+ ['user','gui','clics (futuro)','fut',1],
+ ['cli','ipc','request + subscribe','ipc'],
+ ['gui','ipc','misma API','fut',1],
+ ['ipc','api','JSON con framing','ipc'],
+ ['api','rt','spawn · pause · switch','int'],
+ ['api','bus','estado en vivo → TUI','int'],
+ ['adp','bus','eventos normalizados','int'],
+ ['bus','st','persistir en lote','store'],
+ ['rt','rout','¿qué modelo?','int'],
+ ['rt','sch','tool calls','int'],
+ ['rt','adp','spawn / resume / stop','int'],
+ ['rt','git','worktree · diff · merge','int'],
+ ['rt','ctx','armar handoff','int'],
+ ['rt','st','checkpoints','store'],
+ ['res','sch','CPU / RAM','int'],
+ ['sch','ps','permitir · retener','proc'],
+ ['adp','ps','lanzar CLI','proc'],
+ ['wat','ctx','archivos cambiados','int'],
+ ['ctx','obj','originales ctx://','store'],
+ ['ctx','st','FTS5 / BM25','store'],
+ ['plg','pexe','stdin/stdout JSON','proc'],
+ ['st','db','SQL · 1 escritor','store'],
+ ['obj','objd','BLAKE3 + zstd','store'],
+ ['cfg','cfgf','serde / toml_edit','store'],
+ ['log','logd','tracing-appender','store'],
+ ['skd','adp','traducir skills','store'],
+ ['git','gcli','porcelain v2 -z','proc'],
+ ['gcli','wt','worktree add','store'],
+ ['wt','wat','notify','store'],
+ ['ps','os','límites de árbol','proc'],
+ ['os','res','métricas','int'],
+ ['ps','clis','spawn + PTY + stdout','proc'],
+ ['os','tool','CPU / RAM acotados','proc'],
+ ['clis','hook','hooks: PreToolUse…','ipc'],
+ ['hook','adp','payload crudo por IPC','ipc'],
+ ['clis','mcp','MCP stdio','ipc'],
+ ['mcp','ctx','retrieve / search por IPC','ipc'],
+ ['clis','tool','npm test · cargo build','proc'],
+ ['clis','xmcp','MCP stdio / HTTP','ipc'],
+ ['clis','cloud','HTTPS · login oficial','net'],
+ ['clis','wt','editan archivos','store'],
+ ['ide','ws','código','int'],['ws','ci','push / PR','int'],['ci','dist','tag','int'],['dist','bin','instaladores','int'],
+];
+const byId=Object.fromEntries(N.map(n=>[n.id,n]));
+const canvas=document.getElementById('canvas'), svg=document.getElementById('svg');
+canvas.style.width=W+'px'; canvas.style.height=H+'px';
+svg.setAttribute('viewBox',`0 0 ${W} ${H}`); svg.setAttribute('width',W); svg.setAttribute('height',H);
+const ns='http://www.w3.org/2000/svg';
+const defs=document.createElementNS(ns,'defs');
+['ipc','proc','store','net','int','fut'].forEach(k=>{
+  const m=document.createElementNS(ns,'marker');
+  m.setAttribute('id','a-'+k);m.setAttribute('viewBox','0 0 10 10');m.setAttribute('refX','9');m.setAttribute('refY','5');
+  m.setAttribute('markerWidth','7');m.setAttribute('markerHeight','7');m.setAttribute('orient','auto-start-reverse');
+  const p=document.createElementNS(ns,'path');p.setAttribute('d','M0,0 L10,5 L0,10 z');p.style.fill=`var(--${k})`;
+  m.appendChild(p);defs.appendChild(m);});
+svg.appendChild(defs);
+Z.forEach(z=>{const d=document.createElement('div');d.className='zone '+(z.c||'');Object.assign(d.style,{left:z.x+'px',top:z.y+'px',width:z.w+'px',height:z.h+'px'});d.innerHTML=`<b>${z.t}</b>`;canvas.insertBefore(d,svg);});
+N.forEach(n=>{
+  const d=document.createElement('div');d.className='node '+(n.fut?'fut ':'')+(n.kind||'');d.dataset.id=n.id;
+  Object.assign(d.style,{left:n.x+'px',top:n.y+'px',width:n.w+'px',height:n.h+'px'});
+  d.innerHTML=`<span class="ph">F${n.ph}</span><h3>${n.t}</h3>`+(n.list?`<ul>${n.list.map(x=>`<li>${x}</li>`).join('')}</ul>`:'')+`<div class="t">${n.tech.map(x=>`<span>${x}</span>`).join('')}</div>`;
+  d.onclick=e=>{e.stopPropagation();select(n.id)};
+  d.onmouseenter=()=>{ if(!sel) focus(n.id) }; d.onmouseleave=()=>{ if(!sel) focus(null) };
+  canvas.appendChild(d); n.el=d;
+});
+const svgL=document.createElementNS(ns,'svg');svgL.setAttribute('class','edges labels');svgL.setAttribute('viewBox',`0 0 ${W} ${H}`);svgL.setAttribute('width',W);svgL.setAttribute('height',H);canvas.appendChild(svgL);
+function anchor(a,b){
+  const ac={x:a.x+a.w/2,y:a.y+a.h/2}, bc={x:b.x+b.w/2,y:b.y+b.h/2};
+  const dx=bc.x-ac.x, dy=bc.y-ac.y;
+  const horiz = Math.abs(dx)/(a.w/2+b.w/2+40) > Math.abs(dy)/(a.h/2+b.h/2+40);
+  if(horiz){ const s=Math.sign(dx)||1; return {p1:{x:s>0?a.x+a.w:a.x,y:ac.y},p2:{x:s>0?b.x:b.x+b.w,y:bc.y},h:1,s}; }
+  const s=Math.sign(dy)||1; return {p1:{x:ac.x,y:s>0?a.y+a.h:a.y},p2:{x:bc.x,y:s>0?b.y:b.y+b.h},h:0,s};
+}
+const edges=[];
+// spread multiple edges on same side
+const used={};
+E.forEach(([f,t,l,ty,fu],i)=>{
+  const a=byId[f],b=byId[t]; const an=anchor(a,b);
+  const key1=f+(an.h?(an.s>0?'R':'L'):(an.s>0?'B':'T')), key2=t+(an.h?(an.s>0?'L':'R'):(an.s>0?'T':'B'));
+  used[key1]=(used[key1]||0)+1; used[key2]=(used[key2]||0)+1;
+  edges.push({f,t,l,ty:fu?'fut':ty,fu,an,k1:key1,k2:key2,i1:used[key1],i2:used[key2]});
+});
+edges.forEach(e=>{
+  const off=(k,i)=>{const n=used[k];return (i-(n+1)/2)*14;};
+  const {p1,p2,h,s}=e.an;
+  if(h){p1.y+=off(e.k1,e.i1);p2.y+=off(e.k2,e.i2);}else{p1.x+=off(e.k1,e.i1);p2.x+=off(e.k2,e.i2);}
+  const d=h?Math.max(40,Math.abs(p2.x-p1.x)/2):Math.max(30,Math.abs(p2.y-p1.y)/2);
+  const c1=h?{x:p1.x+s*d,y:p1.y}:{x:p1.x,y:p1.y+s*d}, c2=h?{x:p2.x-s*d,y:p2.y}:{x:p2.x,y:p2.y-s*d};
+  const path=document.createElementNS(ns,'path');
+  path.setAttribute('d',`M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`);
+  path.style.stroke=`var(--${e.ty})`; path.setAttribute('marker-end',`url(#a-${e.ty})`);
+  if(e.fu) path.classList.add('fut');
+  svg.appendChild(path); e.path=path;
+  const tx=document.createElementNS(ns,'text');
+  const mx=(p1.x+3*c1.x+3*c2.x+p2.x)/8, my=(p1.y+3*c1.y+3*c2.y+p2.y)/8;
+  tx.setAttribute('x',mx);tx.setAttribute('y',my-4);tx.setAttribute('text-anchor','middle');tx.textContent=e.l;
+  svgL.appendChild(tx); e.text=tx;
+});
+let sel=null, maxPhase=7, labels=false;
+function focus(id){
+  const keep=new Set(id?[id]:[]);
+  edges.forEach(e=>{const on=!id||e.f===id||e.t===id; if(on&&id){keep.add(e.f);keep.add(e.t);}
+    e.path.classList.toggle('dim',!on); e.text.classList.toggle('dim',!on);
+    const hid=byId[e.f].ph>maxPhase||byId[e.t].ph>maxPhase;
+    e.text.style.display=(!hid && (labels || (id&&on)))?'':'none';
+    e.path.style.strokeWidth=id&&on?'2.6':''; e.path.style.opacity=id&&on?'1':'';});
+  N.forEach(n=>n.el.classList.toggle('dim',!!id&&!keep.has(n.id)));
+}
+const det=document.getElementById('detail');
+function select(id){
+  sel=id; N.forEach(n=>n.el.classList.toggle('sel',n.id===id)); focus(id);
+  const n=byId[id];
+  document.getElementById('dt').textContent=n.t;
+  let h=`<div>${n.desc||''}</div><dl><dt>Tecnología</dt><dd>${(n.list||[]).concat(n.tech).join(' · ')||'—'}</dd><dt>Entra en</dt><dd>Fase ${n.ph}</dd>`;
+  if(n.why) h+=`<dt>Por qué</dt><dd>${n.why}</dd>`;
+  if(n.alt) h+=`<dt>Descartado</dt><dd>${n.alt}</dd>`;
+  if(n.extra) h+=`<dt>Nota</dt><dd>${n.extra}</dd>`;
+  document.getElementById('dd').innerHTML=h+'</dl>';
+  const out=edges.filter(e=>e.f===id).map(e=>`→ <b>${byId[e.t].t}</b> · ${e.l}`);
+  const inn=edges.filter(e=>e.t===id).map(e=>`← <b>${byId[e.f].t}</b> · ${e.l}`);
+  document.getElementById('dc').innerHTML=out.concat(inn).join('<br>');
+  det.classList.add('on');
+}
+function clearSel(){ sel=null; N.forEach(n=>n.el.classList.remove('sel')); focus(null); det.classList.remove('on'); }
+document.getElementById('dx').onclick=clearSel;
+document.getElementById('stage').addEventListener('click',clearSel);
+// phases
+const PH=[[0,'0 · spike'],[1,'1 · core'],[2,'2'],[3,'3 · contexto'],[5,'5'],[7,'7 · todo']];
+const pw=document.getElementById('phases');
+PH.forEach(([p,l])=>{const b=document.createElement('button');b.textContent=l;b.dataset.p=p;b.setAttribute('aria-pressed',p===7);
+  b.onclick=()=>{maxPhase=p;pw.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',+x.dataset.p===p));applyPhase();};pw.appendChild(b);});
+function applyPhase(){
+  N.forEach(n=>n.el.classList.toggle('faded',n.ph>maxPhase));
+  edges.forEach(e=>{const off=byId[e.f].ph>maxPhase||byId[e.t].ph>maxPhase; e.path.style.display=off?'none':''; e.text.style.display=off||!labels?'none':'';}); if(sel) focus(sel);
+}
+
+const lb=document.getElementById('lbls');
+lb.onclick=()=>{labels=!labels;lb.setAttribute('aria-pressed',labels);applyPhase();};
+// fit
+const stage=document.getElementById('stage');
+function fit(){const s=Math.min(1,(stage.clientWidth-20)/W);canvas.style.transform=`scale(${s})`;canvas.parentElement.style.setProperty('--s',s);
+  canvas.style.marginBottom=(H*s-H)+'px'; canvas.style.marginRight=(W*s-W)+'px';}
+document.getElementById('fit').onclick=fit; addEventListener('resize',fit); fit(); applyPhase();
+</script>
+</body>
+</html>

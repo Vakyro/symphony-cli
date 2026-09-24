@@ -1,0 +1,20 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Secrets / env
+.env*
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# Node (fixtures, prevalidation scripts)
+node_modules/
+
+# Symphony runtime state
+.symphony/
+
+# Local tool output (not part of the spec)
+graphify-smart-out/

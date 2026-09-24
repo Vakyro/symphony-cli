@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symphony CLI — Flujo de Usuario, Vistas y Ramas</title>
+<style>
+:root{
+  --bg:#0b0d10; --panel:#11151a; --panel2:#161b22; --line:#2a313b;
+  --text:#edf2f7; --muted:#9aa6b2; --accent:#9fe870; --accent2:#72c7ff;
+  --warn:#ffd166; --danger:#ff7b72; --ok:#7ee787; --violet:#c3a6ff;
+  --shadow:0 10px 30px rgba(0,0,0,.28);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:linear-gradient(180deg,#090b0e 0%,#0b0d10 100%);color:var(--text);font:15px/1.62 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+a{color:var(--accent2);text-decoration:none}
+a:hover{text-decoration:underline}
+.layout{display:grid;grid-template-columns:280px minmax(0,1fr);min-height:100vh}
+.sidebar{position:sticky;top:0;height:100vh;padding:28px 20px;border-right:1px solid var(--line);background:rgba(10,12,15,.94);overflow:auto}
+.brand{font-weight:800;letter-spacing:.02em;font-size:20px;margin-bottom:4px}
+.kicker{font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.14em}
+.sidebar p{color:var(--muted);font-size:13px}
+.nav{margin-top:24px;display:grid;gap:5px}
+.nav a{color:#b8c2cc;padding:8px 10px;border-radius:8px;font-size:13px}
+.nav a:hover{background:var(--panel2);color:white;text-decoration:none}
+main{padding:54px clamp(28px,5vw,78px) 120px;max-width:1500px;width:100%}
+.hero{padding:38px;border:1px solid var(--line);border-radius:22px;background:
+radial-gradient(circle at 85% 15%,rgba(159,232,112,.13),transparent 32%),
+radial-gradient(circle at 65% 75%,rgba(114,199,255,.08),transparent 30%),
+var(--panel);box-shadow:var(--shadow)}
+.hero h1{font-size:clamp(38px,5.2vw,72px);line-height:1.02;margin:10px 0 18px;letter-spacing:-.04em}
+.hero .lead{font-size:19px;color:#cbd5df;max-width:980px}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}
+.badge{border:1px solid var(--line);padding:6px 10px;border-radius:999px;background:#0e1217;color:#c9d1d9;font-size:12px}
+.badge.ok{border-color:#315a38;color:var(--ok)}
+.badge.warn{border-color:#67562d;color:var(--warn)}
+section{margin-top:64px;scroll-margin-top:24px}
+h2{font-size:30px;letter-spacing:-.02em;margin:0 0 18px}
+h3{font-size:20px;margin:32px 0 12px}
+h4{font-size:15px;text-transform:uppercase;letter-spacing:.08em;color:#c8d1da;margin:26px 0 9px}
+p{max-width:1040px}
+.muted{color:var(--muted)}
+.grid{display:grid;gap:16px}
+.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+.card{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:20px;box-shadow:0 4px 16px rgba(0,0,0,.13)}
+.card h3,.card h4{margin-top:0}
+.card.accent{border-color:#3d5d34;background:linear-gradient(180deg,rgba(159,232,112,.055),var(--panel))}
+.card.warn{border-color:#65562e}
+.card.danger{border-color:#603737}
+.stat{font-size:30px;font-weight:800;letter-spacing:-.03em}
+.small{font-size:12px;color:var(--muted)}
+.flow{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:20px 0}
+.node{padding:11px 14px;border:1px solid var(--line);background:var(--panel2);border-radius:10px;white-space:nowrap}
+.arrow{color:#637083;font-size:19px}
+.flow.vertical{display:grid;grid-template-columns:minmax(0,1fr);max-width:780px}
+.flow.vertical .node{white-space:normal}
+.branch{border-left:3px solid var(--line);padding-left:18px;margin:14px 0}
+.branch.ok{border-color:var(--ok)}
+.branch.warn{border-color:var(--warn)}
+.branch.danger{border-color:var(--danger)}
+table{border-collapse:collapse;width:100%;margin:18px 0 26px;background:var(--panel);border:1px solid var(--line)}
+th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#141920;color:#dce4ec;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+td{color:#cbd4dd}
+code,pre{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
+code{background:#161b22;border:1px solid #262d36;padding:2px 5px;border-radius:5px}
+pre{background:#090c10;border:1px solid var(--line);border-radius:14px;padding:18px;overflow:auto;color:#d9e2ec}
+.screen{border:1px solid #3b444f;border-radius:16px;background:#080b0f;overflow:hidden;box-shadow:var(--shadow);margin:18px 0}
+.screenbar{height:38px;background:#141920;border-bottom:1px solid #2b333d;display:flex;align-items:center;padding:0 13px;gap:7px}
+.dot{width:10px;height:10px;border-radius:50%;background:#454d57}
+.screenbody{padding:18px;font-family:"SFMono-Regular",Consolas,monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;color:#dbe3eb}
+.green{color:var(--ok)} .yellow{color:var(--warn)} .red{color:var(--danger)} .blue{color:var(--accent2)} .violet{color:var(--violet)}
+.callout{border-left:4px solid var(--accent2);background:rgba(114,199,255,.055);padding:15px 18px;border-radius:0 12px 12px 0;margin:18px 0}
+.callout.warn{border-color:var(--warn);background:rgba(255,209,102,.05)}
+.callout.important{border-color:var(--accent);background:rgba(159,232,112,.05)}
+.pill{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid var(--line);font-size:11px;margin:2px 4px 2px 0}
+.state{font-family:monospace;font-size:12px}
+details{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin:10px 0}
+summary{cursor:pointer;padding:14px 16px;font-weight:700}
+details>div{padding:0 16px 16px}
+.path{counter-reset:step;display:grid;gap:10px}
+.path .step{position:relative;border:1px solid var(--line);background:var(--panel);padding:14px 16px 14px 52px;border-radius:12px}
+.path .step:before{counter-increment:step;content:counter(step);position:absolute;left:14px;top:13px;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:#202833;color:var(--accent);font-weight:800}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 18px}
+.legend span{font-size:12px;padding:5px 8px;border-radius:8px;background:#131820;border:1px solid var(--line)}
+footer{margin-top:80px;padding-top:26px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+@media(max-width:1000px){.layout{grid-template-columns:1fr}.sidebar{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line)}.nav{grid-template-columns:repeat(2,minmax(0,1fr))}.grid.two,.grid.three{grid-template-columns:1fr}main{padding:34px 20px 80px}}
+@media print{.sidebar{display:none}.layout{display:block}main{max-width:none;padding:20px}.card,.screen,table,details{break-inside:avoid}body{background:#fff;color:#111}.card,table,.screen,details{box-shadow:none}}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <div class="kicker">Product / UX Flow</div>
+  <div class="brand">Symphony CLI</div>
+  <p>Mapa completo del flujo ideal del usuario, vistas, estados, decisiones y ramas posibles.</p>
+  <nav class="nav">
+    <a href="#objetivo">1. Objetivo UX</a>
+    <a href="#modelo">2. Modelo mental</a>
+    <a href="#macro">3. Macroflujo</a>
+    <a href="#onboarding">4. Entrada y onboarding</a>
+    <a href="#home">5. Home / Dashboard</a>
+    <a href="#crear-agente">6. Crear agente</a>
+    <a href="#agente">7. Vista de agente</a>
+    <a href="#modelos">8. Modelos y profiles</a>
+    <a href="#tareas">9. Tareas y dependencias</a>
+    <a href="#scheduler">10. Recursos y esperas</a>
+    <a href="#contexto">11. Contexto</a>
+    <a href="#proveedores">12. Proveedores</a>
+    <a href="#failover">13. Failover / handoff</a>
+    <a href="#git">14. Cambios y merge</a>
+    <a href="#validacion">15. Validación</a>
+    <a href="#errores">16. Errores y recuperación</a>
+    <a href="#config">17. Configuración</a>
+    <a href="#vistas">18. Inventario de vistas</a>
+    <a href="#ramas">19. Árbol de caminos</a>
+    <a href="#journeys">20. Journeys completos</a>
+    <a href="#reglas">21. Reglas UX</a>
+  </nav>
+</aside>
+
+<main>
+<header class="hero">
+  <div class="kicker">Documento funcional de experiencia de usuario</div>
+  <h1>Symphony CLI<br>Flujo, vistas y ramas</h1>
+  <p class="lead">Este documento describe cómo debería experimentarse Symphony desde el punto de vista del usuario: qué ve al entrar, cómo crea y controla agentes, cómo elige modelos, qué ocurre cuando un proveedor falla, cómo se muestran las esperas por recursos, cómo se revisan cambios y cuáles son todas las salidas normales y excepcionales del flujo.</p>
+  <div class="badges">
+    <span class="badge ok">CLI/TUI como experiencia principal</span>
+    <span class="badge ok">Usuario siempre conserva control</span>
+    <span class="badge">Agente persistente</span>
+    <span class="badge">Modelo reemplazable</span>
+    <span class="badge">Workspaces aislados</span>
+    <span class="badge">Failover sin reexplicar</span>
+    <span class="badge">Contexto recuperable</span>
+    <span class="badge warn">Sin describir stack tecnológico</span>
+  </div>
+</header>
+
+<section id="objetivo">
+<h2>1. Objetivo de experiencia</h2>
+<p>La experiencia ideal de Symphony debe hacer que trabajar con varios agentes se sienta como operar un único entorno, no cinco herramientas diferentes. El usuario debe poder iniciar el proyecto, lanzar uno o varios agentes, observar lo que hacen, intervenir cuando quiera y continuar aunque cambie el modelo que ejecuta una tarea.</p>
+<div class="grid three">
+  <div class="card accent"><div class="stat">1</div><h3>Un solo punto de entrada</h3><p>Una terminal y una sesión de Symphony concentran agentes, tareas, proveedores, recursos, cambios y contexto.</p></div>
+  <div class="card accent"><div class="stat">N</div><h3>Varios agentes</h3><p>El usuario puede crear múltiples agentes sin tener que gestionar manualmente múltiples terminales o ramas.</p></div>
+  <div class="card accent"><div class="stat">0</div><h3>Reexplicaciones deseadas</h3><p>Si cambia el modelo o proveedor, el usuario no debe volver a narrar el proyecto desde cero.</p></div>
+</div>
+<div class="callout important"><strong>Regla UX principal:</strong> Symphony debe explicar siempre qué está ocurriendo y por qué. Un agente puede esperar, cambiar de modelo, bloquearse o fallar, pero nunca debe parecer que “simplemente se congeló”.</div>
+</section>
+
+<section id="modelo">
+<h2>2. Modelo mental que debe aprender el usuario</h2>
+<p>La interfaz debe reforzar cinco conceptos sencillos. Todo lo demás puede quedar escondido hasta que haga falta.</p>
+<table>
+<tr><th>Concepto</th><th>Cómo debe entenderlo el usuario</th><th>Qué puede hacer</th></tr>
+<tr><td><strong>Project</strong></td><td>El proyecto/repo donde está trabajando.</td><td>Abrirlo, inicializar Symphony, consultar estado global.</td></tr>
+<tr><td><strong>Task</strong></td><td>Una unidad concreta de trabajo.</td><td>Crear, priorizar, bloquear, completar, cancelar.</td></tr>
+<tr><td><strong>Agent</strong></td><td>La entidad persistente que “posee” una tarea.</td><td>Enviar instrucciones, pausar, cambiar modelo, revisar cambios.</td></tr>
+<tr><td><strong>Model</strong></td><td>El ejecutor de IA actual del agente.</td><td>Elegir uno exacto o dejar que Symphony seleccione por profile.</td></tr>
+<tr><td><strong>Profile</strong></td><td>Una intención como <code>@code</code> o <code>@fast</code>.</td><td>Delegar la elección de modelo a Symphony.</td></tr>
+</table>
+<div class="callout"><strong>Mensaje conceptual:</strong> el usuario no “abre Claude” o “abre Codex”. El usuario crea un agente de Symphony y decide quién lo ejecuta.</div>
+</section>
+
+<section id="macro">
+<h2>3. Macroflujo del usuario</h2>
+<div class="flow">
+  <div class="node">Entrar al proyecto</div><div class="arrow">→</div>
+  <div class="node">Abrir Symphony</div><div class="arrow">→</div>
+  <div class="node">Diagnóstico inicial</div><div class="arrow">→</div>
+  <div class="node">Home</div><div class="arrow">→</div>
+  <div class="node">Crear agente/tarea</div><div class="arrow">→</div>
+  <div class="node">Elegir modelo/profile</div><div class="arrow">→</div>
+  <div class="node">Trabajar</div><div class="arrow">→</div>
+  <div class="node">Validar</div><div class="arrow">→</div>
+  <div class="node">Revisar</div><div class="arrow">→</div>
+  <div class="node">Merge / cerrar</div>
+</div>
+<h3>Bifurcaciones globales</h3>
+<div class="grid two">
+  <div class="card"><h4>Proyecto nuevo para Symphony</h4><p>Se muestra inicialización, detección de proveedores, autenticación necesaria y perfil de rendimiento.</p></div>
+  <div class="card"><h4>Proyecto ya configurado</h4><p>Symphony restaura sesión, agentes, tareas, worktrees y estados anteriores antes de mostrar Home.</p></div>
+  <div class="card"><h4>Proveedor falla</h4><p>El agente persiste. La interfaz muestra el fallo, la política de failover y el nuevo executor si procede.</p></div>
+  <div class="card"><h4>Máquina bajo presión</h4><p>Symphony reduce concurrencia o pone operaciones pesadas en espera, explicando siempre la causa.</p></div>
+</div>
+</section>
+
+<section id="onboarding">
+<h2>4. Entrada, diagnóstico y onboarding</h2>
+
+<h3>4.1 Vista: Launch</h3>
+<p>Es la primera pantalla al ejecutar Symphony. Debe durar lo mínimo posible y sólo mostrar lo esencial.</p>
+<div class="screen"><div class="screenbar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><div class="screenbody"><span class="green">SYMPHONY</span>
+Project detected: arete-mobile
+Checking project state...
+Checking providers...
+Restoring session...
+
+<span class="green">Ready.</span></div></div>
+
+<h4>Ramas posibles</h4>
+<div class="branch ok"><strong>Proyecto reconocido.</strong> Cargar estado y entrar directamente al Home.</div>
+<div class="branch warn"><strong>Proyecto sin Symphony.</strong> Ofrecer <code>Initialize</code>, <code>Open without setup</code> o <code>Exit</code>.</div>
+<div class="branch warn"><strong>No parece repo/proyecto.</strong> Mostrar ruta actual y ofrecer seleccionar otra carpeta o salir.</div>
+<div class="branch danger"><strong>Estado previo inconsistente.</strong> Entrar a Recovery View antes del Home.</div>
+
+<h3>4.2 Vista: First-run Setup</h3>
+<p>Debe ser corta. No debe convertirse en un wizard de veinte pasos. Sólo recoge decisiones que son necesarias para empezar.</p>
+<div class="path">
+<div class="step"><strong>Confirmar proyecto.</strong> Nombre y ruta.</div>
+<div class="step"><strong>Detectar proveedores.</strong> Mostrar cuáles están disponibles y cuáles necesitan atención.</div>
+<div class="step"><strong>Elegir profile de rendimiento.</strong> Eco, Balanced, Performance o Custom.</div>
+<div class="step"><strong>Confirmar política de failover.</strong> None, same-provider o any.</div>
+<div class="step"><strong>Entrar al Home.</strong></div>
+</div>
+
+<h3>4.3 Vista: Provider Setup</h3>
+<table>
+<tr><th>Estado</th><th>Mensaje</th><th>Acciones</th></tr>
+<tr><td><span class="state green">READY</span></td><td>Proveedor usable.</td><td>Continuar.</td></tr>
+<tr><td><span class="state yellow">LOGIN_REQUIRED</span></td><td>El CLI existe pero no hay sesión válida.</td><td>Abrir login oficial · Saltar proveedor.</td></tr>
+<tr><td><span class="state yellow">NOT_FOUND</span></td><td>Ese proveedor no está disponible en la máquina.</td><td>Ver instrucciones · Ignorar.</td></tr>
+<tr><td><span class="state red">ERROR</span></td><td>No pudo verificarse.</td><td>Reintentar · Ver detalle · Desactivar.</td></tr>
+</table>
+<div class="callout">El usuario nunca debería estar obligado a configurar los cinco proveedores para usar Symphony. Debe poder empezar con uno y añadir otros después.</div>
+</section>
+
+<section id="home">
+<h2>5. Vista principal: Home / Dashboard TUI</h2>
+<p>Es la vista a la que el usuario vuelve constantemente. Debe responder de inmediato cinco preguntas: ¿qué proyecto tengo?, ¿qué agentes existen?, ¿qué están haciendo?, ¿qué proveedor/modelo usa cada uno?, ¿mi máquina está bien?</p>
+
+<div class="screen"><div class="screenbar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><div class="screenbody"><span class="green">SYMPHONY</span>  arete-mobile                                  Session 8e4f
+
+AGENTS
+#1  <span class="green">RUNNING</span>   Sonnet        Supabase authentication
+#2  <span class="yellow">TESTING</span>   Sol           Responsive modals
+#3  <span class="blue">WAITING</span>   Kimi          Integration tests
+
+PROVIDERS
+Claude <span class="yellow">QUOTA_LOW</span>   OpenAI <span class="green">HEALTHY</span>   Google <span class="green">HEALTHY</span>
+Kimi <span class="green">HEALTHY</span>       Copilot <span class="green">HEALTHY</span>
+
+SYSTEM
+CPU 37%   RAM 58%   Heavy operations 1/1
+
+<span class="violet">></span> _</div></div>
+
+<h3>Componentes de Home</h3>
+<div class="grid two">
+<div class="card"><h4>Agent List</h4><p>ID, estado, modelo actual y tarea. Debe permitir entrar directamente a cada agente.</p></div>
+<div class="card"><h4>Provider Strip</h4><p>Resumen compacto de salud. Los detalles completos viven en Provider View.</p></div>
+<div class="card"><h4>System Strip</h4><p>CPU, RAM y slots de trabajo pesado. Su propósito es explicar por qué el scheduler está limitando algo.</p></div>
+<div class="card"><h4>Command / Action Bar</h4><p>Entrada principal para crear agentes, enviar comandos o navegar.</p></div>
+</div>
+
+<h3>Estados de Home</h3>
+<details open><summary>Home vacío — ningún agente</summary><div><p>Mostrar una acción dominante: <strong>Create first agent</strong>. También permitir abrir Tasks, Providers o Settings.</p></div></details>
+<details><summary>Home con agentes activos</summary><div><p>Priorizar actividad actual y alertas que requieren intervención.</p></div></details>
+<details><summary>Home con agentes completados</summary><div><p>Agrupar los completados, ofreciendo Review / Merge / Archive.</p></div></details>
+<details><summary>Home con problema crítico</summary><div><p>Mostrar banner superior no intrusivo pero visible: proveedor sin auth, worktree inconsistente, conflicto pendiente o recovery requerido.</p></div></details>
+</section>
+
+<section id="crear-agente">
+<h2>6. Crear agente: flujo completo</h2>
+<p>Crear un agente debe ser extremadamente rápido. El usuario puede dar una instrucción libre y opcionalmente decidir cómo se ejecutará.</p>
+
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">NEW AGENT</span>
+
+Task:
+> Fix refresh token rotation and add regression tests
+
+Execution:
+(•) @code
+( ) Exact model
+( ) Decide later
+
+Failover:
+(•) Any compatible provider
+( ) Same provider only
+( ) Disabled
+
+Priority: Normal
+
+[ Create agent ]</div></div>
+
+<h3>Flujo ideal</h3>
+<div class="path">
+<div class="step">El usuario escribe la tarea.</div>
+<div class="step">Symphony propone profile/modelo o respeta el elegido manualmente.</div>
+<div class="step">Comprueba que existe al menos un executor elegible.</div>
+<div class="step">Crea agente, task, workspace aislado y checkpoint inicial.</div>
+<div class="step">Ensambla el contexto inicial.</div>
+<div class="step">El agente aparece inmediatamente en Home con estado visible.</div>
+</div>
+
+<h3>Ramas</h3>
+<div class="branch ok"><strong>Profile automático.</strong> Symphony filtra modelos no disponibles y escoge entre los restantes.</div>
+<div class="branch ok"><strong>Modelo exacto.</strong> Se respeta mientras esté disponible. Si no lo está, se muestra una decisión al usuario antes de iniciar.</div>
+<div class="branch warn"><strong>Modelo exacto no disponible.</strong> Opciones: esperar, escoger otro, convertir selección a profile o cancelar.</div>
+<div class="branch warn"><strong>No hay proveedores elegibles.</strong> Llevar a Provider Setup sin perder la tarea escrita.</div>
+<div class="branch danger"><strong>No puede prepararse el workspace.</strong> Mostrar causa y permitir retry/cancel; no crear un agente “medio roto”.</div>
+</section>
+
+<section id="agente">
+<h2>7. Vista de agente</h2>
+<p>Es la vista de detalle más importante. Debe unir conversación/control, tarea, actividad, cambios y estado sin obligar al usuario a abrir varias ventanas.</p>
+
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">AGENT #3</span>  <span class="yellow">TESTING</span>
+Task: Fix refresh token expiration
+Executor: OpenAI / Sol
+Failover: any
+Workspace: isolated
+Checkpoint: 14 sec ago
+
+CURRENT
+Running targeted tests...
+
+CHANGES
+4 files modified · +128 / -36
+
+VALIDATION
+18 passed · 2 failed
+
+NEXT
+Investigate refresh middleware response
+
+Actions:
+[ message ] [ pause ] [ switch model ] [ diff ] [ context ] [ stop ]</div></div>
+
+<h3>Subvistas / paneles del agente</h3>
+<table>
+<tr><th>Vista</th><th>Contenido</th><th>Acciones</th></tr>
+<tr><td>Overview</td><td>Tarea, estado, modelo, último evento, siguiente paso.</td><td>Pause, Resume, Message, Switch, Stop.</td></tr>
+<tr><td>Conversation</td><td>Interacción visible con el executor actual.</td><td>Enviar instrucción adicional.</td></tr>
+<tr><td>Activity</td><td>Timeline de tool calls, comandos y checkpoints.</td><td>Filtrar, inspeccionar output.</td></tr>
+<tr><td>Changes</td><td>Archivos modificados y diff.</td><td>Revisar, abrir detalle, descartar cambios si la política lo permite.</td></tr>
+<tr><td>Validation</td><td>Resultados de checks y tests.</td><td>Re-run, inspeccionar fallo.</td></tr>
+<tr><td>Context</td><td>Qué contexto se usó y qué objetos son recuperables.</td><td>Inspeccionar, cambiar modo en handoff futuro.</td></tr>
+<tr><td>History</td><td>Executors/modelos usados, failovers y reintentos.</td><td>Ver motivos y tiempos.</td></tr>
+</table>
+
+<h3>Estados visibles del agente</h3>
+<div class="legend">
+<span>CREATED</span><span>READY</span><span>RUNNING</span><span>WAITING_PROVIDER</span><span>WAITING_RESOURCE</span><span>WAITING_DEPENDENCY</span><span>TESTING</span><span>BLOCKED</span><span>PAUSED</span><span>COMPLETED</span><span>FAILED</span><span>CANCELLED</span>
+</div>
+<p>Cada estado debe tener una frase humana. Ejemplo: <code>WAITING_RESOURCE → esperando que termine el test suite de Agent #2</code>, no sólo un código de estado.</p>
+</section>
+
+<section id="modelos">
+<h2>8. Modelos, profiles y cambio de executor</h2>
+
+<h3>8.1 Vista: Model Picker</h3>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">SELECT EXECUTION</span>
+
+PROFILES
+@code          Best available for implementation
+@debug         Best available for debugging
+@fast          Prioritize response speed
+@reasoning     Prioritize difficult reasoning
+@docs          Documentation-oriented
+@conserve      Preserve scarce quota
+
+EXACT MODELS
+Claude / Sonnet       <span class="yellow">QUOTA_LOW</span>
+OpenAI / Sol          <span class="green">AVAILABLE</span>
+Google / Flash        <span class="green">AVAILABLE</span>
+Kimi / ...            <span class="green">AVAILABLE</span>
+Copilot / ...         <span class="green">AVAILABLE</span></div></div>
+
+<h3>8.2 Exact model branch</h3>
+<div class="flow vertical">
+<div class="node">Usuario elige modelo exacto</div>
+<div class="node">¿Disponible?</div>
+<div class="node">Sí → iniciar y no sustituir silenciosamente</div>
+<div class="node">No → ofrecer esperar / escoger otro / convertir a profile / cancelar</div>
+</div>
+
+<h3>8.3 Profile branch</h3>
+<div class="flow vertical">
+<div class="node">Usuario elige @profile</div>
+<div class="node">Filtrar candidatos no utilizables</div>
+<div class="node">Comparar candidatos disponibles</div>
+<div class="node">Seleccionar</div>
+<div class="node">Mostrar modelo elegido y permitir /explain-route</div>
+</div>
+
+<h3>8.4 Vista: Explain Route</h3>
+<div class="screen"><div class="screenbar"></div><div class="screenbody">Profile: @code
+
+Sonnet   eligible · quota low
+Sol      eligible · quota healthy
+Kimi     eligible · recent failure
+
+Selected: <span class="green">Sol</span>
+
+Why:
++ strong task fit
++ healthy quota
++ provider healthy
+- Sonnet preserved because quota is low</div></div>
+
+<h3>8.5 Cambio sugerido durante tarea</h3>
+<p>Si Symphony detecta que otro modelo podría ser más adecuado, no debe cambiarlo silenciosamente por optimización.</p>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="yellow">MODEL SUGGESTION</span>
+This task evolved from documentation to a multi-file refactor.
+
+Current: Google / Flash
+Suggested: Claude / Sonnet
+
+[ Switch ] [ Keep current ] [ Don't suggest again ]</div></div>
+</section>
+
+<section id="tareas">
+<h2>9. Tareas, dependencias y milestones</h2>
+
+<h3>9.1 Vista: Task Board / Task List</h3>
+<p>No necesita ser un Kanban visual permanente. La experiencia principal puede ser una lista filtrable que muestre estado, dependencias y agente.</p>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">TASKS</span>
+
+READY
+T-12  Implement auth backend           Agent #1
+T-16  Responsive modal fixes           Agent #2
+
+WAITING_DEPENDENCY
+T-18  Integration tests                waits for T-12, T-16
+
+BLOCKED
+T-09  Merge auth changes               conflict requires review
+
+DONE
+T-03  Database schema</div></div>
+
+<h3>9.2 Estados</h3>
+<div class="legend"><span>BACKLOG</span><span>READY</span><span>RUNNING</span><span>WAITING</span><span>BLOCKED</span><span>DONE</span><span>FAILED</span><span>CANCELLED</span></div>
+
+<h3>9.3 Dependencias</h3>
+<div class="branch warn"><strong>Tarea tiene dependencias pendientes.</strong> No se ejecuta. La vista debe decir exactamente qué tareas la bloquean.</div>
+<div class="branch ok"><strong>Todas las dependencias completadas.</strong> Pasa a READY automáticamente.</div>
+<div class="branch danger"><strong>Dependencia falla/cancela.</strong> La tarea dependiente debe quedar BLOCKED y pedir decisión: replanificar, ignorar dependencia o cancelar.</div>
+
+<h3>9.4 Milestones</h3>
+<p>Los milestones son agrupaciones opcionales. Si requieren aprobación manual, cuando se completan sus tareas aparece una vista de Gate Review con resumen, tests, cambios y acciones: Approve, Request changes, Hold.</p>
+</section>
+
+<section id="scheduler">
+<h2>10. Recursos, scheduler y esperas</h2>
+<p>Esta parte debe ser visible cuando importa e invisible cuando todo funciona. El usuario no debería gestionar manualmente CPU/RAM en el flujo normal.</p>
+
+<h3>10.1 Vista: System / Resource Monitor</h3>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">SYSTEM</span>
+
+Profile: balanced
+
+CPU             61% / target 70%
+RAM             64% / target 70%
+Heavy slots     1 / 1
+
+RUNNING
+Agent #2  unit tests
+
+WAITING
+Agent #4  build
+Reason: heavy slot occupied by Agent #2
+
+[ switch profile ] [ inspect processes ]</div></div>
+
+<h3>10.2 Ramas del scheduler</h3>
+<div class="branch ok"><strong>Hay recursos.</strong> Operación inicia inmediatamente.</div>
+<div class="branch warn"><strong>No hay slot.</strong> Agente entra a WAITING_RESOURCE y se muestra quién/qué ocupa el recurso.</div>
+<div class="branch warn"><strong>Presión alta de RAM/CPU.</strong> Symphony reduce concurrencia según política y explica qué se pospuso.</div>
+<div class="branch danger"><strong>Operación excede límites o queda colgada.</strong> Mostrar proceso, duración y opciones: keep waiting, stop operation, pause agent.</div>
+
+<h3>10.3 Vista: Performance Profile</h3>
+<table>
+<tr><th>Perfil</th><th>Intención para el usuario</th></tr>
+<tr><td>Eco</td><td>Prioriza que la máquina se sienta libre.</td></tr>
+<tr><td>Balanced</td><td>Equilibrio por defecto entre velocidad y fluidez.</td></tr>
+<tr><td>Performance</td><td>Más concurrencia; el usuario acepta mayor carga.</td></tr>
+<tr><td>Custom</td><td>El usuario decide límites y concurrencia.</td></tr>
+</table>
+</section>
+
+<section id="contexto">
+<h2>11. Contexto, handoff y memoria visible</h2>
+
+<h3>11.1 Vista: Context Overview</h3>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">CONTEXT — Agent #3</span>
+
+Current handoff mode: balanced
+
+OBJECTIVE          included
+CURRENT PLAN       included
+PROJECT DECISIONS  6 active
+RECENT FAILURES    2
+CODE               5 files selected
+CURRENT DIFF       included
+LARGE OUTPUTS      4 references
+
+Recoverable objects:
+ctx://run/921
+ctx://file/auth.ts
+ctx://git/agent3/current</div></div>
+
+<h3>11.2 Modos</h3>
+<table>
+<tr><th>Modo</th><th>Qué comunica al usuario</th></tr>
+<tr><td>Raw</td><td>Usar la información sin optimización cuando sea posible; salida de emergencia.</td></tr>
+<tr><td>Safe</td><td>Reducción mínima; conservar más detalle.</td></tr>
+<tr><td>Balanced</td><td>Default recomendado.</td></tr>
+<tr><td>Aggressive</td><td>Reducir más el handoff y depender más de retrieval.</td></tr>
+</table>
+
+<h3>11.3 Vista: Context Object</h3>
+<p>Cuando el usuario abre un objeto <code>ctx://...</code>, ve el original, su procedencia, qué agente lo generó y cuándo se usó. Debe poder buscar dentro sin tener que introducir todo en el contexto del modelo.</p>
+
+<h3>11.4 Ramas</h3>
+<div class="branch ok"><strong>Contexto suficiente.</strong> El nuevo executor comienza normalmente.</div>
+<div class="branch warn"><strong>Executor pide detalle adicional.</strong> Recupera sólo el objeto o fragmento necesario.</div>
+<div class="branch warn"><strong>Usuario sospecha que se perdió información.</strong> Cambia a Safe/Raw y reintenta el handoff.</div>
+<div class="branch danger"><strong>Contexto inconsistente.</strong> Mostrar qué fuente entra en conflicto y permitir escoger current truth o revisar manualmente.</div>
+</section>
+
+<section id="proveedores">
+<h2>12. Vista de proveedores</h2>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">PROVIDERS</span>
+
+Claude
+State: <span class="yellow">QUOTA_LOW</span>
+Quota: UNKNOWN
+Agents: #1
+Action: [ inspect ]
+
+OpenAI
+State: <span class="green">HEALTHY</span>
+Quota: UNKNOWN
+Agents: #2
+Action: [ inspect ]
+
+Google
+State: <span class="green">HEALTHY</span>
+
+Kimi
+State: <span class="green">HEALTHY</span>
+
+Copilot
+State: <span class="green">HEALTHY</span></div></div>
+
+<h3>12.1 Provider Detail</h3>
+<p>Debe mostrar: estado, autenticación, modelos detectados, agentes que lo usan, eventos recientes, política de reserva y último error relevante.</p>
+
+<h3>12.2 Estados que el usuario puede ver</h3>
+<div class="legend">
+<span>HEALTHY</span><span>DEGRADED</span><span>THROTTLED</span><span>RATE_LIMITED</span><span>QUOTA_LOW</span><span>EXHAUSTED</span><span>AUTH_ERROR</span><span>OFFLINE</span><span>UNKNOWN</span><span>PROBING</span>
+</div>
+
+<h3>12.3 Quota display</h3>
+<p>La UI debe diferenciar <strong>KNOWN</strong>, <strong>ESTIMATED</strong> y <strong>UNKNOWN</strong>. Nunca inventar un porcentaje exacto.</p>
+<div class="callout warn"><strong>Ejemplo correcto:</strong> “Claude — QUOTA_LOW · remaining unknown · evidence: provider warning”. <br><strong>Ejemplo incorrecto:</strong> “Claude 12% remaining” si el proveedor no lo reporta.</div>
+</section>
+
+<section id="failover">
+<h2>13. Failover y handoff</h2>
+
+<h3>13.1 Vista: Failover Event</h3>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="yellow">AGENT #1 — EXECUTOR CHANGE</span>
+
+Previous:
+Claude / Sonnet
+
+Reason:
+Quota exhausted
+
+Checkpoint:
+Available · 8 sec old
+
+Eligible replacements:
+1. OpenAI / Sol
+2. Kimi / ...
+3. Google / Flash
+
+Policy:
+any
+
+<span class="green">Switching to OpenAI / Sol...</span></div></div>
+
+<h3>13.2 Automatic failover path</h3>
+<div class="path">
+<div class="step">Provider failure is detected and classified.</div>
+<div class="step">Agent remains alive; task/workspace do not change.</div>
+<div class="step">Existing checkpoint is selected.</div>
+<div class="step">Eligible replacements are filtered.</div>
+<div class="step">Policy chooses replacement automatically.</div>
+<div class="step">Handoff is assembled.</div>
+<div class="step">New executor resumes the same agent.</div>
+<div class="step">History records the transition.</div>
+</div>
+
+<h3>13.3 Manual decision branches</h3>
+<div class="branch warn"><strong>Failover disabled.</strong> Agent becomes BLOCKED/WAITING_PROVIDER and asks the user to choose.</div>
+<div class="branch warn"><strong>No eligible replacement.</strong> Offer wait, enable another provider, change policy or stop.</div>
+<div class="branch warn"><strong>Checkpoint may be stale.</strong> Show warning and let user choose latest checkpoint, rebuild from workspace or cancel.</div>
+<div class="branch danger"><strong>Replacement cannot understand/continue.</strong> Offer stronger context mode, different model, retry from checkpoint or manual intervention.</div>
+
+<h3>13.4 User-visible continuity</h3>
+<p>La conversación puede marcar una separación visual:</p>
+<pre>── Executor changed: Claude / Sonnet → OpenAI / Sol
+   Reason: quota exhausted
+   Agent #1, task and workspace unchanged
+   Handoff restored from checkpoint</pre>
+<p>Esto deja claro que cambió el modelo, no el agente.</p>
+</section>
+
+<section id="git">
+<h2>14. Cambios, diff, conflictos y merge</h2>
+
+<h3>14.1 Vista: Changes</h3>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">CHANGES — Agent #2</span>
+
+Modified  4 files
+Added     1 file
+Deleted   0 files
+
+src/auth/service.ts         +72 -18
+src/auth/tokens.ts          +31 -10
+tests/auth.refresh.test.ts  +44 -0
+
+[ inspect diff ] [ validate ] [ review ] [ prepare merge ]</div></div>
+
+<h3>14.2 Vista: Merge Preflight</h3>
+<p>Antes de integrar, se resume si el agente está listo.</p>
+<table>
+<tr><th>Check</th><th>Estado</th></tr>
+<tr><td>Task complete</td><td>Pass / warning</td></tr>
+<tr><td>Required validation</td><td>Pass / fail</td></tr>
+<tr><td>Conflicts</td><td>None / detected</td></tr>
+<tr><td>Dependencies</td><td>Done / pending</td></tr>
+<tr><td>User policy</td><td>Approval required / auto allowed</td></tr>
+</table>
+
+<h3>14.3 Ramas de merge</h3>
+<div class="branch ok"><strong>Todo correcto.</strong> Merge o queue integration.</div>
+<div class="branch warn"><strong>Validation warning.</strong> Usuario decide re-run, review o continuar si la política lo permite.</div>
+<div class="branch danger"><strong>Conflicto.</strong> Task → BLOCKED. Mostrar archivos en conflicto y opciones: resolve manually, assign review agent, abandon merge.</div>
+<div class="branch danger"><strong>Dependencia no completada.</strong> No permitir integración final; dejar en WAITING_DEPENDENCY.</div>
+</section>
+
+<section id="validacion">
+<h2>15. Validación y revisión</h2>
+
+<h3>15.1 Vista: Validation</h3>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="green">VALIDATION — Agent #1</span>
+
+Tier 1
+Syntax         PASS
+Format         PASS
+Targeted lint  PASS
+
+Tier 2
+Typecheck      PASS
+Targeted tests <span class="red">FAIL</span>
+
+Tier 3
+Not required yet
+
+Failure:
+auth.refresh.test.ts → expected 200, received 401
+
+[ inspect ] [ send to agent ] [ rerun ]</div></div>
+
+<h3>15.2 Paths</h3>
+<div class="branch ok"><strong>Validation passes.</strong> Agent can move to COMPLETED / review / merge.</div>
+<div class="branch warn"><strong>Targeted check fails.</strong> Result is fed back to same agent and task remains RUNNING/TESTING.</div>
+<div class="branch warn"><strong>Heavy validation waits.</strong> Agent state explains scheduler queue.</div>
+<div class="branch danger"><strong>Repeated failure.</strong> Offer retry limit reached → switch model, create review agent, block task, manual intervention.</div>
+
+<h3>15.3 Review Agent path</h3>
+<p>Desde un agente o merge preflight, el usuario puede crear un reviewer. El reviewer recibe sólo task, diff, tests y restricciones relevantes. Resultado: findings + recommendation, nunca merge automático salvo política explícita.</p>
+</section>
+
+<section id="errores">
+<h2>16. Errores, recuperación y estados excepcionales</h2>
+
+<table>
+<tr><th>Situación</th><th>Vista</th><th>Acciones posibles</th></tr>
+<tr><td>CLI del executor murió</td><td>Agent Recovery</td><td>Restart same executor · Failover · Pause · Stop</td></tr>
+<tr><td>Proveedor rate-limited</td><td>Provider Alert + Agent</td><td>Wait until retry · Failover · Change model</td></tr>
+<tr><td>Auth inválida</td><td>Provider Setup</td><td>Login official · Disable provider · Switch provider</td></tr>
+<tr><td>Sin heartbeat</td><td>Agent Recovery</td><td>Reclaim task · Restart · Inspect process</td></tr>
+<tr><td>Máquina bajo presión</td><td>System</td><td>Reduce profile · Pause agent · Wait</td></tr>
+<tr><td>Checkpoint corrupto/incompleto</td><td>Recovery</td><td>Rebuild from workspace · older checkpoint · manual</td></tr>
+<tr><td>Conflicto de merge</td><td>Conflict Review</td><td>Manual resolve · review agent · abort</td></tr>
+<tr><td>Daemon/session interrupted</td><td>Startup Recovery</td><td>Resume · inspect · archive stale agents</td></tr>
+</table>
+
+<h3>16.1 Vista: Recovery Center</h3>
+<p>Una vista única agrupa problemas que requieren intervención humana. Evita repartir alertas por muchas pantallas.</p>
+<div class="screen"><div class="screenbar"></div><div class="screenbody"><span class="red">RECOVERY</span>
+
+Agent #2
+Executor process exited unexpectedly
+Checkpoint: valid
+Workspace: intact
+[ restart ] [ failover ] [ inspect ]
+
+Agent #4
+Merge conflict in 2 files
+[ review conflict ] [ assign reviewer ] [ keep blocked ]</div></div>
+</section>
+
+<section id="config">
+<h2>17. Configuración desde el punto de vista del usuario</h2>
+<p>La configuración debe organizarse por intención, no por internals.</p>
+
+<h3>Vistas de configuración</h3>
+<div class="grid two">
+<div class="card"><h4>General</h4><p>Comportamiento de inicio, confirmaciones y defaults.</p></div>
+<div class="card"><h4>Providers</h4><p>Habilitar/deshabilitar, login, modelos visibles y reserva de cuota.</p></div>
+<div class="card"><h4>Routing</h4><p>Modelo/profile por defecto, política de failover y sugerencias de cambio.</p></div>
+<div class="card"><h4>Performance</h4><p>Eco/Balanced/Performance/Custom.</p></div>
+<div class="card"><h4>Context</h4><p>Modo por defecto: raw, safe, balanced, aggressive.</p></div>
+<div class="card"><h4>Shared resources</h4><p>Skills, MCPs, herramientas y su disponibilidad.</p></div>
+<div class="card"><h4>Validation</h4><p>Qué gates son obligatorios antes de completar/integrar.</p></div>
+<div class="card"><h4>Safety</h4><p>Qué acciones siempre requieren confirmación del usuario.</p></div>
+</div>
+
+<h3>Regla</h3>
+<p>Las opciones avanzadas deben estar ocultas por defecto. El camino ideal debe funcionar con unos pocos defaults razonables.</p>
+</section>
+
+<section id="vistas">
+<h2>18. Inventario completo de vistas / ventanas</h2>
+<table>
+<tr><th>#</th><th>Vista</th><th>Cuándo aparece</th><th>Objetivo principal</th></tr>
+<tr><td>01</td><td>Launch / Boot</td><td>Al abrir Symphony</td><td>Detectar/restaurar proyecto.</td></tr>
+<tr><td>02</td><td>First-run Setup</td><td>Proyecto nuevo</td><td>Configurar lo mínimo.</td></tr>
+<tr><td>03</td><td>Provider Setup</td><td>Proveedor sin login/no disponible</td><td>Habilitar o saltar proveedor.</td></tr>
+<tr><td>04</td><td>Home / Dashboard</td><td>Vista principal</td><td>Ver agentes, providers y sistema.</td></tr>
+<tr><td>05</td><td>New Agent</td><td>Crear trabajo</td><td>Tarea + modelo/profile + failover.</td></tr>
+<tr><td>06</td><td>Agent Overview</td><td>Entrar a un agente</td><td>Estado/control general.</td></tr>
+<tr><td>07</td><td>Agent Conversation</td><td>Enviar instrucciones</td><td>Interacción con executor.</td></tr>
+<tr><td>08</td><td>Agent Activity</td><td>Inspeccionar ejecución</td><td>Timeline de acciones.</td></tr>
+<tr><td>09</td><td>Agent Changes</td><td>Hay cambios</td><td>Ver archivos/diff.</td></tr>
+<tr><td>10</td><td>Agent Validation</td><td>Checks/tests</td><td>Ver pass/fail.</td></tr>
+<tr><td>11</td><td>Agent Context</td><td>Inspección/handoff</td><td>Ver fuentes y objetos.</td></tr>
+<tr><td>12</td><td>Agent History</td><td>Hubo switches/retries</td><td>Auditar executors y eventos.</td></tr>
+<tr><td>13</td><td>Model Picker</td><td>Crear/cambiar agente</td><td>Exact model o profile.</td></tr>
+<tr><td>14</td><td>Explain Route</td><td>Profile automático</td><td>Explicar selección.</td></tr>
+<tr><td>15</td><td>Task List</td><td>Gestionar proyecto</td><td>Estados y dependencias.</td></tr>
+<tr><td>16</td><td>Task Detail</td><td>Seleccionar task</td><td>Objetivo, deps, agente, progreso.</td></tr>
+<tr><td>17</td><td>Milestone Review</td><td>Gate manual</td><td>Aprobar/retener/cambiar.</td></tr>
+<tr><td>18</td><td>System / Resources</td><td>Diagnóstico de performance</td><td>Ver carga y colas.</td></tr>
+<tr><td>19</td><td>Performance Profile</td><td>Cambiar política de recursos</td><td>Eco/Balanced/Performance/Custom.</td></tr>
+<tr><td>20</td><td>Context Overview</td><td>Ver handoff</td><td>Qué se incluirá.</td></tr>
+<tr><td>21</td><td>Context Object</td><td>Abrir ctx://</td><td>Ver original/buscar.</td></tr>
+<tr><td>22</td><td>Providers</td><td>Estado global</td><td>Salud de proveedores.</td></tr>
+<tr><td>23</td><td>Provider Detail</td><td>Inspeccionar proveedor</td><td>Auth, modelos, cuota, errores.</td></tr>
+<tr><td>24</td><td>Failover Event</td><td>Executor falla</td><td>Mostrar continuidad/cambio.</td></tr>
+<tr><td>25</td><td>Changes / Diff</td><td>Revisión de código</td><td>Ver exactamente qué cambió.</td></tr>
+<tr><td>26</td><td>Merge Preflight</td><td>Preparar integración</td><td>Validar readiness.</td></tr>
+<tr><td>27</td><td>Conflict Review</td><td>Conflicto</td><td>Resolver o bloquear.</td></tr>
+<tr><td>28</td><td>Validation</td><td>Check/test run</td><td>Resultados y acciones.</td></tr>
+<tr><td>29</td><td>Review Agent Result</td><td>Review solicitado</td><td>Findings y decisión humana.</td></tr>
+<tr><td>30</td><td>Recovery Center</td><td>Problemas críticos</td><td>Recuperar agentes/estado.</td></tr>
+<tr><td>31</td><td>Settings</td><td>Configuración</td><td>Defaults y políticas.</td></tr>
+<tr><td>32</td><td>Shared Skills</td><td>Gestionar skills</td><td>Disponibilidad compartida.</td></tr>
+<tr><td>33</td><td>Shared MCP / Tools</td><td>Gestionar herramientas</td><td>Activar/desactivar por proyecto.</td></tr>
+<tr><td>34</td><td>Event / Audit Log</td><td>Diagnóstico o auditoría</td><td>Ver qué ocurrió y cuándo.</td></tr>
+<tr><td>35</td><td>Usage / Context Stats</td><td>Medir eficiencia</td><td>Uso reportado/estimado y ahorro de contexto.</td></tr>
+</table>
+<div class="callout important">La futura interfaz gráfica, si existe, debería reflejar estas mismas vistas conceptuales. No debe crear un segundo producto con flujos distintos; sólo otra representación del mismo estado.</div>
+</section>
+
+<section id="ramas">
+<h2>19. Árbol completo de caminos principales</h2>
+<pre>
+START
+│
+├─ Proyecto reconocido?
+│  ├─ No → Initialize
+│  │       ├─ Providers detectados?
+│  │       │  ├─ Sí → Performance + Failover defaults → Home
+│  │       │  └─ No → Provider Setup → Home / Exit
+│  │       └─ Cancel → Exit
+│  └─ Sí
+│      ├─ Estado consistente → Restore → Home
+│      └─ Estado inconsistente → Recovery Center → Home / Exit
+│
+HOME
+│
+├─ Create Agent
+│  ├─ Exact model
+│  │  ├─ Available → Spawn
+│  │  └─ Unavailable → Wait / Alternative / Convert to profile / Cancel
+│  └─ Profile
+│     ├─ Candidates > 0 → Route → Spawn
+│     └─ Candidates = 0 → Provider Setup / Change profile / Cancel
+│
+AGENT RUNNING
+│
+├─ Normal work
+│  ├─ Cheap operation → Run
+│  └─ Heavy operation
+│     ├─ Resource slot available → Run
+│     └─ No slot → WAITING_RESOURCE → Run when available
+│
+├─ User intervention
+│  ├─ Message
+│  ├─ Pause → Resume / Stop
+│  ├─ Switch model
+│  └─ Stop → Keep changes / Review / Cancel task
+│
+├─ Provider issue
+│  ├─ Temporary rate limit
+│  │  ├─ Wait
+│  │  └─ Failover if policy allows
+│  ├─ Quota exhausted
+│  │  ├─ Failover allowed → Handoff → New executor → Continue
+│  │  └─ Failover disabled → WAITING_PROVIDER → User decision
+│  ├─ Auth error → Provider Setup / Failover
+│  └─ Provider offline → Failover / Wait
+│
+├─ Executor process dies
+│  ├─ Checkpoint valid → Restart / Failover
+│  ├─ Checkpoint questionable → Rebuild from workspace / Older checkpoint
+│  └─ Workspace damaged → Recovery / Manual intervention
+│
+├─ Task dependency
+│  ├─ Pending → WAITING_DEPENDENCY
+│  ├─ Done → Continue
+│  └─ Failed → BLOCKED → Replan / Ignore / Cancel
+│
+└─ Work completed
+   ├─ Validation fails
+   │  ├─ Retry same agent
+   │  ├─ Switch model
+   │  ├─ Review agent
+   │  └─ Block/manual
+   └─ Validation passes
+      ├─ Review optional
+      └─ Merge preflight
+         ├─ No conflict → Merge / Integration queue
+         ├─ Conflict → BLOCKED → Resolve / Reviewer / Abort
+         └─ Approval required → Milestone Review
+</pre>
+</section>
+
+<section id="journeys">
+<h2>20. Journeys completos de referencia</h2>
+
+<h3>Journey A — Un solo agente, happy path</h3>
+<div class="path">
+<div class="step">Usuario abre Symphony en un proyecto ya configurado.</div>
+<div class="step">Home muestra todos los proveedores saludables y cero agentes.</div>
+<div class="step">Usuario crea <code>/spawn @code "implement auth"</code>.</div>
+<div class="step">Symphony escoge un modelo disponible y crea el agente.</div>
+<div class="step">Agent View muestra progreso, cambios y validaciones.</div>
+<div class="step">La tarea termina y pasa validación.</div>
+<div class="step">Usuario revisa diff.</div>
+<div class="step">Merge preflight pasa.</div>
+<div class="step">Usuario integra y archiva el agente.</div>
+</div>
+
+<h3>Journey B — Tres agentes sin ralentizar la máquina</h3>
+<div class="path">
+<div class="step">Usuario crea tres agentes para backend, UI y tests.</div>
+<div class="step">Los tres esperan respuestas de IA al mismo tiempo.</div>
+<div class="step">Agent #1 pide tests pesados y obtiene el slot.</div>
+<div class="step">Agent #2 pide build y entra a WAITING_RESOURCE con razón visible.</div>
+<div class="step">Agent #3 sigue leyendo/modificando archivos porque sus operaciones son baratas.</div>
+<div class="step">Terminan los tests de #1; el scheduler libera el slot.</div>
+<div class="step">#2 comienza automáticamente.</div>
+<div class="step">Home mantiene la máquina y las esperas comprensibles.</div>
+</div>
+
+<h3>Journey C — Se agota el proveedor a media tarea</h3>
+<div class="path">
+<div class="step">Agent #1 trabaja con Sonnet.</div>
+<div class="step">Checkpoint se actualiza continuamente.</div>
+<div class="step">El proveedor devuelve evidencia de cuota agotada.</div>
+<div class="step">Agent #1 permanece vivo; sólo cambia su estado a transición de executor.</div>
+<div class="step">Symphony filtra sustitutos según policy.</div>
+<div class="step">Ensambla handoff desde checkpoint y workspace.</div>
+<div class="step">Nuevo executor continúa.</div>
+<div class="step">El usuario ve una marca en History; no reexplica el proyecto.</div>
+</div>
+
+<h3>Journey D — Conflicto entre agentes</h3>
+<div class="path">
+<div class="step">Agent #1 y #2 trabajan en workspaces aislados.</div>
+<div class="step">#1 termina y se integra primero.</div>
+<div class="step">#2 llega a merge preflight y detecta conflicto.</div>
+<div class="step">Task #2 pasa a BLOCKED.</div>
+<div class="step">Conflict Review muestra archivos y opciones.</div>
+<div class="step">Usuario resuelve, asigna reviewer o aborta.</div>
+<div class="step">Después de resolver, revalidation y merge preflight vuelven a correr.</div>
+</div>
+
+<h3>Journey E — Recovery tras cierre/crash</h3>
+<div class="path">
+<div class="step">La sesión se interrumpe inesperadamente.</div>
+<div class="step">Al volver a abrir, Launch detecta estado previo.</div>
+<div class="step">Symphony reconcilia agentes, workspaces y checkpoints.</div>
+<div class="step">Agentes inconsistentes aparecen en Recovery Center.</div>
+<div class="step">El usuario decide restart, failover, pause o archive.</div>
+<div class="step">Vuelve al Home con estado coherente.</div>
+</div>
+</section>
+
+<section id="reglas">
+<h2>21. Reglas de diseño y comportamiento</h2>
+<div class="grid two">
+<div class="card accent"><h4>1. Estado siempre explicable</h4><p>No mostrar “waiting” sin explicar qué espera y de quién depende.</p></div>
+<div class="card accent"><h4>2. Usuario manda sobre selección explícita</h4><p>Un modelo exacto nunca se reemplaza silenciosamente por optimización.</p></div>
+<div class="card accent"><h4>3. Failover no borra identidad</h4><p>Cambia executor; no cambia agent, task, workspace ni historial.</p></div>
+<div class="card accent"><h4>4. Los errores no destruyen trabajo</h4><p>Ante fallo, preservar cambios, checkpoint y contexto antes de ofrecer recuperación.</p></div>
+<div class="card accent"><h4>5. Defaults simples</h4><p>El usuario debe poder empezar sin configurar routing, contexto o recursos manualmente.</p></div>
+<div class="card accent"><h4>6. Avanzado bajo demanda</h4><p>Scores, eventos, objetos de contexto y procesos existen, pero no dominan la vista principal.</p></div>
+<div class="card accent"><h4>7. Performance visible sólo cuando importa</h4><p>No saturar Home con métricas; mostrar detalle cuando hay presión o espera.</p></div>
+<div class="card accent"><h4>8. No falsa precisión</h4><p>Cuotas, uso y estimaciones deben decir si son conocidas, estimadas o desconocidas.</p></div>
+<div class="card accent"><h4>9. Una misma lógica en CLI/TUI y GUI futura</h4><p>Las vistas conceptuales y estados deben ser los mismos, aunque cambie la presentación.</p></div>
+<div class="card accent"><h4>10. Recovery es un flujo de primera clase</h4><p>Crash, failover, conflicto y auth error no son casos marginales; son parte normal de un sistema multiagente.</p></div>
+</div>
+</section>
+
+<footer>
+<strong>Symphony CLI — User Flow & View Specification</strong><br>
+Basado exclusivamente en la idea funcional suministrada para Symphony CLI. El documento evita describir el stack tecnológico y se concentra en experiencia, navegación, estados y ramas.
+</footer>
+
+</main>
+</div>
+</body>
+</html>
