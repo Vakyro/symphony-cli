@@ -2,7 +2,7 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P00 · Arranque del repositorio (rama `phase/p00-bootstrap`)
-**Paso actual:** P00.S7 · Verificar crates del stack
+**Paso actual:** P00.S8 · CI mínima
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24 08:00
 
@@ -19,12 +19,12 @@
 - [x] P00.S4 Archivos de coordinación
 - [x] P00.S5 CONSTRAINTS.md
 - [x] P00.S6 Esqueleto del workspace
-- [ ] P00.S7 Verificar crates del stack   ← aquí
-- [ ] P00.S8 CI mínima
+- [x] P00.S7 Verificar crates del stack
+- [ ] P00.S8 CI mínima   ← aquí
 - [ ] P00.S9 Cierre
 
 ## Próxima acción concreta
-Commitear ADR-0001 y `docs/research/crates.md` (P00.S7). Correr `cargo deny check` cuando termine de instalarse.
+Correr `cargo deny check` y commitear `.github/workflows/ci.yml` (P00.S8). Preguntar a Leo por el remoto antes de hacer push.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

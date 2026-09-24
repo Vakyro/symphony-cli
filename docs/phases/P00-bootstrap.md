@@ -55,6 +55,13 @@
 - **Archivos clave:** `Cargo.toml`, `xtask/src/main.rs`, `crates/cli/src/main.rs`, `crates/cli/tests/version.rs`, `deny.toml`, `.cargo/config.toml`
 - **Cómo se verificó:** `cargo xtask check` → fmt ok, clippy `-D warnings` ok, nextest 2 passed. `cargo run -p symphony-cli -- --version` → `symphony 0.0.1`.
 
+### P00.S7 · Verificar que las crates del stack existen — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** las 29 crates de STACK §58 se buscaron con `cargo search` y `cargo info`. Todas existen con el nombre y la versión mayor esperados, así que no hay reemplazos. El MSRV más alto es 1.95 (`rusqlite_migration`, `sysinfo`), igual al de STACK §3.1. `notify` 9 está en rc: se fija la 8.2. `notify` es CC0-1.0 → agregar a `deny.toml` cuando se introduzca.
+- **Archivos clave:** `docs/research/crates.md`, `docs/adr/0001-versiones-y-crates.md`
+- **Cómo se verificó:** ADR-0001 existe con la lista fijada.
+- **Pendiente / notas:** falta confirmar en P04 que ProcessKit cubre límites de recursos por Job Object/cgroup.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
