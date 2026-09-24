@@ -18,6 +18,13 @@
 - **Cómo se verificó:** 6 tests con repos temporales en `repo con espacios/`, worktrees en `worktrees con espacios/`, archivos `archivo ñandú.txt` y `renombrado con espacio.js`, sesión `sesión-1`: ciclo de worktrees (incluido el remove que falla sin force y el prune de uno borrado a mano), status v2, diff/numstat con binario y rename, preflight limpio y con conflicto. `cargo xtask check` → 80 passed.
 - **Hallazgo:** `merge-tree` devuelve exit 1 tanto con conflictos como con una rama inexistente; se distinguen por el OID del tree.
 
+### P04.S2 · Estrategia de dependencias — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony_git::deps`: `detect` por lockfile (orden de STACK §12.2); `plan(worktree, base)` → `PNPM_STORE` (`pnpm install --frozen-lockfile --prefer-offline`, store del usuario sin tocar su config), `LINK` (npm/yarn/bun con el lockfile idéntico al del base y `node_modules` presente), `INSTALL` (devuelve el comando; lo corre el scheduler como clase 4) o `NONE` (cargo, uv, poetry); `lock_hash` BLAKE3 para `worktrees.deps_lock_hash`; `link_node_modules` (symlink en Unix, junction con `mklink /J` en Windows, sin privilegios); `run_command`.
+- **Bug grave encontrado por un test y corregido:** en Windows, `git worktree remove --force` **seguía la junction y borraba el `node_modules` del repo base**. `Repo::worktree_remove` ahora suelta los enlaces del primer nivel del worktree antes de llamar a git (arreglo en la función que usan todos los que quitan worktrees).
+- **Archivos clave:** `crates/git/src/deps.rs`, `crates/git/src/lib.rs` (`unlink_top_level_links`), `crates/git/tests/deps.rs`
+- **Cómo se verificó:** detección, planes por manager, enlace + borrado del worktree sin tocar el base (con rutas con espacios); `cargo xtask check` → 83 passed. **Medición (test ignorado, con pnpm y red):** con el store ya caliente por el repo base, cada worktree nuevo instala en **1.68 s y 1.54 s** (Test A de P01 midió 24.3 s con npm sin store).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

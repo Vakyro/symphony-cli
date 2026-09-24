@@ -21,6 +21,8 @@ pub enum GitError {
     },
     #[error("salida inesperada de `git {args}`: {detail}")]
     Parse { args: String, detail: String },
+    #[error("no se pudieron soltar los enlaces del worktree: {0}")]
+    Unlink(#[source] std::io::Error),
 }
 
 /// Un repositorio (o worktree) sobre el que se corren comandos.
@@ -267,7 +269,12 @@ impl Repo {
     }
 
     /// Quita el worktree. Con `force`, aunque tenga cambios sin commitear.
+    ///
+    /// Antes suelta los enlaces del primer nivel (p. ej. `node_modules` → repo base,
+    /// estrategia `LINK`): en Windows `git worktree remove --force` sigue las junctions
+    /// y borraría lo que hay del otro lado.
     pub fn worktree_remove(&self, path: &Path, force: bool) -> Result<(), GitError> {
+        unlink_top_level_links(path).map_err(GitError::Unlink)?;
         let mut args = vec![OsStr::new("worktree"), OsStr::new("remove")];
         if force {
             args.push(OsStr::new("--force"));
@@ -443,3 +450,35 @@ impl Repo {
         }
     }
 }
+
+/// Quita (sin seguirlos) los symlinks y junctions del primer nivel de `dir`.
+fn unlink_top_level_links(dir: &Path) -> std::io::Result<()> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let meta = std::fs::symlink_metadata(entry.path())?;
+        if !is_link(&meta) {
+            continue;
+        }
+        // Un enlace a directorio se quita con remove_dir en Windows; en Unix es un archivo.
+        let removed =
+            std::fs::remove_file(entry.path()).or_else(|_| std::fs::remove_dir(entry.path()));
+        removed?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_link(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    meta.file_type().is_symlink() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link(meta: &std::fs::Metadata) -> bool {
+    meta.file_type().is_symlink()
+}
+
+pub mod deps;
