@@ -19,3 +19,11 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **`git config core.autocrlf=true` en la máquina de Leo.** El repo fija `eol=lf` en `.gitattributes` para que rustfmt y la CI no vean diffs de fin de línea.
 - **`cargo install --locked cargo-nextest cargo-deny` tarda más de 10 min en la laptop de Leo.** En CI se usan binarios precompilados (`taiki-e/install-action`, `cargo-deny-action`).
 - **Git Bash + `python -`** abre el stub de la Microsoft Store y se cuelga. No uses python en scripts de shell en esta máquina.
+
+## Contratos de CLIs (P01.S2) — detalle en `docs/research/cli-*.md`
+
+- **Un `PreToolUse` vencido NO bloquea** ni en Claude ni (probablemente) en Codex: la herramienta sigue. El scheduler tiene que responder antes del `timeout` (600 s por defecto) y fijar `timeout` explícito en el hook.
+- **`claude --bare` no usa la suscripción** (exige `ANTHROPIC_API_KEY`). No usarlo. Inyectar hooks con `claude -p --settings '<json>'`.
+- **Codex exige confianza por hash para cada hook.** Para hooks generados por Symphony: `--dangerously-bypass-hook-trust`. No tocar `CODEX_HOME` (ahí vive `auth.json`).
+- **`codex exec --json` y el rollout en disco son formatos distintos**, y la cuota (`rate_limits`) al menos está en el rollout.
+- En Git Bash, `curl` está redirigido por un hook de context-mode: usa `ctx_fetch_and_index` o `ctx_execute` para bajar páginas.

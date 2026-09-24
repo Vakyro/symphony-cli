@@ -2,20 +2,20 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P01 · Spike de viabilidad (rama `phase/p01-spike`)
-**Paso actual:** P01.S2 · Investigar los contratos de los CLIs
+**Paso actual:** P01.S3 · Test A: recursos
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
 - `cargo xtask check`: ✅ (2 tests)
 - `cargo deny check`: ✅
-- CI en main: primer run en curso (https://github.com/Vakyro/symphony-cli/actions)
+- CI en main: ✅ ubuntu, windows, macos, msrv, deny
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
 - [x] P01.S1 Rama y bitácora
-- [ ] P01.S2 Investigar los contratos de los CLIs   ← aquí
-- [ ] P01.S3 Test A: recursos
+- [x] P01.S2 Investigar los contratos de los CLIs (ToS pendiente de Leo)
+- [ ] P01.S3 Test A: recursos   ← aquí
 - [ ] P01.S4 Test B: event bus de hooks
 - [ ] P01.S5 Test C: retener comandos
 - [ ] P01.S6 Test D: handoff forzado
@@ -24,7 +24,7 @@
 - [ ] P01.S9 Cierre
 
 ## Próxima acción concreta
-Escribir `docs/research/cli-claude-code.md`, `cli-codex.md` y `tos.md` a partir de la documentación oficial y del `--help` de las versiones instaladas.
+Crear `spikes/spike-resources` (fuera de `crates/`), repo JS de prueba con pnpm y 3 worktrees; muestrear RAM/CPU/procesos con sysinfo.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
@@ -34,7 +34,7 @@ Escribir `docs/research/cli-claude-code.md`, `cli-codex.md` y `tos.md` a partir 
 - Hipótesis descartadas:
 
 ## Bloqueos y preguntas para Leo
-- (ninguno)
+- Confirmar `docs/research/tos.md` (uso personal con tus suscripciones).
 
 ## Fases
 | Fase | Estado | Tag |
