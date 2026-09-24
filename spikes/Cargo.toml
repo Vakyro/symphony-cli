@@ -1,7 +1,7 @@
 # Spikes de P01: desechables, fuera del workspace principal (PLAN P01).
 [workspace]
 resolver = "3"
-members = ["spike-resources", "spike-hook"]
+members = ["spike-resources", "spike-hook", "spike-process"]
 
 [workspace.package]
 edition = "2024"
