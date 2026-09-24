@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA |
 | Rama | phase/p02-core |
-| Inicio / cierre | 2026-09-24 / — |
+| Inicio / cierre | 2026-09-24 / 2026-09-24 |
 | Agentes que trabajaron | claude-code/opus-5.5 |
-| Tag | — |
+| Tag | p02-done |
 | Docs usados | STACK §3, §5, §6, §11, §21, §22, §45–§47, §49; IDEA §5, §6; FLOW §4.1 |
 
 ## Pasos
@@ -57,13 +57,28 @@
 - **Qué se hizo:** E2E `crates/cli/tests/e2e.rs`: `symphony status` en frío arranca el daemon → `daemon status` lo ve → **kill -9 / taskkill /F** → el CLI lo ve detenido → `symphony status` arranca uno nuevo (otro pid) aunque quedaron el lock y el socket del muerto → stop.
 - **Cómo se verificó:** local (Windows) y en CI en los 3 OS.
 
+### P02.S8 · Cierre — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** revisión de seguridad del diff de la fase (skill `security-review`): framing, parseo, control de acceso al socket y al pipe, métodos del daemon, autoarranque, bloque `unsafe`, redacción y escrituras de config. **Sin hallazgos con confianza ≥ 8.** Merge a `main` y tag `p02-done`.
+- **Pendiente para P05:** en Windows el nombre del pipe es predecible; otro usuario local podría crearlo antes que el daemon (squatting). Hoy el impacto es nulo (solo ping/status/shutdown), pero antes de mandar prompts o eventos de hooks por IPC, el cliente tiene que verificar que el servidor del pipe pertenece al usuario actual (`GetNamedPipeServerProcessId` + dueño del token).
+
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
+| `symphony status` en frío autoarranca el daemon | trycmd + E2E | ✅ ubuntu, windows, macos |
+| Un solo daemon por home; error claro para el segundo | `crates/daemon/tests/daemon.rs` | ✅ |
+| El CLI reinicia un daemon muerto sin cleanup | `crates/cli/tests/e2e.rs` | ✅ |
+| Protocolo con proptest de framing | `crates/protocol/src/frame.rs` | ✅ |
+| Enums idénticos a DB | `values_match_db_spec` | ✅ |
+| Config con edición que conserva comentarios | `crates/core/src/config.rs` | ✅ |
+| Logs redactados | `crates/daemon/src/logging.rs` | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|
+| Acceso de otro usuario al socket o pipe no probado con una segunda cuenta | Bajo: la garantía es el SDDL y el directorio 0700 | — | Probar cuando haya una máquina con dos usuarios |
+| Suplantación del pipe en Windows | Nulo hoy; relevante desde P05 | Otro usuario crea el pipe antes | Verificar el dueño del servidor en P05 |
 
 ## Decisiones tomadas
 - **Tabla de transiciones de `AgentState` y `TaskStatus`** (`crates/core/src/transitions.rs`): FLOW §7/§9.2 solo listan los estados. La tabla sale de FLOW §6 (sin agentes "medio rotos"), §9.3 (dependencias → READY/BLOCKED), §10.2 (WAITING_RESOURCE) e IDEA §5.10 (reclaim: FAILED → READY). Un estado nunca pasa a sí mismo; COMPLETED/DONE y CANCELLED son terminales. Si FLOW agrega una tabla explícita, gana FLOW y se ajusta el test.
@@ -101,10 +116,12 @@
 (benchmarks, tiempos, RAM, cobertura — con comando)
 
 ## Pruebas
-- Comando(s): …
+- Comando(s): `cargo xtask check`, `cargo deny check`, CI (ubuntu, windows, macos, msrv 1.95)
+- Totales: 47 passed, 0 failed
 - Totales: N passed, M failed (cuáles y por qué)
 
 ## Estado final
+`symphony` y `symphonyd` hablan por IPC tipado y versionado en los 3 OS. El socket o pipe es accesible solo por el usuario. Hay un único daemon por home, se autoarranca y se recupera de un kill -9. La config es tipada, con edición que conserva comentarios. Los logs se rotan y se redactan. Nada de `unwrap()` en runtime (lint de workspace). Sin hallazgos de seguridad en la revisión; queda la verificación del dueño del pipe para P05.
 Resumen de 3–5 líneas para Leo.
 
 ## Notas para el siguiente agente
