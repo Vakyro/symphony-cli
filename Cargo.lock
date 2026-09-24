@@ -1663,6 +1663,15 @@ dependencies = [
 [[package]]
 name = "symphony-testkit"
 version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "symphony-git",
+ "symphony-process",
+ "tempfile",
+ "tokio",
+ "toml_edit",
+]
 
 [[package]]
 name = "syn"
