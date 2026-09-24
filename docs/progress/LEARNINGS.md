@@ -34,3 +34,12 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **Los shims `.cmd` de npm** agregan `cmd.exe` + `conhost.exe` por agente y obligan a escapar los argumentos como batch. En Rust, `Command::new("claude")` no encuentra el `.cmd`: hay que pasar `claude.cmd` o resolver el exe real.
 - **Codex hace `git fetch` (`git-remote-https`) al arrancar** en un repo con remoto.
 - **En PowerShell, `@arr` con un solo elemento** llega distinto al exe nativo: la corrida N=1 del bucle falló con `NotADirectory`. Pasa rutas explícitas.
+
+## Test B (P01.S4) — detalle en `spikes/results/test-b.md`
+
+- **Codex corre los hooks en PowerShell en Windows.** `"C:/ruta con espacios/x.exe" args` no ejecuta nada y falla en silencio. Usa `& 'ruta' args`. Claude usa un shell tipo bash, donde las comillas sí funcionan.
+- **Codex no carga `<worktree>/.codex/hooks.json`**, ni con `trust_level` pasado por `-c`. Lo que sí funciona: hooks inline `-c 'hooks.<Evento>=[{hooks=[{type="command",command="…"}]}]'` + `--dangerously-bypass-hook-trust`.
+- **Claude:** `--settings <json>` inyecta hooks en `-p` sin tocar el worktree.
+- **`codex exec --json` no trae `rate_limits`.** Están en el rollout de disco.
+- **Prompts con comillas:** pásalos por stdin (`codex exec -`), no como argumento de un `.cmd`.
+- **En el tool Bash de Claude Code, un `Remove-Item` de PowerShell dentro de un comando largo** puede ser bloqueado por el guard de rutas del sistema (malinterpreta `'\'` o `/c`). Borra en un comando aparte.

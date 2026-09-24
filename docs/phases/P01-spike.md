@@ -32,6 +32,14 @@
 - **Resultado:** ~200–350 MB reales por agente; con 3 agentes, +~1 GB y CPU media del 80 % solo en el arranque. El arranque de Claude se degrada de 5 s a 18 s. pnpm con store compartido: 2.2 s por worktree.
 - **Dependencias agregadas (solo en spikes):** `sysinfo 0.39.6` (STACK §58).
 
+### P01.S4 · Test B: event bus de hooks — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `spikes/spike-hook` (collect + hook) con `interprocess` y `serde_json`. Hooks inyectados sin tocar el repo: Claude con `--settings`, Codex con `-c hooks.*` + `--dangerously-bypass-hook-trust`.
+- **Archivos clave:** `spikes/spike-hook/src/main.rs`, `spikes/results/test-b.md`
+- **Cómo se verificó:** una sesión de cada CLI produce `ToolRequested`/`CommandRequested`, `CommandFinished`, `FileModified` y `TurnFinished` en `events.jsonl`. Sin `SYMPHONY_AGENT_ID`: 0 eventos. Latencia del hook: mediana 20 ms.
+- **Hallazgos:** Codex corre los hooks en PowerShell (las rutas con espacios necesitan `&`); `.codex/hooks.json` del proyecto no carga; `exec --json` no trae cuota (hay que leer el rollout); Claude trae `rate_limit_event` con 5h/7d.
+- **Dependencias agregadas (solo en spikes):** `interprocess 2.4`, `serde_json 1.0.151` (STACK §58).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
