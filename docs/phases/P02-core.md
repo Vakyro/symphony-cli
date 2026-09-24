@@ -79,6 +79,7 @@
 | tokio-util | 0.7.19 (`rt`) | `CancellationToken`, `TaskTracker` | Sí |
 | miette | 7.6 | Errores de `symphonyd` | Sí |
 | widestring | 1.2 (solo Windows) | SDDL del named pipe (`SecurityDescriptor::deserialize` pide `U16CStr`) | No, pero ya era dependencia transitiva de `interprocess`; MIT/Apache |
+| (licencia) 0BSD | — | `doctest-file` y `recvmsg`, dependencias de `interprocess` | Se agregó `0BSD` a `deny.toml`: más permisiva que MIT |
 
 ## Métricas
 (benchmarks, tiempos, RAM, cobertura — con comando)

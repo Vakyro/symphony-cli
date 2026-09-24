@@ -64,3 +64,10 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **Ningún CLI usa TodoWrite / `update_plan` en headless.** El "qué seguía" sale del último mensaje del asistente en la cola del transcript.
 - **Sandbox `workspace-write` de Codex en Windows:** `node --test` da `EPERM` al leer `C:\Users\<usuario>`. Codex lo termina esquivando, pero pierde minutos.
 - **Mensajes a media tarea:** Claude `-p --input-format stream-json` los procesa dentro del turno. `codex queue` los acepta, pero ni `exec` ni `exec resume` los consumen.
+
+## P02
+
+- **`cargo deny` no revisa las licencias de dev-dependencies:** una crate que pasa de dev a normal puede traer licencias nuevas (pasó con `interprocess` → 0BSD).
+- **En scripts de verificación usa `set -o pipefail`:** `cargo deny check | tail -1` devuelve 0 aunque deny falle.
+- **`allow-unwrap-in-tests` de clippy solo cubre funciones `#[test]`**, no los helpers de `tests/*.rs`. Esos archivos llevan `#![allow(clippy::unwrap_used, clippy::expect_used)]`.
+- **En `ulid` 3, `Ulid::new()` pasó a llamarse `Ulid::generate()`.**
