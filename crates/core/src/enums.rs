@@ -136,6 +136,16 @@ db_enum!(
 );
 
 db_enum!(
+    /// Perfil de rendimiento (DB `performance_profile`, FLOW §10.3).
+    PerformanceProfile {
+        Eco => "ECO",
+        Balanced => "BALANCED",
+        Performance => "PERFORMANCE",
+        Custom => "CUSTOM",
+    }
+);
+
+db_enum!(
     /// `provider_health.state` (DB §3.D).
     ProviderState {
         Healthy => "HEALTHY",
@@ -210,6 +220,11 @@ mod tests {
             "FailoverPolicy",
         );
         assert_matches_db(ContextMode::ALL, ContextMode::as_str, "ContextMode");
+        assert_matches_db(
+            PerformanceProfile::ALL,
+            PerformanceProfile::as_str,
+            "PerformanceProfile",
+        );
         assert_matches_db(ProviderState::ALL, ProviderState::as_str, "ProviderState");
         assert_matches_db(
             QuotaCertainty::ALL,

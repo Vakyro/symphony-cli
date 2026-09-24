@@ -24,6 +24,12 @@
 - **Cómo se verificó:** `cargo xtask check` → 24 passed. `values_match_db_spec` lee `docs/spec/symphony_database.md` y exige que cada enum coincida con una fila de DB en valores y orden. Tablas exhaustivas de transiciones (12×12 y 8×8). 2 proptest: una transición inválida nunca cambia el estado.
 - **Pendiente / notas:** los ~30 enums restantes de DB se agregan en la fase que los use.
 
+### P02.S3 · Config — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `SymphonyHome` (`$SYMPHONY_HOME` o `~/.symphony`, con `std::env::home_dir`, sin agregar `dirs`). `config.toml` tipado con defaults y plantilla comentada. `project.toml` con `[project]` y overrides opcionales. `set_value` edita con `toml_edit` conservando comentarios y **valida antes de escribir**. Escritura atómica (tmp + rename). Claves desconocidas → error con la ruta del archivo.
+- **Archivos clave:** `crates/core/src/config.rs`; `PerformanceProfile` agregado a `enums.rs`
+- **Cómo se verificó:** `cargo xtask check` → 31 passed (crear en frío, defaults parciales, editar sin perder comentarios, una edición inválida no toca el archivo, claves desconocidas y valores fuera de rango, project.toml sin pisar lo existente, plantilla == defaults).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -38,6 +44,7 @@
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
+| STACK §11 / FLOW §17 | Sin esquema explícito de config | Solo las claves que el spec ya define: performance.profile, routing.default_profile/failover, context.mode, providers.quota_reserve (DB §3.D), logging.level | YAGNI: cada fase agrega sus claves; `deny_unknown_fields` atrapa typos |
 
 ## Dependencias agregadas
 | Crate | Versión | Para qué | ¿Estaba en STACK §58? |
@@ -49,6 +56,8 @@
 | interprocess | 2.4 (dev) | Test sobre el transporte real | Sí |
 | proptest | 1 (dev) | Tests de framing | No en §58, pero es la herramienta de STACK §24.4 |
 | ulid | 3 | IDs de entidades | Sí (en ulid 3, `Ulid::new()` pasó a llamarse `Ulid::generate()`) |
+| toml_edit | 0.25.15 (`serde`) | Leer y editar config conservando comentarios | Sí |
+| tempfile | 3.27 (dev) | Tests de config | Sí |
 
 ## Métricas
 (benchmarks, tiempos, RAM, cobertura — con comando)
