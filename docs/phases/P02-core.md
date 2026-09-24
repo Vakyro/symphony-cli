@@ -37,6 +37,13 @@
 - **Cómo se verificó:** `cargo xtask check` → 41 passed. Redactor: Bearer, API keys conocidas, cookies, variables de entorno, JSON y texto normal que **no** debe tocarse (`tokens_used=1234`, conteos de tokens). Logging: los campos de span se conservan y los secretos salen redactados; el archivo rotativo queda en el directorio con el secreto redactado.
 - **Notas:** los nombres de credencial solo se aceptan si después de la palabra clave viene `_`/`-` o fin de nombre (así `tokens_used` no se redacta).
 
+### P02.S5 · Daemon `symphonyd` — ✅ (Windows; Linux/macOS en CI)
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `protocol::transport` (`connect`, `listen`, `run_dir`). En Unix, socket de archivo `0600` en `<home>/run/` `0700` (no el namespace abstracto, que no tiene permisos). En Windows, named pipe con SDDL `D:P(A;;GA;;;OW)` (solo el dueño) y nombre con FNV-1a del home. Lock de instancia con `File::try_lock` + archivo de pid. Servidor tokio (2 workers) con `ping`, `status`, `shutdown`; `unknown_method`, `invalid_params`, `bad_request`; `Subscribe` responde `unsupported` explícito hasta P05. Timeout de 10 s por request; apagado con `CancellationToken` + `TaskTracker` (2 s de drenaje); Ctrl-C. `symphonyd` usa miette para los errores.
+- **Archivos clave:** `crates/protocol/src/transport.rs`, `crates/daemon/src/{server,main,lib}.rs`, `crates/daemon/tests/daemon.rs`
+- **Cómo se verificó:** `cargo xtask check` → 45 passed. Test de integración con el binario real: ping/status/errores; **un segundo daemon sale con "ya hay un daemon de Symphony corriendo … (pid N)"**; shutdown por IPC; el lock se libera; log y config creados; frames sobredimensionados y versión desconocida no tumban al daemon.
+- **Pendiente / notas:** no se probó el acceso de otro usuario del SO (hace falta una segunda cuenta). La DACL `OW` y el `0600` son las garantías; se revisan en P02.S8 (`security-review`).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -69,6 +76,9 @@
 | tracing | 0.1.44 | Logs estructurados | Sí |
 | tracing-subscriber | 0.3.23 (`fmt`, `env-filter`, `ansi`, `std`) | Formato y filtro | Sí |
 | tracing-appender | 0.2.5 | Archivo rotativo non-blocking | Sí |
+| tokio-util | 0.7.19 (`rt`) | `CancellationToken`, `TaskTracker` | Sí |
+| miette | 7.6 | Errores de `symphonyd` | Sí |
+| widestring | 1.2 (solo Windows) | SDDL del named pipe (`SecurityDescriptor::deserialize` pide `U16CStr`) | No, pero ya era dependencia transitiva de `interprocess`; MIT/Apache |
 
 ## Métricas
 (benchmarks, tiempos, RAM, cobertura — con comando)

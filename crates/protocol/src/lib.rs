@@ -4,6 +4,7 @@
 
 mod frame;
 mod message;
+pub mod transport;
 
 pub use frame::{FrameDecoder, MAX_FRAME_LEN, encode_frame, read_frame, write_frame};
 pub use message::{

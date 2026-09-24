@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P02 · Cimientos del core (rama `phase/p02-core`)
-**Paso actual:** P02.S5 · Daemon `symphonyd`
+**Paso actual:** P02.S6 · Cliente `symphony`
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (41 tests)
+- `cargo xtask check`: ✅ (45 tests)
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
 
@@ -16,13 +16,13 @@
 - [x] P02.S2 Crate `core`: tipos de dominio
 - [x] P02.S3 Config
 - [x] P02.S4 Logging y redacción
-- [ ] P02.S5 Daemon `symphonyd`   ← aquí
-- [ ] P02.S6 Cliente `symphony`
+- [x] P02.S5 Daemon `symphonyd`
+- [ ] P02.S6 Cliente `symphony`   ← aquí
 - [ ] P02.S7 Integración
 - [ ] P02.S8 Cierre
 
 ## Próxima acción concreta
-Daemon con lock de instancia, servidor IPC (`ping`, `status`, `shutdown`), apagado con `CancellationToken`, socket/pipe solo para el usuario actual (STACK §47) y timeouts por request. Test: el segundo daemon sale con un error claro.
+Cliente con clap: `symphony` (sin args, placeholder de TUI), `status`, `daemon start|stop|status`, `--version`; autoarranque del daemon; errores con miette; tests trycmd.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

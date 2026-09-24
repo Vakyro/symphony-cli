@@ -31,6 +31,8 @@ regex = "1.13"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "ansi", "std"] }
 tracing-appender = "0.2.5"
+tokio-util = { version = "0.7.19", features = ["rt"] }
+miette = "7.6"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
