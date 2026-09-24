@@ -16,6 +16,9 @@ pub use enums::{
     AgentState, ContextMode, ExecutionMode, FailoverPolicy, FailureType, InvalidValue,
     PerformanceProfile, ProviderState, QuotaCertainty, RunEndReason, RunStatus, TaskStatus,
 };
-pub use ids::{AgentId, CheckpointId, InvalidId, ProjectId, RunId, SessionId, TaskId, WorktreeId};
+pub use ids::{
+    AgentId, CheckpointId, InvalidId, ProjectId, RecoveryItemId, RunId, SessionId, TaskId,
+    WorktreeId,
+};
 pub use redact::{REDACTED, redact};
 pub use transitions::InvalidTransition;

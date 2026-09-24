@@ -66,7 +66,8 @@ ulid_id!(
     AgentId,
     RunId,
     WorktreeId,
-    CheckpointId
+    CheckpointId,
+    RecoveryItemId
 );
 
 #[cfg(test)]

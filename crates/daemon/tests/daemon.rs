@@ -169,3 +169,69 @@ async fn bad_frames_close_the_connection_without_killing_the_daemon() {
     call(&home, "shutdown", json!({})).await;
     assert!(wait_exit(&mut daemon).success());
 }
+
+#[tokio::test]
+async fn startup_recovers_sessions_left_active_by_a_dead_daemon() {
+    use symphony_core::{ProjectId, SessionId, SymphonyHome};
+    use symphony_store::repo;
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    // Estado que dejaría un daemon muerto a mitad de sesión.
+    let db = SymphonyHome::at(&home).db_path();
+    let session = SessionId::new();
+    {
+        let conn = symphony_store::open(&db).unwrap();
+        let project = ProjectId::new();
+        repo::insert_project(
+            &conn,
+            &repo::Project {
+                id: project,
+                name: "demo".into(),
+                root_path: "/repo".into(),
+                default_branch: "main".into(),
+                created_at: 1,
+            },
+        )
+        .unwrap();
+        repo::start_session(&conn, session, project, 999_999, 1).unwrap();
+    }
+
+    let mut daemon = spawn_daemon(&home);
+    wait_ready(&home, &mut daemon).await;
+    let Outcome::Ok(status) = call(&home, "status", json!({})).await else {
+        panic!("status falló")
+    };
+    assert_eq!(status["recovery_open"], json!(1));
+    call(&home, "shutdown", json!({})).await;
+    assert!(wait_exit(&mut daemon).success());
+
+    let conn = symphony_store::open_reader(&db).unwrap();
+    let (st, ended): (String, Option<i64>) = conn
+        .query_row(
+            "SELECT status, ended_at FROM sessions WHERE id=?1",
+            [session.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(st, "INTERRUPTED");
+    assert!(ended.is_some());
+    let (kind, detail): (String, String) = conn
+        .query_row("SELECT kind, detail FROM recovery_items", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(kind, "SESSION_INTERRUPTED");
+    assert!(detail.contains("999999"), "{detail}");
+    drop(conn);
+
+    // Un segundo arranque no duplica el recovery item.
+    let mut again = spawn_daemon(&home);
+    wait_ready(&home, &mut again).await;
+    let Outcome::Ok(status) = call(&home, "status", json!({})).await else {
+        panic!("status falló")
+    };
+    assert_eq!(status["recovery_open"], json!(1));
+    call(&home, "shutdown", json!({})).await;
+    assert!(wait_exit(&mut again).success());
+}

@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P03 · Persistencia (rama `phase/p03-store`)
-**Paso actual:** P03.S5 · Recuperación al arrancar
+**Paso actual:** P03.S6 · Benchmarks
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (72 tests)
+- `cargo xtask check`: ✅ (73 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -17,11 +17,12 @@
 - [x] P03.S2 Store writer
 - [x] P03.S3 Repositorios
 - [x] P03.S4 Crate `object-store`
-- [ ] P03.S5 Recuperación al arrancar   ← aquí
+- [x] P03.S5 Recuperación al arrancar
+- [ ] P03.S6 Benchmarks   ← aquí
 - (resto de P03 en PLAN.md)
 
 ## Próxima acción concreta
-Al iniciar el daemon: sesiones ACTIVE sin daemon vivo → INTERRUPTED + recovery_items(SESSION_INTERRUPTED). Test: crear sesión, matar el daemon, reiniciar y ver el recovery item.
+Criterion: insertar 10k y 100k eventos; leer la Home query (DB §5). Números a la bitácora como línea base.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

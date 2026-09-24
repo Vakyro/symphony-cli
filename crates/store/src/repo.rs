@@ -661,3 +661,49 @@ pub fn close_run(
     }
     Ok(())
 }
+
+// --- recuperación -----------------------------------------------------------
+
+/// Al arrancar el daemon (con el lock de instancia tomado): toda sesión que
+/// siga `ACTIVE` es de un daemon anterior que murió sin cerrarla. Se marca
+/// `INTERRUPTED` y se abre un `recovery_items(SESSION_INTERRUPTED)` por cada una
+/// (FLOW §16, Journey E). Devuelve las sesiones recuperadas.
+pub fn interrupt_orphan_sessions(conn: &Connection, now: i64) -> Result<Vec<SessionId>, RepoError> {
+    let orphans: Vec<(SessionId, ProjectId, Option<u32>)> = conn
+        .prepare("SELECT id, project_id, daemon_pid FROM sessions WHERE status = 'ACTIVE' AND ended_at IS NULL")?
+        .query_map([], |r| Ok((col(r, 0)?, col(r, 1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    for (session, project, pid) in &orphans {
+        conn.execute(
+            "UPDATE sessions SET status = 'INTERRUPTED', ended_at = ?2 WHERE id = ?1",
+            params![session.to_string(), now],
+        )?;
+        let detail = match pid {
+            Some(pid) => format!(
+                "La sesión anterior se cortó sin cerrarse: el daemon (pid {pid}) dejó de correr."
+            ),
+            None => "La sesión anterior se cortó sin cerrarse.".to_string(),
+        };
+        conn.execute(
+            "INSERT INTO recovery_items (id, project_id, kind, detail, status, created_at)
+             VALUES (?1, ?2, 'SESSION_INTERRUPTED', ?3, 'OPEN', ?4)",
+            params![
+                symphony_core::RecoveryItemId::new().to_string(),
+                project.to_string(),
+                detail,
+                now
+            ],
+        )?;
+    }
+    Ok(orphans.into_iter().map(|(s, _, _)| s).collect())
+}
+
+/// Cantidad de problemas abiertos en el Recovery Center.
+pub fn open_recovery_count(conn: &Connection) -> Result<u64, RepoError> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM recovery_items WHERE status = 'OPEN'",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(u64::try_from(n).unwrap_or(0))
+}

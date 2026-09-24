@@ -36,6 +36,13 @@
 - **Archivos clave:** `crates/object-store/src/lib.rs`, `crates/object-store/tests/object_store.rs`
 - **Cómo se verificó:** 5 tests: roundtrip y ubicación `<h[0:2]>/<h>`; dedupe (dos puts iguales → 1 archivo y 1 fila); **crash a media escritura** (temporal con la mitad de los bytes → el blob no existe, un put posterior lo escribe completo y el GC borra el temporal); corrupción detectada (contenido cambiado, zstd inválido, hash con `../`); refcount y GC (margen de gracia, huérfanos). `cargo xtask check` → 72 passed.
 
+### P03.S5 · Recuperación al arrancar — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** el daemon abre `~/.symphony/symphony.db` con el `Writer` después de tomar el lock de instancia y corre `repo::interrupt_orphan_sessions`: toda sesión `ACTIVE` pasa a `INTERRUPTED` con `ended_at`, y se abre un `recovery_items(SESSION_INTERRUPTED)` con una frase que nombra el pid muerto. `status` agrega `recovery_open`. Nuevos: `RecoveryItemId` en `core`, `SymphonyHome::db_path()` y `objects_dir()`.
+- **Archivos clave:** `crates/daemon/src/server.rs`, `crates/store/src/repo.rs`, `crates/daemon/tests/daemon.rs`
+- **Cómo se verificó:** test con el binario real: se deja una sesión `ACTIVE` de un daemon muerto (pid 999999) → `symphonyd` arranca → `status.recovery_open == 1`, la sesión queda `INTERRUPTED`, el recovery item nombra el pid → un segundo arranque no duplica. `cargo xtask check` → 73 passed.
+- **Decisión:** no se revisa si el pid sigue vivo. Con el lock de instancia tomado, ningún daemon anterior del mismo home puede estar vivo; además, los pids se reusan.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

@@ -65,6 +65,16 @@ impl SymphonyHome {
         self.0.join("config.toml")
     }
 
+    /// Base de datos del daemon (DB §1). Solo `symphonyd` la abre.
+    pub fn db_path(&self) -> PathBuf {
+        self.0.join("symphony.db")
+    }
+
+    /// Object store (STACK §10).
+    pub fn objects_dir(&self) -> PathBuf {
+        self.0.join("objects")
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.0.join("logs")
     }
