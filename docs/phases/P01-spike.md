@@ -46,6 +46,14 @@
 - **Archivos clave:** `spikes/results/test-c.md`, `spikes/results/test-c.raw.md`, `spikes/scripts/test-c.ps1`
 - **Resultado:** Claude retiene hasta el `timeout` y si se vence falla en modo abierto. Codex retiene bien ≤ 60 s; con 120 s el tool falla y el modelo reintenta. Codex no mata los hooks vencidos. Valor propuesto: `hooks_can_hold` claude=true, codex=false para > 60 s.
 
+### P01.S7 · Gate de ProcessKit — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `spikes/spike-process` prueba kill del árbol, drop vía wrapper, streaming de 200k líneas, overhead de spawn, límites (memoria, CPU, procesos) y suspend/resume. Corre local (Windows ×3) y en CI (workflow `spike-processkit`, 3 OS).
+- **Archivos clave:** `spikes/spike-process/src/main.rs`, `spikes/results/test-processkit.md`, `docs/adr/0002-process-layer.md`, `.github/workflows/spike-processkit.yml`
+- **Resultado:** kill, streaming y overhead ✅ en los 3 OS. Límites ✅ en Windows (Job Object); en Linux sin cgroup delegado y en macOS, error tipado. Decisión: ProcessKit detrás de `ProcessSupervisor` (ADR-0002).
+- **Nota:** dos filas ❌ de la primera corrida en CI eran errores de conteo del spike (hilos/zombies en Linux, marcador en el wrapper). Se corrigió la medición, no ProcessKit.
+- **Dependencias agregadas (solo en spikes):** `processkit 3.3` (features `limits`, `stats`), `tokio 1.53` (STACK §58).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

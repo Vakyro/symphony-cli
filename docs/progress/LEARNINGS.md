@@ -49,3 +49,11 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **Retener con `PreToolUse`: Claude aguanta hasta el `timeout`; Codex solo ~60 s.** Con 120 s, el tool de Codex falla y el modelo reintenta, lo que duplica la espera. Para esperas largas, `deny` con razón.
 - **Codex no mata el proceso de un hook vencido** (sigue vivo después de la sesión). El hook de Symphony necesita su propio límite interno.
 - Los modelos no notan la retención: reportan tiempos normales.
+
+## ProcessKit (P01.S7) — detalle en `spikes/results/test-processkit.md`, ADR-0002
+
+- **Features:** `processkit = { version = "3.3", features = ["limits", "stats"] }`. Sin ellas no existen `max_memory`, `cpu_quota` ni `stats()`. `ProcessGroup::output_string` necesita `use processkit::ProcessRunner`.
+- **Linux sin cgroup v2 delegado** (runners de GitHub): los límites dan `ResourceLimit { reason: Unenforceable }` al crear el grupo. **macOS:** `Unsupported`. Maneja el `Err`; no hagas `?`.
+- **`LimitEvidence.memory` = `Unknown`** aunque el límite bloqueó (Windows). Infiere el OOM por exit code.
+- **Contar procesos en Linux con `sysinfo`:** filtra `thread_kind().is_none()` y los zombies.
+- **Codex en un corte de red** emite `{"type":"error","message":"Reconnecting... n/5 …"}` y luego "waiting for network", y **espera indefinidamente** (65 min en Test D). Hace falta un watchdog de inactividad por agente (P10).

@@ -93,11 +93,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         drop(group);
         tokio::time::sleep(Duration::from_millis(500)).await;
         let left = count_marked(&mut sys, marker);
-        // En Windows el propio cmd.exe lleva el marcador en su línea de comando: 10 node + 1 cmd.
-        let expected = if cfg!(windows) { 11 } else { 10 };
+        // El wrapper (cmd /c, o sh -c en Linux) lleva el marcador en su línea de comando: 10 node + 0 o 1 wrapper.
+        let expected = 10..=11;
         row(
             "drop del grupo vía cmd /c",
-            alive == expected && left == 0,
+            expected.contains(&alive) && left == 0,
             format!("{alive} vivos → {left} tras drop"),
         );
     }
