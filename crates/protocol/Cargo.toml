@@ -9,3 +9,14 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt"] }
+interprocess.workspace = true
