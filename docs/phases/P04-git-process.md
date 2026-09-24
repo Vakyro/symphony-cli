@@ -31,6 +31,14 @@
 - **Archivos clave:** `crates/process/src/lib.rs`, `crates/process/tests/process.rs`
 - **Cómo se verificó:** 6 tests con `node`: árbol de 10 procesos → `terminate_tree` → **0 huérfanos**; soltar el handle mata el árbol; 2000 líneas en orden + stderr + exit code 3; eco por stdin a media ejecución (con ñ); cwd con espacios y env; programa inexistente → error; suspend/resume y mecanismo `JOB_OBJECT` en Windows. `cargo xtask check` → 89 passed; CI en 3 OS.
 
+### P04.S4 · Saneamiento de ANSI — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony_core::sanitize(input, AnsiMode::{Plain, KeepColors})`: máquina de estados tipo VTE, sin dependencias. Descarta OSC (título, OSC 52, hyperlinks OSC 8: queda el texto), DCS/SOS/PM/APC, todo CSI salvo SGR con parámetros numéricos válidos (y solo en `KeepColors`), ESC de un carácter, C1 de 8 bits (`U+009B` CSI, etc.) y controles C0 salvo `
+`/`	`. `` se resuelve como una terminal (barras de progreso → último estado; CRLF → LF). Secuencias sin terminar no dejan nada.
+- **Archivos clave:** `crates/core/src/ansi.rs`
+- **Cómo se verificó:** 10 tests de ataques (cambio de título con BEL/ST/C1, OSC 52, borrado de pantalla, pantalla alternativa, reset, colores, hyperlinks, DCS/APC, backspace para esconder texto, CR, secuencias sin terminar, texto normal con ñ y emoji) + 3 proptest (salida plana sin controles, salida con color solo con SGR válidos, idempotencia). `cargo xtask check` → 102 passed.
+- **Nota:** no se agregó una crate: STACK §58 no trae una de ANSI y el parser es chico.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

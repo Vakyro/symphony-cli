@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P04 · Git, worktrees y procesos (rama `phase/p04-git-process`)
-**Paso actual:** P04.S4 · Saneamiento de ANSI
+**Paso actual:** P04.S5 · `fake-agent` (testkit)
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (89 tests)
+- `cargo xtask check`: ✅ (102 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -16,11 +16,12 @@
 - [x] P04.S1 Crate `git`
 - [x] P04.S2 Estrategia de dependencias
 - [x] P04.S3 Crate `process`
-- [ ] P04.S4 Saneamiento de ANSI   ← aquí
+- [x] P04.S4 Saneamiento de ANSI
+- [ ] P04.S5 `fake-agent` (testkit)   ← aquí
 - (resto de P04 en PLAN.md)
 
 ## Próxima acción concreta
-Filtro raw → sanitizer → TUI/log (STACK §48). Tests con secuencias maliciosas: cambio de título, OSC 52, borrado de pantalla.
+Ver PLAN P04.S5 (fake-agent).
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
