@@ -6,6 +6,7 @@ members = [
     "crates/daemon",
     "crates/cli",
     "crates/store",
+    "crates/object-store",
     "crates/testkit",
     "xtask",
 ]
@@ -38,6 +39,8 @@ clap = { version = "4.6", features = ["derive"] }
 trycmd = "1.2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rusqlite_migration = "2.6"
+blake3 = "1.8"
+zstd = "0.14"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

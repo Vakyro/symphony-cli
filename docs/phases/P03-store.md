@@ -30,6 +30,12 @@
 - **Cómo se verificó:** 8 tests de repositorio (uno por entidad + failover de run + uso vía writer); `cargo xtask check` → 67 passed.
 - **Pendiente:** repos de `executor_changes`, `messages`, `provider_failures`, `tool_calls`, `checkpoints`, `checkpoint_refs`, `handoffs` y `recovery_items` se escriben en la fase que los consume (P05–P06; P07 para recovery). `blobs`/`context_objects` en P03.S4.
 
+### P03.S4 · Crate `object-store` — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony-object-store`: `put` (BLAKE3 del original → si ya existe, dedupe; si no, zstd nivel 3 a un temporal `.tmp-*` del mismo directorio, `fsync` y `persist_noclobber`) + fila en `blobs`; `get` descomprime y **verifica el hash**; valida que el hash sea hex de 64 caracteres (sin path traversal); `add_ref`/`release` (nunca baja de 0); `gc(grace)` borra blobs con `ref_count = 0`, archivos sin fila y temporales de crashes, todos más viejos que el margen.
+- **Archivos clave:** `crates/object-store/src/lib.rs`, `crates/object-store/tests/object_store.rs`
+- **Cómo se verificó:** 5 tests: roundtrip y ubicación `<h[0:2]>/<h>`; dedupe (dos puts iguales → 1 archivo y 1 fila); **crash a media escritura** (temporal con la mitad de los bytes → el blob no existe, un put posterior lo escribe completo y el GC borra el temporal); corrupción detectada (contenido cambiado, zstd inválido, hash con `../`); refcount y GC (margen de gracia, huérfanos). `cargo xtask check` → 72 passed.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -55,6 +61,8 @@
 |---|---|---|---|
 | rusqlite | 0.40.2 (`bundled`) | SQLite | Sí |
 | rusqlite_migration | 2.6 | Migraciones con `user_version` | Sí |
+| blake3 | 1.8 | Hash de contenido | Sí |
+| zstd | 0.14 | Compresión de blobs | Sí |
 
 ## Métricas
 (benchmarks, tiempos, RAM, cobertura — con comando)
