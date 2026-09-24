@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA |
 | Rama | phase/p01-spike |
-| Inicio / cierre | 2026-09-24 / — |
+| Inicio / cierre | 2026-09-24 / 2026-09-24 |
 | Agentes que trabajaron | claude-code/opus-5.5 |
-| Tag | — |
+| Tag | p01-done |
 | Docs usados | IDEA §5.2–§5.6, §7, §8; STACK §7, §40, §60; FLOW §13 |
 
 ## Pasos
@@ -60,7 +60,7 @@
 - **Archivos clave:** `spikes/spike-hook/src/checkpoint.rs`, `spikes/results/test-d.md`, `spikes/results/test-d.raw.md`, `spikes/results/test-d-handoffs/`
 - **Resultado:** 6/6: el sucesor continúa sin reexplicación, los archivos de A quedan idénticos, todos los tests pasan y no hay huérfanos. Hubo un corte de red de 65 min durante T2 Claude→Codex; Codex esperó en silencio y terminó bien.
 
-### P01.S8 · Decisión de gate — 🟡 (falta la validación de Leo)
+### P01.S8 · Decisión de gate — ✅
 - **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
 - **Qué se hizo:** ADR-0003 (retener por hook), ADR-0004 (handoff) y ADR-0005 (modo de interacción). Prueba extra para ADR-0005: mensaje a media tarea (Claude ✅ por stdin; `codex queue` ❌ en exec).
 - **Supuestos de IDEA §7:**
@@ -75,7 +75,11 @@
 | 6 | Estrategia viable para `node_modules` por worktree | ✅ pnpm con store compartido: 2.2 s y sin disco extra | Test A |
 
 - **Gate:** pasa. **Decisión:** seguir con el diseño completo (handoff + scheduler de dos capas). No hace falta el modo "gestor paralelo".
-- **Pendiente:** Leo acepta ADR-0004 y ADR-0005. No se usó la skill `the-council`: el resultado no dejaba dudas (6/6, sin supuestos rotos) y la decisión la valida Leo.
+- **Validación:** Leo aceptó ADR-0004 y ADR-0005 (2026-09-24). No se usó la skill `the-council`: el resultado no dejaba dudas (6/6, sin supuestos rotos) y la decisión la valida Leo.
+
+### P01.S9 · Cierre — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** revisión del diff de la fase (código de spikes desechable, clippy sin avisos; resultados sin credenciales), `cargo xtask check` en verde, merge a `main` y tag `p01-done`.
 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
@@ -86,7 +90,10 @@
 |---|---|---|---|
 
 ## Decisiones tomadas
-- ADR-NNNN: …
+- ADR-0002: ProcessKit detrás de `ProcessSupervisor`.
+- ADR-0003: retener por hook (Claude hasta el timeout, Codex ≤ 60 s) + hooks inyectados por invocación.
+- ADR-0004: handoff viable (6/6).
+- ADR-0005: headless + vista propia + attach por `resume`; sin PTY en v0.1.
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
@@ -104,6 +111,7 @@
 - Totales: N passed, M failed (cuáles y por qué)
 
 ## Estado final
+Los 6 supuestos de IDEA §7 tienen respuesta con evidencia: 5 ✅ y 1 ⚠️ (Codex solo retiene ≤ 60 s por hook). AGENT ≠ MODEL se sostiene: 6/6 handoffs. ProcessKit pasa el gate (Windows completo; Linux y macOS sin límites duros fuera de cgroup). Los ADRs 0002–0005 están aceptados. El producto sigue con el diseño completo.
 Resumen de 3–5 líneas para Leo.
 
 ## Notas para el siguiente agente

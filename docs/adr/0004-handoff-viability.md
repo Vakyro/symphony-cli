@@ -1,8 +1,8 @@
 # ADR-0004 · Viabilidad del handoff entre proveedores (AGENT ≠ MODEL)
 
-- **Estado:** PROPUESTO (lo acepta Leo en el gate de P01)
+- **Estado:** ACEPTADO
 - **Fecha:** 2026-09-24
-- **Autor:** claude-code/opus-5.5 · **Aprobado por:** Leo (pendiente)
+- **Autor:** claude-code/opus-5.5 · **Aprobado por:** Leo (2026-09-24)
 - **Fase/paso:** P01.S8
 
 ## Contexto
