@@ -1,0 +1,22 @@
+[package]
+name = "symphony-process"
+description = "Supervisión de procesos de Symphony: árbol contenido, streaming, límites y stats (ADR-0002)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+processkit.workspace = true
+sysinfo.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros", "rt-multi-thread"] }
+sysinfo.workspace = true

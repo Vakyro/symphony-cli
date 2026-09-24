@@ -25,6 +25,12 @@
 - **Archivos clave:** `crates/git/src/deps.rs`, `crates/git/src/lib.rs` (`unlink_top_level_links`), `crates/git/tests/deps.rs`
 - **Cómo se verificó:** detección, planes por manager, enlace + borrado del worktree sin tocar el base (con rutas con espacios); `cargo xtask check` → 83 passed. **Medición (test ignorado, con pnpm y red):** con el store ya caliente por el repo base, cada worktree nuevo instala en **1.68 s y 1.54 s** (Test A de P01 midió 24.3 s con npm sin store).
 
+### P04.S3 · Crate `process` — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony-process` sobre ProcessKit (ADR-0002), sin PTY (ADR-0005). `spawn(ProcessSpec)` → `Supervised`: un `ProcessGroup` por proceso raíz; salida como `OutputLine::{Stdout,Stderr}` por un canal (la tarea de fondo siempre drena para que el hijo no se trabe); stdin abierto opcional (`write_stdin`, `close_stdin`); `terminate_tree`, `suspend`/`resume`, `stats` (ProcessKit + sysinfo como respaldo de memoria), `wait`/`wait_timeout`; `Guarantees { mechanism, limits_enforced, limits_note }`: si el SO no aplica los límites pedidos, el proceso arranca igual y lo informa. Ningún tipo de ProcessKit sale del crate.
+- **Archivos clave:** `crates/process/src/lib.rs`, `crates/process/tests/process.rs`
+- **Cómo se verificó:** 6 tests con `node`: árbol de 10 procesos → `terminate_tree` → **0 huérfanos**; soltar el handle mata el árbol; 2000 líneas en orden + stderr + exit code 3; eco por stdin a media ejecución (con ñ); cwd con espacios y env; programa inexistente → error; suspend/resume y mecanismo `JOB_OBJECT` en Windows. `cargo xtask check` → 89 passed; CI en 3 OS.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -39,10 +45,14 @@
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
+| STACK §7.1, PLAN P04.S3 | Trait `ProcessSupervisor` | Tipo concreto (`spawn` → `Supervised`) | Una sola implementación: el trait se extrae cuando haya otra (plan B de STACK §60). La regla importante (ProcessKit no se filtra) se cumple |
 
 ## Dependencias agregadas
 | Crate | Versión | Para qué | ¿Estaba en STACK §58? |
 |---|---|---|---|
+| processkit | 3.3 (`limits`, `stats`) | Grupos de procesos contenidos (ADR-0002) | Sí |
+| sysinfo | 0.39.6 (`system`) | Memoria del árbol donde el SO no da stats | Sí |
+| blake3 (en `git`) | 1.8 | `deps_lock_hash` | Sí |
 
 ## Métricas
 (benchmarks, tiempos, RAM, cobertura — con comando)

@@ -8,6 +8,7 @@ members = [
     "crates/store",
     "crates/object-store",
     "crates/git",
+    "crates/process",
     "crates/testkit",
     "xtask",
 ]
@@ -43,6 +44,8 @@ rusqlite_migration = "2.6"
 blake3 = "1.8"
 zstd = "0.14"
 criterion = { version = "0.8.2", default-features = false }
+processkit = { version = "3.3", features = ["limits", "stats"] }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
