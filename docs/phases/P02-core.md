@@ -44,6 +44,19 @@
 - **Cómo se verificó:** `cargo xtask check` → 45 passed. Test de integración con el binario real: ping/status/errores; **un segundo daemon sale con "ya hay un daemon de Symphony corriendo … (pid N)"**; shutdown por IPC; el lock se libera; log y config creados; frames sobredimensionados y versión desconocida no tumban al daemon.
 - **Pendiente / notas:** no se probó el acceso de otro usuario del SO (hace falta una segunda cuenta). La DACL `OW` y el `0600` son las garantías; se revisan en P02.S8 (`security-review`).
 
+### P02.S6 · Cliente `symphony` — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** clap con `symphony` (sin args: aviso de TUI en P07), `status` (autoarranca), `daemon start|stop|status`, `--version`; errores con miette `fancy`. Autoarranque: `$SYMPHONYD` → binario hermano → PATH; spawn desacoplado (Windows: `DETACHED_PROCESS|CREATE_NO_WINDOW`; Unix: `process_group(0)`); stderr de arranque en `logs/symphonyd-start.err`, que se muestra si el daemon muere al arrancar. `SymphonyHome` pasa a ruta absoluta.
+- **Archivos clave:** `crates/cli/src/{main,client}.rs`, `crates/cli/tests/{cli.rs,cmd/*}`
+- **Cómo se verificó:** trycmd: `--help`, `--version`, sin args, comando desconocido y el ciclo del daemon (status detenido → start → start repetido → status → stop → stop repetido → status con autoarranque → stop). CI en verde en ubuntu, windows y macos.
+- **Problemas resueltos:** (1) **H4 real:** el daemon heredaba el pipe de stdout de quien lanzó al CLI y trycmd se colgaba; se quita `HANDLE_FLAG_INHERIT` de los std handles propios antes del spawn (bloque `unsafe` aislado con `SAFETY`, CONSTRAINTS C6). (2) macOS: el socket en `$TMPDIR` supera `sun_path` (104 B) → fallback `/tmp/symphony-<hash>/` con verificación de dueño y permisos. (3) macOS no soporta `fchmod` en sockets → `mode(0o600)` solo fuera de macOS; la garantía es el directorio `0700`.
+- **Test reemplazado:** `tests/version.rs::unknown_args_exit_with_usage_error` esperaba exit 2 sin argumentos; P02.S6 cambia ese comportamiento al aviso de la TUI. Lo cubren ahora `cmd/no-args.toml` y `cmd/unknown-command.toml`.
+
+### P02.S7 · Integración — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** E2E `crates/cli/tests/e2e.rs`: `symphony status` en frío arranca el daemon → `daemon status` lo ve → **kill -9 / taskkill /F** → el CLI lo ve detenido → `symphony status` arranca uno nuevo (otro pid) aunque quedaron el lock y el socket del muerto → stop.
+- **Cómo se verificó:** local (Windows) y en CI en los 3 OS.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -79,6 +92,9 @@
 | tokio-util | 0.7.19 (`rt`) | `CancellationToken`, `TaskTracker` | Sí |
 | miette | 7.6 | Errores de `symphonyd` | Sí |
 | widestring | 1.2 (solo Windows) | SDDL del named pipe (`SecurityDescriptor::deserialize` pide `U16CStr`) | No, pero ya era dependencia transitiva de `interprocess`; MIT/Apache |
+| clap | 4.6 (`derive`) | CLI | Sí |
+| trycmd | 1.2 (dev) | Tests de CLI | No en §58, pero es la herramienta de STACK §24.2 |
+| windows-sys | 0.61.2 (solo Windows, `Win32_Foundation`, `Win32_System_Console`) | Quitar la herencia de std handles antes de lanzar el daemon | Sí |
 | (licencia) 0BSD | — | `doctest-file` y `recvmsg`, dependencias de `interprocess` | Se agregó `0BSD` a `deny.toml`: más permisiva que MIT |
 
 ## Métricas
