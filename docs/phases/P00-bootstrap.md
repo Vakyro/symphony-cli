@@ -44,6 +44,11 @@
 - **Cómo se verificó:** STATUS apunta a P00.S5 (con S1 pendiente de verificar).
 - **Pendiente / notas:** no se creó `docs/research/.gitkeep`: la carpeta ya tiene archivos.
 
+### P00.S5 · CONSTRAINTS.md — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `CONSTRAINTS.md` con reglas de PLAN §2, prohibiciones de STACK §36, presupuestos de IDEA §3/§6 y STACK §39, política de `unsafe` (STACK §27), errores y dependencias. Cada regla dice cómo se comprueba (lints de workspace y `deny.toml` se crean en S6).
+- **Cómo se verificó:** el archivo existe; `AGENTS.md` lo referencia (paso 4 de "Antes de hacer nada").
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -60,6 +65,7 @@
 |---|---|---|---|
 | PLAN P00.S2 | `.gitignore` con la lista de reglas | Se agregó `graphify-smart-out/` y un `.gitattributes` con `eol=lf` | Salida de herramienta local; la máquina tiene `autocrlf=true` y sin esto rustfmt/CI verían diffs de CRLF |
 | PLAN P00.S2 | Primer commit solo de init | Incluye también el spec, luego movido en S3 | Único modo de dejar `git status` limpio sin ignorar el spec |
+| IDEA §6 | Routing y latencia de eventos "en milisegundos" | CONSTRAINTS R3/R4 fijan objetivos p99 < 10 ms y < 50 ms | Hace falta un número para que el presupuesto sea verificable. Se ajusta con ADR si la medición real no aplica |
 
 ## Dependencias agregadas
 | Crate | Versión | Para qué | ¿Estaba en STACK §58? |

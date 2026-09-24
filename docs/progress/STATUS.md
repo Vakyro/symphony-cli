@@ -2,7 +2,7 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P00 · Arranque del repositorio (rama `phase/p00-bootstrap`)
-**Paso actual:** P00.S5 · CONSTRAINTS.md (P00.S1 pendiente de verificar)
+**Paso actual:** P00.S6 · Esqueleto del workspace (P00.S1 pendiente de verificar)
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24 08:00
 
@@ -17,8 +17,8 @@
 - [x] P00.S2 Crear el repositorio
 - [x] P00.S3 Copiar la documentación
 - [x] P00.S4 Archivos de coordinación
-- [ ] P00.S5 CONSTRAINTS.md   ← aquí
-- [ ] P00.S6 Esqueleto del workspace
+- [x] P00.S5 CONSTRAINTS.md
+- [ ] P00.S6 Esqueleto del workspace   ← aquí
 - [ ] P00.S7 Verificar crates del stack
 - [ ] P00.S8 CI mínima
 - [ ] P00.S9 Cierre
