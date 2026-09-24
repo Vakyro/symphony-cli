@@ -19,12 +19,12 @@
 - **Gate:** pasa. Leo aprobó seguir ("sigue con la construcción", 2026-09-24).
 - **Pendiente / notas:** no se probó Claude Squad a mano (requiere WSL + tmux). Hallazgos H1–H7 en `LEARNINGS.md`.
 
-### P00.S1 · Verificar el entorno — 🟡
+### P00.S1 · Verificar el entorno — ✅
 - **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
 - **Qué se hizo:** Rust no estaba instalado. Con permiso de Leo: `winget install Rustlang.Rustup` → toolchain `stable-x86_64-pc-windows-msvc`. VS 2022 Community estaba sin workload C++ (`link.exe not found`); con permiso de Leo se agregó `Microsoft.VisualStudio.Workload.NativeDesktop`.
-- **Versiones:** Git 2.47.1.windows.1 · rustup 1.29.1 · rustc 1.98.1 (48a229cea 2026-09-01) · cargo 1.98.1 · componentes: clippy, rustfmt, rust-docs
-- **Cómo se verificó:** pendiente `cargo new --bin hello && cargo run` tras instalar el workload C++.
-- **Pendiente / notas:** `cargo-nextest` y `cargo-deny` se instalan después del workload.
+- **Versiones:** Git 2.47.1.windows.1 · rustup 1.29.1 · rustc 1.98.1 (48a229cea 2026-09-01) · cargo 1.98.1 · MSVC 14.43.34808 · cargo-nextest 0.9.146 · componentes: clippy, rustfmt, rust-docs
+- **Cómo se verificó:** `cargo new --bin hello && cargo run` → `Hello, world!`
+- **Pendiente / notas:** `cargo install --locked cargo-nextest cargo-deny` tarda más de 10 min en esta máquina. En CI se usan binarios precompilados.
 
 ### P00.S2 · Crear el repositorio — ✅
 - **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
@@ -48,6 +48,12 @@
 - **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
 - **Qué se hizo:** `CONSTRAINTS.md` con reglas de PLAN §2, prohibiciones de STACK §36, presupuestos de IDEA §3/§6 y STACK §39, política de `unsafe` (STACK §27), errores y dependencias. Cada regla dice cómo se comprueba (lints de workspace y `deny.toml` se crean en S6).
 - **Cómo se verificó:** el archivo existe; `AGENTS.md` lo referencia (paso 4 de "Antes de hacer nada").
+
+### P00.S6 · Esqueleto del workspace — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** workspace con `crates/{protocol,core,daemon,cli,testkit}` y `xtask/`. Edition 2024, MSRV 1.95, `resolver = "3"`. `rust-toolchain.toml` (stable + rustfmt + clippy), `rustfmt.toml`, `clippy.toml` (unwrap/expect solo en tests), `deny.toml` con las prohibiciones de STACK §36. Lints de workspace de CONSTRAINTS C3/C6. `[profile.release]` con `lto = "thin"` y sin `panic = "abort"`. Los binarios solo usan std: `--version` no justifica traer clap todavía (llega con el primer comando real).
+- **Archivos clave:** `Cargo.toml`, `xtask/src/main.rs`, `crates/cli/src/main.rs`, `crates/cli/tests/version.rs`, `deny.toml`, `.cargo/config.toml`
+- **Cómo se verificó:** `cargo xtask check` → fmt ok, clippy `-D warnings` ok, nextest 2 passed. `cargo run -p symphony-cli -- --version` → `symphony 0.0.1`.
 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |

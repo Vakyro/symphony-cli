@@ -1,0 +1,11 @@
+[package]
+name = "symphony-testkit"
+description = "Utilidades de prueba de Symphony (fake-agent, harness E2E)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,60 @@
+# cargo deny check — CONSTRAINTS §2 y §4 (STACK §28.1, §36)
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# STACK §36: prohibido en el core. Levantar una prohibición requiere ADR.
+deny = [
+    # servidor HTTP en v1
+    { name = "axum" },
+    { name = "actix-web" },
+    { name = "warp" },
+    { name = "rocket" },
+    # red en el core (STACK §50); `direct-provider` futuro necesita ADR
+    { name = "reqwest" },
+    { name = "ureq" },
+    { name = "hyper" },
+    # Redis / Postgres / ORMs
+    { name = "redis" },
+    { name = "postgres" },
+    { name = "tokio-postgres" },
+    { name = "sqlx" },
+    { name = "diesel" },
+    { name = "sea-orm" },
+    # colas externas
+    { name = "async-nats" },
+    { name = "rdkafka" },
+    # gRPC
+    { name = "tonic" },
+    # libgit2 (se usa el git del sistema)
+    { name = "git2" },
+    # vector DB
+    { name = "qdrant-client" },
+    { name = "lancedb" },
+    # Kubernetes / Docker obligatorio
+    { name = "kube" },
+    { name = "bollard" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

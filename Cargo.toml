@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/protocol",
+    "crates/core",
+    "crates/daemon",
+    "crates/cli",
+    "crates/testkit",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+
+# Se llena al usar cada crate (STACK §58). Fuera de §58 → justificar en la bitácora.
+[workspace.dependencies]
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+# Nunca panic = "abort" (STACK §38): el cleanup y el diagnóstico dependen del unwinding.
