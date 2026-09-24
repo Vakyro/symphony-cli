@@ -40,6 +40,12 @@
 - **Hallazgos:** Codex corre los hooks en PowerShell (las rutas con espacios necesitan `&`); `.codex/hooks.json` del proyecto no carga; `exec --json` no trae cuota (hay que leer el rollout); Claude trae `rate_limit_event` con 5h/7d.
 - **Dependencias agregadas (solo en spikes):** `interprocess 2.4`, `serde_json 1.0.151` (STACK §58).
 
+### P01.S5 · Test C: retener comandos — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `SPIKE_HOLD_SECS`/`SPIKE_HOLD_MATCH` en `spike-hook`; 6 corridas (Claude 120/180 y 60/30; Codex 30/180, 60/180, 120/180 y 60/30).
+- **Archivos clave:** `spikes/results/test-c.md`, `spikes/results/test-c.raw.md`, `spikes/scripts/test-c.ps1`
+- **Resultado:** Claude retiene hasta el `timeout` y si se vence falla en modo abierto. Codex retiene bien ≤ 60 s; con 120 s el tool falla y el modelo reintenta. Codex no mata los hooks vencidos. Valor propuesto: `hooks_can_hold` claude=true, codex=false para > 60 s.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

@@ -8,6 +8,8 @@
 //! Test C: con `SPIKE_HOLD_SECS` y `SPIKE_HOLD_MATCH`, un `PreToolUse` cuyo
 //! comando contenga el texto espera esos segundos y luego responde `allow`.
 
+mod checkpoint;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -86,12 +88,19 @@ fn collect(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let name = SOCKET.to_ns_name::<GenericNamespaced>()?;
     let listener = ListenerOptions::new().name(name).create_sync()?;
     let mut out = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let checkpoints = std::path::Path::new(path).with_file_name("checkpoints");
+    std::fs::create_dir_all(&checkpoints)?;
     eprintln!("collector escuchando en {SOCKET} -> {path}");
     for conn in listener.incoming() {
         let Ok(conn) = conn else { continue };
         for line in BufReader::new(conn).lines().map_while(Result::ok) {
             writeln!(out, "{line}")?;
             out.flush()?;
+            if let Ok(ev) = serde_json::from_str::<Value>(&line)
+                && let Err(e) = checkpoint::update(&checkpoints, &ev)
+            {
+                eprintln!("checkpoint: {e}");
+            }
         }
     }
     Ok(())
@@ -101,10 +110,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["collect", path] => collect(path),
+        ["handoff", cp, goal] => {
+            print!("{}", checkpoint::handoff(cp.as_ref(), goal.as_ref())?);
+            Ok(())
+        }
         ["hook", provider] => {
             hook(provider);
             Ok(())
         }
-        _ => Err("uso: spike-hook collect <events.jsonl> | spike-hook hook <claude|codex>".into()),
+        _ => Err("uso: spike-hook collect <events.jsonl> | spike-hook hook <claude|codex> | spike-hook handoff <checkpoint.json> <goal.md>".into()),
     }
 }

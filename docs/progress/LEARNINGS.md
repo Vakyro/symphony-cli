@@ -43,3 +43,9 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **`codex exec --json` no trae `rate_limits`.** Están en el rollout de disco.
 - **Prompts con comillas:** pásalos por stdin (`codex exec -`), no como argumento de un `.cmd`.
 - **En el tool Bash de Claude Code, un `Remove-Item` de PowerShell dentro de un comando largo** puede ser bloqueado por el guard de rutas del sistema (malinterpreta `'\'` o `/c`). Borra en un comando aparte.
+
+## Test C (P01.S5) — detalle en `spikes/results/test-c.md`
+
+- **Retener con `PreToolUse`: Claude aguanta hasta el `timeout`; Codex solo ~60 s.** Con 120 s, el tool de Codex falla y el modelo reintenta, lo que duplica la espera. Para esperas largas, `deny` con razón.
+- **Codex no mata el proceso de un hook vencido** (sigue vivo después de la sesión). El hook de Symphony necesita su propio límite interno.
+- Los modelos no notan la retención: reportan tiempos normales.

@@ -2,7 +2,7 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P01 · Spike de viabilidad (rama `phase/p01-spike`)
-**Paso actual:** P01.S5 · Test C: retener comandos
+**Paso actual:** P01.S6 · Test D: handoff forzado
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
@@ -17,14 +17,14 @@
 - [x] P01.S2 Investigar los contratos de los CLIs (ToS aceptado por Leo)
 - [x] P01.S3 Test A: recursos
 - [x] P01.S4 Test B: event bus de hooks
-- [ ] P01.S5 Test C: retener comandos   ← aquí
-- [ ] P01.S6 Test D: handoff forzado
+- [x] P01.S5 Test C: retener comandos
+- [ ] P01.S6 Test D: handoff forzado   ← aquí
 - [ ] P01.S7 Gate de ProcessKit
 - [ ] P01.S8 Decisión de gate
 - [ ] P01.S9 Cierre
 
 ## Próxima acción concreta
-Test C: `SPIKE_HOLD_SECS=120 SPIKE_HOLD_MATCH="npm test"` en el hook; una sesión por CLI que corra `npm test`. Anotar si espera, si se vence y qué hace el modelo. Probar también un hold mayor que el timeout.
+Test D: `spikes/scripts/test-d.ps1 <t1|t2|t3> <claude|codex>` (6 corridas). Collector nuevo con checkpoints en `~/symphony-spike/d-events.jsonl`.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
