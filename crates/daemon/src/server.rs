@@ -4,12 +4,13 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use symphony_protocol::transport::{self, ListenerExt as _, LocalStream};
 use symphony_protocol::{Connection, Message, PROTOCOL_VERSION, Request, Response};
+use symphony_store::{Writer, repo};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -22,6 +23,8 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 pub enum DaemonError {
     #[error("ya hay un daemon de Symphony corriendo para {home}{}", pid.map(|p| format!(" (pid {p})")).unwrap_or_default())]
     AlreadyRunning { home: PathBuf, pid: Option<u32> },
+    #[error("base de datos: {0}")]
+    Store(#[from] symphony_store::StoreError),
     #[error("{context}: {source}")]
     Io {
         context: String,
@@ -46,7 +49,7 @@ impl InstanceLock {
     pub fn acquire(home: &Path) -> Result<Self, DaemonError> {
         let dir = transport::run_dir(home);
         std::fs::create_dir_all(&dir).map_err(io(format!("no se pudo crear {}", dir.display())))?;
-        let lock_path = dir.join("symphonyd.lock");
+        let lock_path = transport::lock_path(home);
         let pid_path = dir.join("symphonyd.pid");
         let file = OpenOptions::new()
             .create(true)
@@ -91,17 +94,52 @@ struct State {
     started: Instant,
     home: PathBuf,
     shutdown: CancellationToken,
+    /// Conexión de solo lectura (las escrituras van por el `Writer`).
+    reader: Mutex<rusqlite::Connection>,
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// Recuperación al arrancar (P03.S5): con el lock tomado, toda sesión `ACTIVE`
+/// quedó de un daemon que murió. Se marca `INTERRUPTED` y va al Recovery Center.
+async fn recover(writer: &Writer) -> Result<(), DaemonError> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    writer
+        .handle()
+        .write(Box::new(move |t| {
+            let recovered = repo::interrupt_orphan_sessions(t, now_ms())?;
+            let _ = tx.send(recovered.len());
+            Ok(())
+        }))
+        .await?;
+    let recovered = rx.await.unwrap_or(0);
+    if recovered > 0 {
+        tracing::warn!(
+            sesiones = recovered,
+            "sesiones interrumpidas por un cierre inesperado; ver Recovery Center"
+        );
+    }
+    Ok(())
 }
 
 /// Corre el daemon hasta que se cancele `shutdown` (señal o request `shutdown`).
 pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), DaemonError> {
     let _lock = InstanceLock::acquire(home)?;
+    let db_path = symphony_core::SymphonyHome::at(home).db_path();
+    let writer = Writer::start(&db_path)?;
+    recover(&writer).await?;
+    let reader = writer.reader()?;
     let listener = transport::listen(home).map_err(io("no se pudo abrir el socket IPC"))?;
     tracing::info!(pid = std::process::id(), home = %home.display(), "daemon listo");
     let state = Arc::new(State {
         started: Instant::now(),
         home: home.to_path_buf(),
         shutdown: shutdown.clone(),
+        reader: Mutex::new(reader),
     });
     let tracker = TaskTracker::new();
 
@@ -124,6 +162,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     }
     drop(listener);
     transport::cleanup(home);
+    writer.shutdown();
     tracing::info!("daemon detenido");
     Ok(())
 }
@@ -193,7 +232,13 @@ async fn dispatch(req: Request, state: &State) -> Response {
 }
 
 fn status(state: &State) -> Value {
+    let recovery_open = state
+        .reader
+        .lock()
+        .ok()
+        .and_then(|conn| repo::open_recovery_count(&conn).ok());
     json!({
+        "recovery_open": recovery_open,
         "pid": std::process::id(),
         "version": env!("CARGO_PKG_VERSION"),
         "protocol": PROTOCOL_VERSION,

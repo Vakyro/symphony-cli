@@ -27,6 +27,23 @@ pub fn run_dir(home: &Path) -> PathBuf {
     home.join("run")
 }
 
+/// Archivo del lock de instancia del daemon. Mientras un `symphonyd` viva (aunque
+/// esté arrancando o apagándose), lo tiene tomado.
+pub fn lock_path(home: &Path) -> PathBuf {
+    run_dir(home).join("symphonyd.lock")
+}
+
+/// `true` si algún `symphonyd` tiene tomado el lock de este home.
+pub fn daemon_lock_held(home: &Path) -> bool {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(lock_path(home))
+    else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
 /// FNV-1a de 64 bits: hash estable entre versiones de Rust (no como `DefaultHasher`).
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
