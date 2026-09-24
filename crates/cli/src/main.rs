@@ -59,10 +59,24 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
         }
         Some(Cmd::Daemon {
             action: DaemonCmd::Status,
-        }) => match client::try_connect(home).await {
-            Some(mut conn) => print_status(&client::call(&mut conn, "status", json!({})).await?),
-            None => println!("daemon: detenido"),
-        },
+        }) => {
+            let status = match client::try_connect(home).await {
+                Some(mut conn) => client::call(&mut conn, "status", json!({})).await.map(Some),
+                None => Ok(None),
+            };
+            match status {
+                Ok(Some(s)) => print_status(&s),
+                Ok(None) => println!("daemon: detenido"),
+                // Murió justo mientras preguntábamos: si soltó el lock, está detenido.
+                Err(e)
+                    if e.is_connection_lost()
+                        && !symphony_protocol::transport::daemon_lock_held(home) =>
+                {
+                    println!("daemon: detenido")
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
         Some(Cmd::Daemon {
             action: DaemonCmd::Start,
         }) => match client::ensure_running(home).await? {

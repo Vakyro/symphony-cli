@@ -41,6 +41,18 @@ pub enum ClientError {
     Io(#[from] std::io::Error),
 }
 
+impl ClientError {
+    /// La conexión se cayó a mitad de la llamada (p. ej. el daemon murió en ese momento).
+    pub fn is_connection_lost(&self) -> bool {
+        matches!(
+            self,
+            Self::Io(_)
+                | Self::Disconnected
+                | Self::Protocol(ProtocolError::Io(_) | ProtocolError::Truncated)
+        )
+    }
+}
+
 pub async fn try_connect(home: &Path) -> Option<Connection<LocalStream>> {
     transport::connect(home).await.ok()
 }
