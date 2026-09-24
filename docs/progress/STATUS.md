@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P03 · Persistencia (rama `phase/p03-store`)
-**Paso actual:** P03.S3 · Repositorios
+**Paso actual:** P03.S4 · Crate `object-store`
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (59 tests)
+- `cargo xtask check`: ✅ (67 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -15,11 +15,12 @@
 ## Progreso de la fase actual
 - [x] P03.S1 Crate `store` y migración 001
 - [x] P03.S2 Store writer
-- [ ] P03.S3 Repositorios   ← aquí
+- [x] P03.S3 Repositorios
+- [ ] P03.S4 Crate `object-store`   ← aquí
 - (resto de P03 en PLAN.md)
 
 ## Próxima acción concreta
-Funciones SQL a mano (sin ORM) para las entidades de Fase 1: crear, leer y actualizar estado, con conversión desde y hacia los enums de `core`. Tests por entidad.
+Ver PLAN P03.S4 (object store BLAKE3 + zstd).
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

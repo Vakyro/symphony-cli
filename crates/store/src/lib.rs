@@ -6,6 +6,7 @@ use std::path::Path;
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
+pub mod repo;
 mod writer;
 pub use writer::{
     BATCH_MAX, NewEvent, WriteFn, Writer, WriterClosed, WriterHandle, WriterStats, open_reader,

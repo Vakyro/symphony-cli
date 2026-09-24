@@ -23,6 +23,13 @@
 - **Archivos clave:** `crates/store/src/writer.rs`, `crates/store/tests/writer.rs`
 - **Cómo se verificó:** 4 productores × 2 500 = **10 000 eventos en ~0.5 s**, 0 fallidos, **orden por productor conservado**, en lotes (menos lotes que eventos). Un lector consulta sin parar durante toda la escritura **sin ningún error** (0 `SQLITE_BUSY`). Un evento con FK rota no tira su lote (9/1). Closure con error → rollback y error al que llamó. `cargo xtask check` → 59 passed.
 
+### P03.S3 · Repositorios — ✅ (núcleo del ciclo de vida)
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony_store::repo` con SQL a mano (sin ORM) para projects, sessions, tasks, agents, worktrees, providers, models y agent_runs. Lectura de enums e IDs de `core` con `FromStr` (`col`/`opt_col`). `set_task_status` y `set_agent_state` validan la transición con `core` y dejan el estado igual si es inválida; los estados de espera exigen `state_reason` (FLOW §7). `open_run`/`close_run`/`current_run`: el modelo actual sale del run abierto (AGENT ≠ MODEL). `RepoError` se convierte a `rusqlite::Error` para usarlo dentro de `WriterHandle::write`.
+- **Archivos clave:** `crates/store/src/repo.rs`, `crates/store/tests/repo.rs`
+- **Cómo se verificó:** 8 tests de repositorio (uno por entidad + failover de run + uso vía writer); `cargo xtask check` → 67 passed.
+- **Pendiente:** repos de `executor_changes`, `messages`, `provider_failures`, `tool_calls`, `checkpoints`, `checkpoint_refs`, `handoffs` y `recovery_items` se escriben en la fase que los consume (P05–P06; P07 para recovery). `blobs`/`context_objects` en P03.S4.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -37,6 +44,7 @@
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
+| PLAN P03.S3 | Repos para "las entidades de Fase 1" | Solo el núcleo del ciclo de vida (8 de 19 tablas) | YAGNI: el resto se escribe con sus consumidores, así su API sale de un uso real |
 | DB §3 | FKs a `milestones`, `profiles`, `provider_accounts`, `routing_decisions` | Columnas nullable **sin FK** en 001 | Esas tablas son de Fase 2 y 4; su migración agrega la FK (lo pide PLAN P03.S1) |
 | DB §1 (convenciones) | Booleanos `INTEGER 0/1`, confianza de 0 a 1 | `CHECK (x IN (0,1))` y `CHECK (confidence BETWEEN 0 AND 1)` | Hace cumplir la convención en la base |
 | DB §1 | Tipos `TEXT`, `INTEGER`, `REAL` | Tablas `STRICT` | SQLite rechaza tipos equivocados en lugar de convertirlos en silencio |
