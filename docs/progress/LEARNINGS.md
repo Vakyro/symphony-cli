@@ -71,3 +71,8 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **En scripts de verificación usa `set -o pipefail`:** `cargo deny check | tail -1` devuelve 0 aunque deny falle.
 - **`allow-unwrap-in-tests` de clippy solo cubre funciones `#[test]`**, no los helpers de `tests/*.rs`. Esos archivos llevan `#![allow(clippy::unwrap_used, clippy::expect_used)]`.
 - **En `ulid` 3, `Ulid::new()` pasó a llamarse `Ulid::generate()`.**
+- **macOS no soporta `fchmod` en sockets:** `interprocess` `ListenerOptionsExt::mode` devuelve `Unsupported`. La garantía es el directorio `0700`.
+- **`sun_path` es de 104 bytes en macOS:** el `$TMPDIR` del runner (`/var/folders/…`) lo supera. Hay fallback a `/tmp/symphony-<hash>/`, verificando dueño y permisos.
+- **`Path::starts_with` compara componentes, no texto:** `"/tmp/symphony-abc".starts_with("/tmp/symphony-")` es `false`.
+- **nextest corta en la primera falla (fail-fast):** que un test no aparezca en el log de CI no significa que pasó.
+- **H4 en la práctica:** el daemon lanzado por el CLI heredaba el pipe de stdout de quien lanzó al CLI, y `trycmd` esperaba para siempre. Solución: `SetHandleInformation(…, HANDLE_FLAG_INHERIT, 0)` sobre los std handles propios antes del spawn (`crates/cli/src/client.rs`).

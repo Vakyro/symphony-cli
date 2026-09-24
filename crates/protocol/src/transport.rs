@@ -1,6 +1,7 @@
 //! Transporte local entre `symphony` y `symphonyd` (STACK §6.1, §47).
 //!
-//! - Unix: socket de archivo `0600` en `<home>/run/` (`0700`). Si esa ruta no
+//! - Unix: socket dentro de `<home>/run/` (`0700`: esa es la garantía; el `0600` del
+//!   socket se agrega donde el SO lo permite — macOS no). Si esa ruta no
 //!   entra en `sun_path` (104 bytes en macOS), se usa `/tmp/symphony-<hash>/`,
 //!   verificando que sea un directorio propio y privado. No se usa el namespace
 //!   abstracto de Linux: no tiene permisos.
@@ -99,6 +100,7 @@ pub fn listen(home: &Path) -> io::Result<LocalListener> {
     let options = ListenerOptions::new().name(endpoint(home)?);
     #[cfg(unix)]
     let options = {
+        #[cfg(not(target_os = "macos"))]
         use interprocess::os::unix::local_socket::ListenerOptionsExt;
         let run = run_dir(home);
         std::fs::create_dir_all(&run)?;
@@ -106,7 +108,10 @@ pub fn listen(home: &Path) -> io::Result<LocalListener> {
         if let Some(dir) = socket_path(home).parent().filter(|d| *d != run) {
             private_dir(dir, &run)?;
         }
-        options.mode(0o600).try_overwrite(true)
+        // macOS no soporta fchmod en sockets (Unsupported); ahí basta el directorio 0700.
+        #[cfg(not(target_os = "macos"))]
+        let options = options.mode(0o600);
+        options.try_overwrite(true)
     };
     #[cfg(windows)]
     let options = {
@@ -151,7 +156,7 @@ mod tests {
         assert_eq!(short, Path::new("/home/leo/.symphony/run/symphonyd.sock"));
         let long_home = PathBuf::from("/var/folders").join("x".repeat(120));
         let fallback = socket_path(&long_home);
-        assert!(fallback.starts_with("/tmp/symphony-"));
+        assert!(fallback.to_string_lossy().starts_with("/tmp/symphony-"));
         assert!(fallback.as_os_str().len() <= MAX_SOCKET_PATH);
     }
 }
