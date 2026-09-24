@@ -7,3 +7,4 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-09-24 · claude-code/opus-5.5 · cierre · P00 completa (S1–S9), tag p00-done. Rust + workload C++ de VS instalados. Pendiente: remoto para la CI y permiso para P01
 - 2026-09-24 · claude-code/opus-5.5 · cierre · P01 completa (Tests A–D, gate ProcessKit, ADRs 0002–0005 aceptados), tag p01-done. Inicio P02
 - 2026-09-24 · claude-code/opus-5.5 · cierre · P02 completa (protocol, core, config, logging, symphonyd, CLI, E2E; revisión de seguridad sin hallazgos), tag p02-done. Inicio P03
+- 2026-09-24 · claude-code/opus-5.5 · cierre · P03 completa (migración 001, writer único, repos, object store, recuperación al arrancar, benchmarks), tag p03-done. Inicio P04

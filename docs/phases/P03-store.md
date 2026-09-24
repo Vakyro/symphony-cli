@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA |
 | Rama | phase/p03-store |
-| Inicio / cierre | 2026-09-24 / — |
+| Inicio / cierre | 2026-09-24 / 2026-09-24 |
 | Agentes que trabajaron | claude-code/opus-5.5 |
-| Tag | — |
+| Tag | p03-done |
 | Docs usados | DB §1, §3 (A, B, C, D, F, G, I), §5, §6, §7; STACK §9, §10 |
 
 ## Pasos
@@ -48,9 +48,19 @@
 - **Qué se hizo:** `crates/store/benches/store.rs` (Criterion). Inserción de eventos de punta a punta por el `Writer` (spawn del hilo, envío por canal, lotes, `flush`) y la consulta de Home (`repo::home_rows`, nueva) con 50 agentes vivos, cada uno con su run abierto, y 100k eventos en la base.
 - **Cómo se verificó:** `cargo bench -p symphony-store --bench store` en la laptop de Leo (i7-8650U, Windows 11, SSD).
 
+### P03.S7 · Cierre — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** revisión del diff (sin `unwrap`/`expect`/`todo!` en runtime; SQL con parámetros; el object store valida el hash antes de construir rutas). Merge a `main` y tag `p03-done`.
+
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
+| Migración 001 idéntica a DB (19 tablas, CHECKs, FKs, índices parciales) | `crates/store/src/tests.rs` | ✅ |
+| Un solo escritor con concurrencia | 4 × 2 500 eventos, lector en paralelo | ✅ 0 errores, orden conservado |
+| Object store atómico, con dedupe e integridad | `crates/object-store/tests` | ✅ |
+| Recuperación de sesiones al arrancar | test con el binario real | ✅ |
+| AGENT ≠ MODEL en el esquema y en los repos | tests de esquema y de failover de runs | ✅ |
 
 ### Arreglo: carrera stop → autoarranque (P03.S5)
 - La CI de macOS mostró que `daemon stop` daba por detenido al daemon cuando desaparecía su socket, pero el proceso seguía cerrando la base con el lock tomado; el siguiente autoarranque fallaba con "ya hay un daemon". Ahora `stop` espera a que se libere el **lock de instancia** y el autoarranque (`ensure_running`) espera a que el socket conteste o el lock quede libre antes de lanzar otro daemon.
@@ -92,10 +102,12 @@ DB §7 asumía unos 50 eventos cada 100 ms (≈500/s): hay más de 100× de marg
 (benchmarks, tiempos, RAM, cobertura — con comando)
 
 ## Pruebas
-- Comando(s): …
+- Comando(s): `cargo xtask check`, `cargo deny check`, `cargo bench -p symphony-store --bench store`, CI en 3 OS
+- Totales: 74 passed, 0 failed
 - Totales: N passed, M failed (cuáles y por qué)
 
 ## Estado final
+Persistencia lista: SQLite con las 19 tablas de Fase 1 copiadas de DB, un solo escritor en su propio hilo (~60k eventos/s), lectores de solo lectura, repositorios del ciclo de vida con transiciones validadas por `core`, object store BLAKE3 + zstd atómico con GC, y recuperación de sesiones interrumpidas al arrancar el daemon. De paso se arregló una carrera real entre `stop` y el autoarranque (el lock de instancia es la señal de "daemon terminado").
 Resumen de 3–5 líneas para Leo.
 
 ## Notas para el siguiente agente

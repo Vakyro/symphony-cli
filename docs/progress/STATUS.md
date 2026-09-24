@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
-**Fase actual:** P03 · Persistencia (rama `phase/p03-store`)
-**Paso actual:** P03.S7 · Cierre
+**Fase actual:** P04 · Git, worktrees y procesos (rama `phase/p04-git-process`)
+**Paso actual:** P04.S1 · Crate `git`
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
@@ -13,17 +13,11 @@
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
-- [x] P03.S1 Crate `store` y migración 001
-- [x] P03.S2 Store writer
-- [x] P03.S3 Repositorios
-- [x] P03.S4 Crate `object-store`
-- [x] P03.S5 Recuperación al arrancar
-- [x] P03.S6 Benchmarks
-- [ ] P03.S7 Cierre   ← aquí
-- (resto de P03 en PLAN.md)
+- [ ] P04.S1 Crate `git`   ← aquí
+- (resto de P04 en PLAN.md)
 
 ## Próxima acción concreta
-Cierre de P03: revisión del diff, merge a `main`, tag `p03-done`.
+Wrapper del CLI de Git: `worktree add/list/remove`, ramas `symphony/<session>/agent-NNN`, `status --porcelain=v2 -z`, `diff --no-ext-diff` + numstat, commit actual y preflight de merge. Tests con repos temporales, incluidas rutas con espacios.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
@@ -36,7 +30,8 @@ Cierre de P03: revisión del diff, merge a `main`, tag `p03-done`.
 - (ninguno)
 
 ## Pendientes arrastrados
-- P05: verificar que el servidor del named pipe pertenece al usuario actual antes de mandar datos sensibles (ver bitácora P02.S8).
+- P05: verificar que el servidor del named pipe pertenece al usuario actual antes de mandar datos sensibles (bitácora P02.S8).
+- P05–P07: repositorios de executor_changes, messages, provider_failures, tool_calls, checkpoints, checkpoint_refs, handoffs y recovery_items (bitácora P03.S3).
 
 ## Fases
 | Fase | Estado | Tag |
@@ -44,5 +39,6 @@ Cierre de P03: revisión del diff, merge a `main`, tag `p03-done`.
 | P00 | ✅ | p00-done |
 | P01 | ✅ | p01-done |
 | P02 | ✅ | p02-done |
-| P03 | 🟡 en curso | |
-| P04–P16 | ⏳ (P08–P16 provisionales hasta P07.S10) | |
+| P03 | ✅ | p03-done |
+| P04 | 🟡 en curso | |
+| P05–P16 | ⏳ (P08–P16 provisionales hasta P07.S10) | |
