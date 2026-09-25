@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P06 · Agent runtime, checkpoints y handoff (rama `phase/p06-runtime`)
-**Paso actual:** P06.S3 · Checkpoints incrementales
+**Paso actual:** P06.S4 · Handoff v1
 **Estado del paso:** PENDIENTE
 **En curso por:** —
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (144 tests)
+- `cargo xtask check`: ✅ (149 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -15,11 +15,12 @@
 ## Progreso de la fase actual
 - [x] P06.S1 Ciclo de vida del agente
 - [x] P06.S2 Mensajes y tool calls
-- [ ] P06.S3 Checkpoints incrementales   ← aquí
+- [x] P06.S3 Checkpoints incrementales
+- [ ] P06.S4 Handoff v1   ← aquí
 - (resto de P06 en PLAN.md)
 
 ## Próxima acción concreta
-Checkpoint incremental en cada evento significativo (archivo modificado, comando terminado, fin de turno) con `plan_tail`, `current_step`, `next_step`, `head_commit`, `diff_object_id` y `summary_json`; conservar los últimos N más los usados en handoffs. Proptest: checkpoints monótonos por `seq` y sin objetos inexistentes.
+Prompt de arranque armado desde el checkpoint (objetivo, plan vigente, diff, fallos recientes, archivos tocados) con plantilla fija; guardar `handoffs` con `tokens_sent` estimados y `outcome`. Snapshot `insta` del prompt para un checkpoint fijo.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

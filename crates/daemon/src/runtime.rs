@@ -173,11 +173,12 @@ impl Runtime {
             .cloned()
     }
 
-    /// Espera a que terminen los executors lanzados (apagado y tests).
+    /// Espera a que terminen los executors lanzados y sus checkpoints (apagado y tests).
     pub async fn wait_executors(&self) {
         self.pumps.close();
         self.pumps.wait().await;
         self.pumps.reopen();
+        self.bus.checkpoints_idle().await;
     }
 
     /// FLOW §6: task + agente + worktree + checkpoint inicial → run con el modelo exacto.
@@ -362,11 +363,14 @@ impl Runtime {
                 agent_id,
                 run_id,
                 objective: objective.clone(),
+                plan_tail: None,
+                current_step: None,
                 next_step: Some("Empezar la tarea".into()),
                 head_commit: Some(base.clone()),
                 summary_json: Some(
                     serde_json::json!({"files_touched": [], "last_command": null}).to_string(),
                 ),
+                diff_object_id: None,
             },
             run: run_id.zip(
                 executor

@@ -178,6 +178,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     {
         tracing::warn!("había conexiones abiertas al apagar; se cierran");
     }
+    state.bus.checkpoints_idle().await;
     drop(listener);
     transport::cleanup(home);
     writer.shutdown();

@@ -727,14 +727,18 @@ pub fn ready_providers(conn: &Connection) -> Result<Vec<String>, RepoError> {
 
 // --- checkpoints ------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct NewCheckpoint {
     pub id: symphony_core::CheckpointId,
     pub agent_id: AgentId,
     pub run_id: Option<RunId>,
     pub objective: String,
+    /// Cola del último mensaje del asistente: el "qué seguía" (LEARNINGS H1).
+    pub plan_tail: Option<String>,
+    pub current_step: Option<String>,
     pub next_step: Option<String>,
     pub head_commit: Option<String>,
+    pub diff_object_id: Option<symphony_core::ContextObjectId>,
     pub summary_json: Option<String>,
 }
 
@@ -746,21 +750,140 @@ pub fn insert_checkpoint(conn: &Connection, c: &NewCheckpoint, now: i64) -> Resu
         |r| r.get(0),
     )?;
     conn.execute(
-        "INSERT INTO checkpoints (id, agent_id, run_id, seq, objective, next_step, head_commit, summary_json, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO checkpoints (id, agent_id, run_id, seq, objective, plan_tail, current_step, next_step,
+                                  head_commit, diff_object_id, summary_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             c.id.to_string(),
             c.agent_id.to_string(),
             c.run_id.map(|r| r.to_string()),
             seq,
             c.objective,
+            c.plan_tail,
+            c.current_step,
             c.next_step,
             c.head_commit,
+            c.diff_object_id.map(|o| o.to_string()),
             c.summary_json,
             now
         ],
     )?;
+    if let Some(object) = c.diff_object_id {
+        conn.execute(
+            "INSERT INTO checkpoint_refs (checkpoint_id, object_id, role) VALUES (?1, ?2, 'DIFF')",
+            params![c.id.to_string(), object.to_string()],
+        )?;
+    }
     Ok(seq)
+}
+
+/// Lo que el checkpointer necesita saber de un agente para tomar un checkpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointBase {
+    pub project_id: ProjectId,
+    pub worktree_path: String,
+    pub base_ref: String,
+    pub objective: String,
+    pub next_step: Option<String>,
+    pub open_run: Option<RunId>,
+}
+
+/// `None` si el agente no existe, no tiene worktree o todavía no tiene checkpoint inicial.
+pub fn checkpoint_base(
+    conn: &Connection,
+    agent: AgentId,
+) -> Result<Option<CheckpointBase>, RepoError> {
+    Ok(conn
+        .query_row(
+            "SELECT a.project_id, w.path, w.base_ref, c.objective, c.next_step,
+                    (SELECT r.id FROM agent_runs r WHERE r.agent_id = a.id AND r.ended_at IS NULL)
+             FROM agents a
+             JOIN worktrees w ON w.id = a.worktree_id
+             JOIN checkpoints c ON c.agent_id = a.id
+             WHERE a.id = ?1 ORDER BY c.seq DESC LIMIT 1",
+            [agent.to_string()],
+            |r| {
+                Ok(CheckpointBase {
+                    project_id: col(r, 0)?,
+                    worktree_path: r.get(1)?,
+                    base_ref: r.get(2)?,
+                    objective: r.get(3)?,
+                    next_step: r.get(4)?,
+                    open_run: opt_col(r, 5)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Objeto `GIT_DIFF` del agente para ese blob: reutiliza el que ya existe (mismo diff,
+/// otro checkpoint) o lo crea. Devuelve `(id, creado)`; si se creó, el llamador suma la ref del blob.
+pub fn diff_object(
+    conn: &Connection,
+    project: ProjectId,
+    agent: AgentId,
+    run: Option<RunId>,
+    blob_hash: &str,
+    now: i64,
+) -> Result<(symphony_core::ContextObjectId, bool), RepoError> {
+    let uri = format!("ctx://diff/{agent}/{blob_hash}");
+    let existing: Option<symphony_core::ContextObjectId> = conn
+        .query_row(
+            "SELECT id FROM context_objects WHERE uri = ?1",
+            [&uri],
+            |r| col(r, 0),
+        )
+        .optional()?;
+    if let Some(id) = existing {
+        return Ok((id, false));
+    }
+    let id = symphony_core::ContextObjectId::new();
+    insert_context_object(
+        conn,
+        id,
+        &uri,
+        project,
+        Some(agent),
+        run,
+        "GIT_DIFF",
+        blob_hash,
+        now,
+    )?;
+    Ok((id, true))
+}
+
+/// Conserva los últimos `keep` checkpoints del agente más los que usan handoffs, runs
+/// o cambios de executor (IDEA §5.5, DB §3.G). Borra los diffs que quedaron sin uso y
+/// devuelve sus blobs para que el llamador suelte la referencia.
+pub fn prune_checkpoints(
+    conn: &Connection,
+    agent: AgentId,
+    keep: usize,
+) -> Result<Vec<String>, RepoError> {
+    let agent = agent.to_string();
+    let keep = i64::try_from(keep).unwrap_or(i64::MAX);
+    let doomed = "SELECT id FROM checkpoints c WHERE c.agent_id = ?1
+        AND c.seq <= (SELECT MAX(seq) FROM checkpoints WHERE agent_id = ?1) - ?2
+        AND NOT EXISTS (SELECT 1 FROM handoffs h WHERE h.checkpoint_id = c.id)
+        AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.start_checkpoint_id = c.id)
+        AND NOT EXISTS (SELECT 1 FROM executor_changes x WHERE x.checkpoint_id = c.id)";
+    conn.execute(
+        &format!("DELETE FROM checkpoint_refs WHERE checkpoint_id IN ({doomed})"),
+        params![agent, keep],
+    )?;
+    conn.execute(
+        &format!("DELETE FROM checkpoints WHERE id IN ({doomed})"),
+        params![agent, keep],
+    )?;
+    let orphans = "FROM context_objects AS o WHERE o.agent_id = ?1 AND o.kind = 'GIT_DIFF'
+        AND NOT EXISTS (SELECT 1 FROM checkpoint_refs r WHERE r.object_id = o.id)
+        AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.diff_object_id = o.id)";
+    let hashes: Vec<String> = conn
+        .prepare(&format!("SELECT o.blob_hash {orphans}"))?
+        .query_map([&agent], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    conn.execute(&format!("DELETE {orphans}"), [&agent])?;
+    Ok(hashes)
 }
 
 // --- conversación y tool calls ----------------------------------------------

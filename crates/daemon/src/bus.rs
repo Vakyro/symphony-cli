@@ -13,6 +13,7 @@ use symphony_adapter_common::AgentEvent;
 use symphony_store::{NewEvent, WriterClosed, WriterHandle};
 use tokio::sync::{broadcast, watch};
 
+use crate::checkpoint::Checkpointer;
 use crate::recorder::Recorder;
 use symphony_object_store::ObjectStore;
 
@@ -64,6 +65,7 @@ pub type BusState = HashMap<String, AgentSnapshot>;
 pub struct EventBus {
     writer: WriterHandle,
     recorder: Arc<Recorder>,
+    checkpoints: Checkpointer,
     tui: broadcast::Sender<Arc<BusEvent>>,
     state: Arc<watch::Sender<BusState>>,
 }
@@ -73,9 +75,12 @@ impl EventBus {
     pub fn new(writer: WriterHandle, tui_capacity: usize, objects: ObjectStore) -> Self {
         let (tui, _) = broadcast::channel(tui_capacity.max(1));
         let (state, _) = watch::channel(BusState::new());
+        let checkpoints =
+            Checkpointer::start(writer.clone(), objects.clone(), crate::checkpoint::KEEP);
         Self {
             writer,
             recorder: Arc::new(Recorder::new(objects)),
+            checkpoints,
             tui,
             state: Arc::new(state),
         }
@@ -104,6 +109,7 @@ impl EventBus {
                 }
             }
         }
+        self.checkpoints.observe(&ev);
         if let Some(agent) = &ev.agent_id {
             let (name, at) = (ev.event.type_name(), ev.occurred_at);
             self.state.send_modify(|s| {
@@ -116,6 +122,11 @@ impl EventBus {
         // Sin suscriptores, send falla: no es un error.
         let _ = self.tui.send(Arc::new(ev));
         Ok(())
+    }
+
+    /// Espera a que se tomen los checkpoints pedidos hasta ahora (apagado y tests).
+    pub async fn checkpoints_idle(&self) {
+        self.checkpoints.idle().await;
     }
 
     /// El run terminó: suelta su estado de deduplicación.

@@ -59,6 +59,7 @@ struct Env {
     repo: PathBuf,
     db: PathBuf,
     writer: Writer,
+    bus: EventBus,
     runtime: Runtime,
 }
 
@@ -87,11 +88,12 @@ async fn env(script: &str, binary: Option<PathBuf>) -> Env {
         .await
         .unwrap();
     let used = FakeAdapter::new(binary.unwrap_or_else(fake_agent), &script_path);
+    let bus = EventBus::new(writer.handle(), 64, ObjectStore::new(home.join("objects")));
     let runtime = Runtime::new(
         &home,
         writer.handle(),
         writer.reader().unwrap(),
-        EventBus::new(writer.handle(), 64, ObjectStore::new(home.join("objects"))),
+        bus.clone(),
         vec![Arc::new(used)],
         None,
     );
@@ -101,6 +103,7 @@ async fn env(script: &str, binary: Option<PathBuf>) -> Env {
         repo,
         db,
         writer,
+        bus,
         runtime,
     }
 }
@@ -215,7 +218,7 @@ async fn exact_model_creates_everything_and_runs_the_executor() {
     // Checkpoint inicial: objetivo y commit base.
     assert_eq!(
         q(
-            "SELECT seq || '|' || objective || '|' || head_commit FROM checkpoints WHERE agent_id='{a}'"
+            "SELECT seq || '|' || objective || '|' || head_commit FROM checkpoints WHERE agent_id='{a}' AND seq = 1"
         ),
         format!("1|Arreglar la rotación de tokens|{base}")
     );
@@ -636,4 +639,329 @@ text = "{long}"
     );
     assert_eq!((calls[0].4, calls[1].4), (2, 1));
     e.writer.shutdown();
+}
+
+// --- P06.S3: checkpoints incrementales --------------------------------------
+
+type CkRow = (
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    String,
+);
+
+/// (seq, plan_tail, current_step, next_step, head_commit, diff_object_id, summary_json), por seq.
+fn checkpoints_of(e: &Env, agent: &str) -> Vec<CkRow> {
+    symphony_store::open_reader(&e.db)
+        .unwrap()
+        .prepare(
+            "SELECT seq, plan_tail, current_step, next_step, head_commit, diff_object_id, summary_json
+             FROM checkpoints WHERE agent_id = ?1 ORDER BY seq",
+        )
+        .unwrap()
+        .query_map([agent], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+fn diff_text(e: &Env, object: &str) -> String {
+    let hash: String = one(
+        e,
+        &format!("SELECT blob_hash FROM context_objects WHERE id = '{object}'"),
+    );
+    let bytes = ObjectStore::new(e.home.join("objects")).get(&hash).unwrap();
+    String::from_utf8(bytes).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_leaves_an_up_to_date_checkpoint() {
+    let script = r#"
+[[step]]
+kind = "say"
+text = "Plan:\n- [x] leer\n- [ ] correr los tests de auth\nToken de prueba: Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123"
+
+[[step]]
+kind = "edit"
+path = "README.md"
+content = "demo\narreglado\n"
+
+[[step]]
+kind = "edit"
+path = "src/nuevo.txt"
+content = "nuevo\n"
+
+[[step]]
+kind = "run"
+command = ["git", "no-such-subcommand"]
+"#;
+    let e = env(script, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Arreglar auth",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let id = created.agent_id.to_string();
+    let rows = checkpoints_of(&e, &id);
+    assert!(rows.len() >= 2, "hubo checkpoints incrementales: {rows:?}");
+    let seqs: Vec<i64> = rows.iter().map(|r| r.0).collect();
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
+
+    let (_, plan_tail, current, next, head, diff, summary) = rows.last().unwrap().clone();
+    let base = git(&e.repo, &["rev-parse", "HEAD"]);
+    assert_eq!(head, base);
+    assert_eq!(next.as_deref(), Some("correr los tests de auth"));
+    let plan_tail = plan_tail.unwrap();
+    assert!(
+        plan_tail.contains("correr los tests de auth"),
+        "{plan_tail}"
+    );
+    assert!(
+        !plan_tail.contains("sk-ant-api03"),
+        "plan sin redactar: {plan_tail}"
+    );
+    assert_eq!(current.as_deref(), Some("Bash: git no-such-subcommand"));
+    let diff = diff_text(&e, &diff.unwrap());
+    assert!(diff.contains("+arreglado"), "{diff}");
+    let summary: serde_json::Value = serde_json::from_str(&summary).unwrap();
+    let files: Vec<&str> = summary["files_touched"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(files, ["README.md", "src/nuevo.txt"], "{summary}");
+    assert_eq!(summary["files_touched"][1]["untracked"], true);
+    assert_eq!(summary["commands_run"], 1);
+    assert_eq!(summary["last_command"]["ok"], false);
+    let failure = summary["failures"][0].as_str().unwrap();
+    assert!(
+        failure.starts_with("`git no-such-subcommand` falló"),
+        "{failure}"
+    );
+    e.writer.shutdown();
+}
+
+#[derive(Debug, Clone)]
+enum Op {
+    /// Escribe `content` en uno de 3 archivos (el 0 es el README versionado) y avisa la edición.
+    Edit {
+        file: usize,
+        content: u8,
+    },
+    Say {
+        next: bool,
+    },
+    Command {
+        ok: bool,
+    },
+    Turn,
+    /// Evento que no amerita checkpoint.
+    Noise,
+}
+
+fn op() -> impl proptest::strategy::Strategy<Value = Op> {
+    use proptest::prelude::*;
+    prop_oneof![
+        3 => (0..3usize, 0..3u8).prop_map(|(file, content)| Op::Edit { file, content }),
+        1 => any::<bool>().prop_map(|next| Op::Say { next }),
+        2 => any::<bool>().prop_map(|ok| Op::Command { ok }),
+        1 => Just(Op::Turn),
+        1 => Just(Op::Noise),
+    ]
+}
+
+/// 50 eventos → checkpoints monótonos por `seq`, ninguno referencia objetos
+/// inexistentes, refs de blobs coherentes y retención de los usados en handoffs.
+async fn run_checkpoint_case(ops: Vec<Op>) {
+    use symphony_adapter_common::{AgentEvent, ToolKind};
+    use symphony_daemon::bus::{BusEvent, EventSource};
+    use symphony_daemon::checkpoint::KEEP;
+
+    let e = env(WORK, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Propiedad", Execution::DecideLater))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    let run = symphony_core::RunId::new().to_string();
+    // Un run y un handoff que usa el checkpoint inicial: no se puede podar.
+    symphony_store::open(&e.db)
+        .unwrap()
+        .execute_batch(&format!(
+            "INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, started_at)
+                 VALUES ('{run}','{agent}',1,'fake','fake/fast','RUNNING',0);
+             INSERT INTO handoffs (id, agent_id, checkpoint_id, to_run_id, mode, created_at)
+                 SELECT 'h1', agent_id, id, '{run}', 'BALANCED', 0 FROM checkpoints WHERE agent_id='{agent}';"
+        ))
+        .unwrap();
+    let project: String = one(&e, "SELECT id FROM projects");
+    let files = ["README.md", "a.txt", "dir/b.txt"];
+    let publish = |event| {
+        e.bus.publish(BusEvent {
+            project_id: project.clone(),
+            agent_id: Some(agent.clone()),
+            run_id: Some(run.clone()),
+            source: EventSource::Hook,
+            event,
+            occurred_at: 1,
+        })
+    };
+    let mut significant = 0;
+    for op in &ops {
+        let events = match op {
+            Op::Edit { file, content } => {
+                let path = created.worktree.join(files[*file]);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                // content 0 en el README = contenido original (diff vacío si no hay más cambios).
+                let text = if *content == 0 && *file == 0 {
+                    "demo\n".to_string()
+                } else {
+                    format!("v{content}\n")
+                };
+                std::fs::write(&path, text).unwrap();
+                vec![AgentEvent::FileModified {
+                    tool: "Write".into(),
+                    path: Some(files[*file].into()),
+                }]
+            }
+            Op::Say { next } => vec![AgentEvent::AssistantText {
+                text: if *next {
+                    "Siguiente: seguir".into()
+                } else {
+                    "pensando".into()
+                },
+            }],
+            Op::Command { ok } => vec![
+                AgentEvent::ToolRequested {
+                    tool_use_id: None,
+                    tool: "Bash".into(),
+                    kind: ToolKind::Command,
+                    command: Some("npm test".into()),
+                },
+                AgentEvent::ToolFinished {
+                    tool_use_id: None,
+                    tool: "Bash".into(),
+                    kind: ToolKind::Command,
+                    ok: *ok,
+                    exit_code: Some(i32::from(!ok)),
+                },
+            ],
+            Op::Turn => vec![AgentEvent::TurnFinished { last_message: None }],
+            Op::Noise => vec![AgentEvent::TurnStarted],
+        };
+        for event in events {
+            if matches!(
+                event,
+                AgentEvent::FileModified { .. }
+                    | AgentEvent::ToolFinished { .. }
+                    | AgentEvent::TurnFinished { .. }
+            ) {
+                significant += 1;
+            }
+            publish(event).await.unwrap();
+            // Sin agrupar: un checkpoint por evento significativo, para contar exacto.
+            e.bus.checkpoints_idle().await;
+        }
+    }
+    e.writer.handle().flush().await.unwrap();
+
+    let rows = checkpoints_of(&e, &agent);
+    let seqs: Vec<i64> = rows.iter().map(|r| r.0).collect();
+    let created_total = 1 + significant;
+    assert_eq!(*seqs.last().unwrap(), created_total, "{seqs:?}");
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
+    assert_eq!(seqs[0], 1, "el checkpoint del handoff se conserva");
+    let expected = if created_total <= KEEP as i64 {
+        created_total
+    } else {
+        KEEP as i64 + 1
+    };
+    assert_eq!(rows.len() as i64, expected, "{seqs:?}");
+
+    // Ningún checkpoint referencia objetos inexistentes; refs de blobs coherentes.
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let dangling: i64 = conn
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM checkpoints c WHERE c.diff_object_id IS NOT NULL
+                       AND NOT EXISTS (SELECT 1 FROM context_objects o WHERE o.id = c.diff_object_id))
+                  + (SELECT COUNT(*) FROM checkpoint_refs r
+                       WHERE NOT EXISTS (SELECT 1 FROM context_objects o WHERE o.id = r.object_id))
+                  + (SELECT COUNT(*) FROM context_objects o
+                       WHERE NOT EXISTS (SELECT 1 FROM blobs b WHERE b.hash = o.blob_hash))",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dangling, 0);
+    let orphans: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM context_objects o WHERE o.kind = 'GIT_DIFF'
+             AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.diff_object_id = o.id)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(orphans, 0, "diffs sin checkpoint quedaron sin podar");
+    let bad_refs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM blobs b WHERE b.ref_count <>
+                 (SELECT COUNT(*) FROM context_objects o WHERE o.blob_hash = b.hash)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(bad_refs, 0, "ref_count de blobs incoherente");
+    let store = ObjectStore::new(e.home.join("objects"));
+    for (_, _, _, _, _, diff, _) in &rows {
+        if let Some(object) = diff {
+            let hash: String = one(
+                &e,
+                &format!("SELECT blob_hash FROM context_objects WHERE id = '{object}'"),
+            );
+            store.get(&hash).unwrap();
+        }
+    }
+    // El último checkpoint refleja el diff real del worktree.
+    let real = git(
+        &created.worktree,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            &git(&e.repo, &["rev-parse", "HEAD"]),
+        ],
+    );
+    let last = rows.last().unwrap();
+    if created_total > 1 {
+        match &last.5 {
+            Some(object) => assert_eq!(diff_text(&e, object).trim_end(), real),
+            None => assert_eq!(real, ""),
+        }
+    }
+    e.writer.shutdown();
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig { cases: 4, ..Default::default() })]
+    #[test]
+    fn checkpoints_stay_monotonic_and_consistent(ops in proptest::collection::vec(op(), 50)) {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(run_checkpoint_case(ops));
+    }
 }

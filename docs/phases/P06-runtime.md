@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p06-runtime |
 | Inicio / cierre | 2026-09-24 / — |
-| Agentes que trabajaron | claude-code/opus-5.5 (S1–S2) |
+| Agentes que trabajaron | claude-code/opus-5.5 (S1–S3) |
 | Tag | — |
 | Docs usados | FLOW §6, §7, §16; DB §3.C, §3.G, §3.I; IDEA §5.5 |
 
@@ -50,6 +50,35 @@
   - `cwd` y `output_object_id` quedan NULL: la salida de las herramientas va al object store con el context engine (P09).
   - fake-agent ahora genera un `tool_use_id` único con un contador; antes, dos herramientas en el mismo milisegundo compartían id.
 
+### P06.S3 · Checkpoints incrementales — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony_daemon::checkpoint::Checkpointer`, dentro del `EventBus`.
+  - **En el camino del bus** solo acumula en memoria, por agente: último mensaje del asistente, paso actual, siguiente paso, último comando, cantidad de comandos y los últimos 5 fallos. No toca git, así que un hook nunca espera.
+  - **Qué dispara un checkpoint:** un archivo modificado, una herramienta terminada o un fin de turno.
+  - **El worker** toma la foto de git del worktree: HEAD, `git diff <base>` redactado y archivos tocados (numstat + untracked). Después escribe una transacción con:
+    - el blob del diff (reutiliza el `GIT_DIFF` si el diff no cambió);
+    - el checkpoint con `plan_tail`, `current_step`, `next_step`, `head_commit`, `diff_object_id` y `summary_json`;
+    - `checkpoint_refs(DIFF)`;
+    - la poda: quedan los últimos 20 más los usados por handoffs, runs o executor changes. Los diffs que se quedan sin uso se borran y sueltan su ref del blob.
+  - **Agrupación:** varios eventos seguidos del mismo agente producen un solo checkpoint (a lo sumo un trabajo pendiente por agente).
+  - **`next_step`** es determinista: el primer `- [ ]` o una línea `Next:`/`Siguiente:` del último mensaje. Si no hay, se conserva el anterior (LEARNINGS H1).
+  - **`plan_tail`** es la cola (2000 caracteres) del último mensaje del asistente, redactada.
+- **Archivos clave:** `crates/daemon/src/checkpoint.rs`, `crates/daemon/src/bus.rs`, `crates/store/src/repo.rs` (`checkpoint_base`, `diff_object`, `prune_checkpoints`, `insert_checkpoint` con refs), `crates/daemon/tests/runtime.rs`
+- **Cómo se verificó:**
+  - `checkpoints_stay_monotonic_and_consistent` (proptest, 4 casos × 50 eventos, un checkpoint por evento significativo). Comprueba:
+    - `seq` monótonos y cantidad exacta tras la poda;
+    - el checkpoint del handoff se conserva;
+    - ninguna referencia a objetos o blobs inexistentes, ningún diff huérfano;
+    - `ref_count` de los blobs coherente;
+    - el último diff igual al diff real del worktree.
+  - `session_leaves_an_up_to_date_checkpoint`: sesión fake-agent con plan, edición, archivo nuevo y comando que falla.
+  - 3 tests unitarios.
+  - `cargo xtask check` → 149 passed, 1 skipped.
+- **Pendiente / notas:**
+  - `trigger_event_id` queda NULL: los eventos se escriben en lote y el bus no conoce su id.
+  - El conteo de tests en `summary_json` llega con el parser de salidas (P09).
+  - Al reiniciar el daemon se pierde el acumulado en memoria. El último checkpoint guardado sigue siendo válido para el handoff.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -57,6 +86,7 @@
 | Nunca queda un agente "medio roto" | `workspace_failure_…`, `store_failure_after_the_worktree_rolls_it_back` | ✅ |
 | Razón humana en `FAILED` + Recovery | `executor_that_cannot_start_…`, `executor_crash_…` | ✅ |
 | Conversación y tool calls espejadas, sin duplicados, con secretos redactados | `session_mirrors_…`, `duplicates_from_hook_and_stream_…` | ✅ |
+| Checkpoints incrementales monótonos, podados, sin objetos colgantes | proptest `checkpoints_stay_monotonic_and_consistent` | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
@@ -83,7 +113,7 @@
 
 ## Pruebas
 - Comando(s): `cargo xtask check`
-- Totales: 144 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
+- Totales: 149 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
 
 ## Estado final
 (al cerrar)

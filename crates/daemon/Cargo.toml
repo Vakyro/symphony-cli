@@ -35,6 +35,7 @@ tracing-appender.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 symphony-testkit = { path = "../testkit" }
 symphony-store = { path = "../store" }
 tempfile.workspace = true
