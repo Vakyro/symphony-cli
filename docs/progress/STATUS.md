@@ -7,7 +7,7 @@
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (131 tests)
+- `cargo xtask check`: ✅ (133 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -23,7 +23,7 @@
 - (resto de P05 en PLAN.md)
 
 ## Próxima acción concreta
-Con permiso de Leo: una sesión real corta de Claude (haiku) y de Codex (luna) por Symphony → eventos canónicos en `events`. Después: merge, tag `p05-done`.
+Con permiso de Leo: `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --no-capture live_` (Claude haiku + Codex luna, un `git status`). Si pasa: merge a `main`, tag `p05-done`.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

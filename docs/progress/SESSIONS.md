@@ -9,3 +9,4 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-09-24 · claude-code/opus-5.5 · cierre · P02 completa (protocol, core, config, logging, symphonyd, CLI, E2E; revisión de seguridad sin hallazgos), tag p02-done. Inicio P03
 - 2026-09-24 · claude-code/opus-5.5 · cierre · P03 completa (migración 001, writer único, repos, object store, recuperación al arrancar, benchmarks), tag p03-done. Inicio P04
 - 2026-09-24 · claude-code/opus-5.5 · cierre · P04 completa (git, deps, process, ANSI, fake-agent, integración), tag p04-done. Inicio P05
+- 2026-09-24 · claude-code/opus-5.5 · pausa · P05.S7: revisión de seguridad de hooks hecha y corregida; falta la sesión real (permiso de Leo)
