@@ -18,3 +18,4 @@ node_modules/
 
 # Local tool output (not part of the spec)
 graphify-smart-out/
+*.snap.new
