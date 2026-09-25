@@ -170,8 +170,23 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
     let home = home.root();
     match cli.command {
         None => {
-            println!("La TUI de Symphony llega en la versión 0.1 (P07).");
-            println!("Mientras tanto: `symphony status` o `symphony --help`.");
+            use std::io::IsTerminal;
+            if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+                println!(
+                    "`symphony` sin argumentos abre la TUI y necesita una terminal interactiva."
+                );
+                println!("Sin terminal: `symphony status`, `symphony agents` o `symphony --help`.");
+                return Ok(());
+            }
+            let cwd = std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .display()
+                .to_string();
+            let requests = client::connect_or_start(home).await?;
+            let events = client::connect_or_start(home).await?;
+            symphony_tui::run(requests, events, cwd)
+                .await
+                .into_diagnostic()?;
         }
         Some(Cmd::Hook {
             action: HookCmd::Emit,
@@ -213,8 +228,8 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                     "project_root": cwd_str,
                     "model": model,
                     "profile": profile,
-                    "failover": failover,
-                    "context_mode": context_mode,
+                    "failover": db_value(&failover),
+                    "context_mode": db_value(&context_mode),
                     "priority": priority,
                 }),
             )
@@ -499,6 +514,11 @@ fn print_providers(v: &Value) {
     }
 }
 
+/// `same-provider` → `SAME_PROVIDER`: los flags aceptan la forma de CLI, la DB la suya.
+fn db_value(flag: &str) -> String {
+    flag.trim().to_ascii_uppercase().replace('-', "_")
+}
+
 fn human_duration(secs: u64) -> String {
     match secs {
         0..60 => format!("{secs} s"),
@@ -517,6 +537,22 @@ mod tests {
         assert_eq!(human_duration(59), "59 s");
         assert_eq!(human_duration(61), "1 min 1 s");
         assert_eq!(human_duration(3_725), "1 h 2 min");
+    }
+
+    #[test]
+    fn flags_map_to_db_values() {
+        use symphony_core::{ContextMode, FailoverPolicy};
+        for (flag, want) in [
+            ("any", FailoverPolicy::Any),
+            ("same-provider", FailoverPolicy::SameProvider),
+            ("none", FailoverPolicy::None),
+        ] {
+            assert_eq!(db_value(flag).parse::<FailoverPolicy>().ok(), Some(want));
+        }
+        assert_eq!(
+            db_value("balanced").parse::<ContextMode>().ok(),
+            Some(ContextMode::Balanced)
+        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 symphony-core = { path = "../core" }
 symphony-protocol = { path = "../protocol" }
+symphony-tui = { path = "../tui" }
 clap.workspace = true
 miette = { workspace = true, features = ["fancy"] }
 serde_json.workspace = true

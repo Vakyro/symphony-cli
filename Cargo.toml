@@ -6,6 +6,7 @@ members = [
     "crates/context",
     "crates/daemon",
     "crates/cli",
+    "crates/tui",
     "crates/store",
     "crates/object-store",
     "crates/git",
@@ -51,6 +52,7 @@ zstd = "0.14"
 criterion = { version = "0.8.2", default-features = false }
 processkit = { version = "3.3", features = ["limits", "stats"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+ratatui = "0.30.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
