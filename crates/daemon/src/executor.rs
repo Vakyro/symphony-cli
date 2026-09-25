@@ -991,4 +991,208 @@ impl Runtime {
             .await
             .map_err(op_err)
     }
+
+    /// Detiene el agente y su executor (FLOW §7). El agente pasa a `CANCELLED`.
+    pub async fn stop(&self, agent_id: AgentId) -> Result<(), AgentOpError> {
+        let agent = self.read_op(|c| repo::get_agent(c, agent_id))?;
+        if agent.state.is_terminal() {
+            return Ok(());
+        }
+        if self.is_live(agent_id) {
+            self.control(agent_id, |done| Control::Stop {
+                status: RunStatus::Killed,
+                end: RunEndReason::UserStop,
+                done,
+            })
+            .await;
+        }
+        let task_id = agent.task_id;
+        self.writer
+            .write(Box::new(move |t| {
+                let now = now_ms();
+                if let Ok(Some(run)) = repo::current_run(t, agent_id) {
+                    let _ = repo::close_run(
+                        t,
+                        run.id,
+                        RunStatus::Killed,
+                        RunEndReason::UserStop,
+                        None,
+                        now,
+                    );
+                }
+                repo::set_agent_state(t, agent_id, AgentState::Cancelled, None, now)?;
+                repo::set_task_status(t, task_id, TaskStatus::Cancelled, None, now)?;
+                Ok(())
+            }))
+            .await
+            .map_err(op_err)
+    }
+
+    /// Termina forzosamente el executor y el agente (FLOW §7).
+    pub async fn kill(&self, agent_id: AgentId) -> Result<(), AgentOpError> {
+        self.stop(agent_id).await
+    }
+
+    /// Resuelve un agente por ID o número (`1`, `#1`, `agent-1`).
+    pub fn find_agent(
+        &self,
+        ident: &str,
+        project_id: Option<ProjectId>,
+    ) -> Result<repo::Agent, AgentOpError> {
+        self.read_op(|c| repo::find_agent_by_ident(c, project_id, ident))
+    }
+
+    /// Obtiene el diff del worktree del agente contra su commit base (FLOW §7, Changes).
+    pub async fn diff(&self, agent_id: AgentId) -> Result<String, AgentOpError> {
+        let agent = self.read_op(|c| repo::get_agent(c, agent_id))?;
+        let wt_id = agent
+            .worktree_id
+            .ok_or_else(|| AgentOpError("el agente no tiene worktree".into()))?;
+        let wt = self.read_op(|c| repo::get_worktree(c, wt_id))?;
+        let wt_path = PathBuf::from(&wt.path);
+        let base_ref = wt.base_ref.clone();
+        let live_diff = tokio::task::spawn_blocking(move || {
+            if wt_path.exists() {
+                symphony_git::Repo::at(&wt_path).diff(&base_ref).ok()
+            } else {
+                None
+            }
+        })
+        .await
+        .map_err(op_err)?;
+        if let Some(d) = live_diff {
+            return Ok(d);
+        }
+        let cp = self.read_op(|c| repo::latest_checkpoint(c, agent_id))?;
+        if let Some(cp) = cp
+            && let Some(diff_uri) = cp.diff_uri
+            && let Some(hash) = diff_uri.split('/').next_back()
+        {
+            let objects = symphony_object_store::ObjectStore::new(
+                symphony_core::SymphonyHome::at(&self.home).objects_dir(),
+            );
+            if let Ok(bytes) = objects.get(hash) {
+                return Ok(String::from_utf8_lossy(&bytes).into_owned());
+            }
+        }
+        Ok(String::new())
+    }
+
+    /// Obtiene el historial de mensajes de la conversación del agente (FLOW §7, Conversation).
+    pub async fn logs(
+        &self,
+        agent_id: AgentId,
+        limit: Option<usize>,
+    ) -> Result<Vec<(String, String)>, AgentOpError> {
+        let records = self.read_op(|c| repo::agent_messages(c, agent_id, limit))?;
+        let objects = symphony_object_store::ObjectStore::new(
+            symphony_core::SymphonyHome::at(&self.home).objects_dir(),
+        );
+        let mut views = Vec::new();
+        for m in records {
+            let content = if let Some(c) = m.content {
+                c
+            } else if let Some(obj_id) = m.content_object_id {
+                let hash = self.read_op(|c| {
+                    c.query_row(
+                        "SELECT blob_hash FROM context_objects WHERE id = ?1",
+                        [obj_id.to_string()],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .map_err(repo::RepoError::from)
+                })?;
+                objects
+                    .get(&hash)
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_else(|_| "(objeto no disponible)".into())
+            } else {
+                String::new()
+            };
+            views.push((m.role, content));
+        }
+        Ok(views)
+    }
+
+    /// Información detallada del agente para inspección (FLOW §7, Overview / History).
+    pub async fn inspect(&self, agent_id: AgentId) -> Result<serde_json::Value, AgentOpError> {
+        let (agent, task, worktree, active_run, latest_cp, runs) = self.read_op(|c| {
+            let a = repo::get_agent(c, agent_id)?;
+            let t = repo::get_task(c, a.task_id)?;
+            let w = a
+                .worktree_id
+                .map(|wt| repo::get_worktree(c, wt))
+                .transpose()?;
+            let ar = repo::current_run(c, agent_id)?;
+            let cp = repo::latest_checkpoint(c, agent_id)?;
+            let rs = repo::runs_of(c, agent_id)?;
+            Ok((a, t, w, ar, cp, rs))
+        })?;
+        let is_live = self.is_live(agent_id);
+        Ok(serde_json::json!({
+            "agent": {
+                "id": agent.id.to_string(),
+                "number": agent.number,
+                "project_id": agent.project_id.to_string(),
+                "session_id": agent.session_id.to_string(),
+                "state": agent.state.as_str(),
+                "state_reason": agent.state_reason,
+                "execution_mode": agent.execution_mode.as_str(),
+                "requested_model_id": agent.requested_model_id,
+                "requested_profile_id": agent.requested_profile_id,
+                "failover_policy": agent.failover_policy.as_str(),
+                "context_mode": agent.context_mode.as_str(),
+                "priority": agent.priority,
+                "is_live": is_live,
+            },
+            "task": {
+                "id": task.id.to_string(),
+                "code": task.code,
+                "title": task.title,
+                "description": task.description,
+                "status": task.status.as_str(),
+                "status_reason": task.status_reason,
+                "priority": task.priority,
+            },
+            "worktree": worktree.map(|w| serde_json::json!({
+                "id": w.id.to_string(),
+                "path": w.path,
+                "branch": w.branch,
+                "base_ref": w.base_ref,
+                "deps_strategy": w.deps_strategy,
+                "status": w.status,
+            })),
+            "current_run": active_run.map(|r| serde_json::json!({
+                "id": r.id.to_string(),
+                "seq": r.seq,
+                "provider_id": r.provider_id,
+                "model_id": r.model_id,
+                "cli_session_id": r.cli_session_id,
+                "pid": r.pid,
+                "status": r.status.as_str(),
+                "started_at": r.started_at,
+            })),
+            "latest_checkpoint": latest_cp.map(|cp| serde_json::json!({
+                "id": cp.id.to_string(),
+                "seq": cp.seq,
+                "created_at": cp.created_at,
+                "objective": cp.objective,
+                "plan_tail": cp.plan_tail,
+                "current_step": cp.current_step,
+                "next_step": cp.next_step,
+                "summary_json": cp.summary_json,
+                "diff_uri": cp.diff_uri,
+            })),
+            "runs_count": runs.len(),
+            "runs": runs.into_iter().map(|r| serde_json::json!({
+                "id": r.id.to_string(),
+                "seq": r.seq,
+                "provider_id": r.provider_id,
+                "model_id": r.model_id,
+                "status": r.status.as_str(),
+                "end_reason": r.end_reason.map(|e| e.as_str()),
+                "started_at": r.started_at,
+                "ended_at": r.ended_at,
+            })).collect::<Vec<_>>(),
+        }))
+    }
 }

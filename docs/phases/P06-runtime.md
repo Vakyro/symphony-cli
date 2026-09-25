@@ -113,9 +113,29 @@
 - **Cómo se verificó:**
   - `quota_exhausted_hands_the_same_agent_to_the_next_provider`.
   - `disabled_failover_waits_for_a_provider_and_opens_recovery`.
-  - `manual_switch_replaces_only_the_executor_and_remembers_the_model`.
-  - `cargo xtask check` → 158 passed, 1 skipped (live).
-- **Pendiente / notas:** el orden básico de proveedores es estable por id; el orden configurable y el routing completo llegan en P10.
+### P06.S6 · Heartbeat y reclaim — ✅
+- **Agente:** codex/gpt-5.x · **Fecha:** 2026-09-24
+- **Qué se hizo:**
+  - Watchdog de heartbeat periódico en `executor.rs` con timing configurable (`WatchdogTiming`).
+  - Detección de colgados (`NO_HEARTBEAT`): cuando un executor supera el umbral sin emitir eventos ni actividad, se mata el proceso, se falla el run con `NO_HEARTBEAT` y se abre un `recovery_item`.
+  - `Runtime::reclaim`: permite recuperar un agente fallido/colgado reteniendo su workspace y reiniciando el executor.
+- **Archivos clave:** `crates/daemon/src/executor.rs`, `crates/daemon/src/runtime.rs`, `crates/store/src/repo.rs`, `crates/daemon/tests/runtime.rs`
+- **Cómo se verificó:**
+  - `hung_executor_is_failed_and_reclaim_keeps_its_workspace`
+  - `cargo xtask check`
+
+### P06.S7 · Comandos de agente — ✅
+- **Agente:** antigravity/gemini-3.7-flash · **Fecha:** 2026-09-24
+- **Qué se hizo:**
+  - **IPC methods:** `symphonyd` expone a través de su socket local los métodos de control de agentes: `agent.create` / `agent.spawn`, `agent.list` / `agents.list`, `agent.inspect`, `agent.send`, `agent.pause`, `agent.resume`, `agent.stop`, `agent.kill`, `agent.switch`, `agent.diff`, `agent.logs`.
+  - **Runtime & Store ops:** agregadas operaciones `find_agent_by_ident` (soporta `1`, `#1`, `agent-1` y ULID), `list_agents_rows` y `agent_messages` en store; `stop`, `kill`, `diff` (live worktree con fallback a CAS blob), `logs` (con descompresión de CAS object store) e `inspect` en runtime.
+  - **CLI subcommands:** `symphony` implementa `spawn`, `agents`, `send`, `pause`, `resume`, `stop`, `kill`, `switch`, `diff`, `logs`, `inspect` con salida formateada amigable para humanos.
+  - **Trycmd snapshots & Tests:** actualizado snapshot de `--help` y agregado test de integración `crates/cli/tests/agents.rs`.
+- **Archivos clave:** `crates/daemon/src/server.rs`, `crates/daemon/src/executor.rs`, `crates/daemon/src/providers.rs`, `crates/store/src/repo.rs`, `crates/cli/src/main.rs`, `crates/cli/tests/agents.rs`, `crates/cli/tests/cmd/help.toml`
+- **Cómo se verificó:**
+  - `symphony-cli::agents agent_lifecycle_cli_commands`
+  - `symphony-cli::cli cli_commands`
+  - `cargo xtask check` → 161 passed, 1 skipped.
 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
@@ -126,6 +146,7 @@
 | Conversación y tool calls espejadas, sin duplicados, con secretos redactados | `session_mirrors_…`, `duplicates_from_hook_and_stream_…` | ✅ |
 | Checkpoints incrementales monótonos, podados, sin objetos colgantes | proptest `checkpoints_stay_monotonic_and_consistent` | ✅ |
 | Prompt de handoff con plantilla fija, desde checkpoint + git vivo | snapshots `insta` + `handoff_combines_the_checkpoint_with_live_git` | ✅ |
+| Control completo de agentes por CLI e IPC (`spawn`, `agents`, `inspect`, etc.) | `crates/cli/tests/agents.rs` + trycmd `help.toml` | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |

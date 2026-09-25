@@ -125,8 +125,10 @@ async fn env_with_watchdog(
         bus.clone(),
         used,
         None,
-        heartbeat_every,
-        stale_after,
+        symphony_daemon::runtime::WatchdogTiming {
+            heartbeat_every,
+            stale_after,
+        },
     );
     Env {
         _dir: dir,
@@ -1280,8 +1282,8 @@ kind = "hang"
     let e = env_with_watchdog(
         &[("fake", script)],
         None,
-        Duration::from_millis(25),
-        Duration::from_millis(150),
+        Duration::from_millis(50),
+        Duration::from_millis(500),
     )
     .await;
     let created = e

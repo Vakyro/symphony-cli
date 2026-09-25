@@ -1372,15 +1372,41 @@ pub struct HomeRow {
 /// Home (DB §5): agentes activos + run abierto + modelo + task. `provider_health`
 /// y `resource_samples` se suman en sus fases (4 y 2).
 pub fn home_rows(conn: &Connection, project: ProjectId) -> Result<Vec<HomeRow>, RepoError> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT a.id, a.number, a.state, a.state_reason, t.code, t.title, r.provider_id, r.model_id
-         FROM agents a
-         JOIN tasks t ON t.id = a.task_id
-         LEFT JOIN agent_runs r ON r.agent_id = a.id AND r.ended_at IS NULL
-         WHERE a.project_id = ?1 AND a.archived_at IS NULL AND a.state NOT IN ('COMPLETED','CANCELLED')
-         ORDER BY a.number",
-    )?;
-    let rows = stmt.query_map([project.to_string()], |r| {
+    list_agents_rows(conn, Some(project), false)
+}
+
+/// Lista agentes de un proyecto (o todos si project_id es None), activos o todos.
+pub fn list_agents_rows(
+    conn: &Connection,
+    project_id: Option<ProjectId>,
+    all: bool,
+) -> Result<Vec<HomeRow>, RepoError> {
+    let filter_active = if all {
+        ""
+    } else {
+        "AND a.state NOT IN ('COMPLETED','CANCELLED')"
+    };
+    let sql = if project_id.is_some() {
+        format!(
+            "SELECT a.id, a.number, a.state, a.state_reason, t.code, t.title, r.provider_id, r.model_id
+             FROM agents a
+             JOIN tasks t ON t.id = a.task_id
+             LEFT JOIN agent_runs r ON r.agent_id = a.id AND r.ended_at IS NULL
+             WHERE a.project_id = ?1 AND a.archived_at IS NULL {filter_active}
+             ORDER BY a.number"
+        )
+    } else {
+        format!(
+            "SELECT a.id, a.number, a.state, a.state_reason, t.code, t.title, r.provider_id, r.model_id
+             FROM agents a
+             JOIN tasks t ON t.id = a.task_id
+             LEFT JOIN agent_runs r ON r.agent_id = a.id AND r.ended_at IS NULL
+             WHERE a.archived_at IS NULL {filter_active}
+             ORDER BY a.number"
+        )
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    let map_row = |r: &rusqlite::Row| {
         Ok(HomeRow {
             agent_id: col(r, 0)?,
             number: r.get(1)?,
@@ -1390,6 +1416,91 @@ pub fn home_rows(conn: &Connection, project: ProjectId) -> Result<Vec<HomeRow>, 
             task_title: r.get(5)?,
             provider_id: r.get(6)?,
             model_id: r.get(7)?,
+        })
+    };
+    let rows: Vec<HomeRow> = if let Some(proj) = project_id {
+        stmt.query_map([proj.to_string()], map_row)?
+            .collect::<Result<_, _>>()?
+    } else {
+        stmt.query_map([], map_row)?.collect::<Result<_, _>>()?
+    };
+    Ok(rows)
+}
+
+/// Resuelve un agente por ID (ULID) o por número (`1`, `#1`, `agent-1`).
+pub fn find_agent_by_ident(
+    conn: &Connection,
+    project_id: Option<ProjectId>,
+    ident: &str,
+) -> Result<Agent, RepoError> {
+    use std::str::FromStr;
+    let clean = ident.trim();
+    if let Ok(id) = AgentId::from_str(clean) {
+        return get_agent(conn, id);
+    }
+    let num_str = clean
+        .strip_prefix('#')
+        .or_else(|| clean.strip_prefix("agent-"))
+        .or_else(|| clean.strip_prefix("agent_"))
+        .unwrap_or(clean);
+    if let Ok(num) = num_str.parse::<i64>() {
+        let sql = if project_id.is_some() {
+            format!(
+                "SELECT {AGENT_COLS} FROM agents WHERE number = ?1 AND project_id = ?2 ORDER BY created_at DESC LIMIT 1"
+            )
+        } else {
+            format!(
+                "SELECT {AGENT_COLS} FROM agents WHERE number = ?1 ORDER BY created_at DESC LIMIT 1"
+            )
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let row = if let Some(proj) = project_id {
+            stmt.query_row(params![num, proj.to_string()], agent_row)
+                .optional()?
+        } else {
+            stmt.query_row(params![num], agent_row).optional()?
+        };
+        if let Some(agent) = row {
+            return Ok(agent);
+        }
+    }
+    Err(RepoError::NotFound {
+        entity: "agente",
+        id: ident.to_string(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageRecord {
+    pub id: symphony_core::MessageId,
+    pub agent_id: AgentId,
+    pub run_id: Option<RunId>,
+    pub role: String,
+    pub content: Option<String>,
+    pub content_object_id: Option<symphony_core::ContextObjectId>,
+    pub created_at: i64,
+}
+
+pub fn agent_messages(
+    conn: &Connection,
+    agent: AgentId,
+    limit: Option<usize>,
+) -> Result<Vec<MessageRecord>, RepoError> {
+    let limit_clause = limit.map_or(String::new(), |l| format!("LIMIT {l}"));
+    let sql = format!(
+        "SELECT id, agent_id, run_id, role, content, content_object_id, created_at
+         FROM messages WHERE agent_id = ?1 ORDER BY created_at ASC {limit_clause}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([agent.to_string()], |r| {
+        Ok(MessageRecord {
+            id: col(r, 0)?,
+            agent_id: col(r, 1)?,
+            run_id: opt_col(r, 2)?,
+            role: r.get(3)?,
+            content: r.get(4)?,
+            content_object_id: opt_col(r, 5)?,
+            created_at: r.get(6)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)

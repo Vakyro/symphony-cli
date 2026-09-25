@@ -12,3 +12,4 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-09-24 · claude-code/opus-5.5 · pausa · P05.S7: revisión de seguridad de hooks hecha y corregida; falta la sesión real (permiso de Leo)
 - 2026-09-24 · claude-code/opus-5.5 · cierre · P05 completa (adapters Claude/Codex, bus, hook emit, registro, revisión de seguridad; live L3 con permiso: 2/2), tag p05-done. Inicio P06
 - 2026-09-24 · codex/gpt-5.x · inicio · P06.S5 · rama phase/p06-runtime
+- 2026-09-24 21:36 · antigravity/gemini-3.7-flash · inicio · P06.S7 · rama phase/p06-runtime

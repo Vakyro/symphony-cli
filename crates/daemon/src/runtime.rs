@@ -151,6 +151,21 @@ pub const DEFAULT_HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
 /// Los CLIs pueden estar callados entre turnos; P10 afinará esto por agente.
 pub const DEFAULT_STALE_AFTER: Duration = Duration::from_secs(900);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WatchdogTiming {
+    pub heartbeat_every: Duration,
+    pub stale_after: Duration,
+}
+
+impl Default for WatchdogTiming {
+    fn default() -> Self {
+        Self {
+            heartbeat_every: DEFAULT_HEARTBEAT_EVERY,
+            stale_after: DEFAULT_STALE_AFTER,
+        }
+    }
+}
+
 impl Runtime {
     pub fn new(
         home: &Path,
@@ -167,8 +182,7 @@ impl Runtime {
             bus,
             adapters,
             hook,
-            DEFAULT_HEARTBEAT_EVERY,
-            DEFAULT_STALE_AFTER,
+            WatchdogTiming::default(),
         )
     }
 
@@ -180,8 +194,7 @@ impl Runtime {
         bus: EventBus,
         adapters: Vec<Arc<dyn ProviderAdapter>>,
         hook: Option<HookCommand>,
-        heartbeat_every: Duration,
-        stale_after: Duration,
+        watchdog: WatchdogTiming,
     ) -> Self {
         let rt = Self {
             inner: Arc::new(Inner {
@@ -194,8 +207,8 @@ impl Runtime {
                 creating: tokio::sync::Mutex::new(()),
                 pumps: TaskTracker::new(),
                 live: Mutex::default(),
-                heartbeat_every,
-                stale_after,
+                heartbeat_every: watchdog.heartbeat_every,
+                stale_after: watchdog.stale_after,
                 activity: Mutex::default(),
             }),
         };

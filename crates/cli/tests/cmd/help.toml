@@ -9,6 +9,17 @@ Commands:
   status     Estado del daemon (lo arranca si no está vivo)
   daemon     Controla el daemon `symphonyd`
   providers  CLIs de IA detectados (Claude Code, Codex, …)
+  spawn      Crea un agente nuevo con su tarea y workspace aislado
+  agents     Lista los agentes del proyecto
+  send       Envía un mensaje o instrucción al executor vivo del agente
+  pause      Pausa (suspende) el executor de un agente
+  resume     Reanuda un agente pausado
+  stop       Detiene un agente y su executor
+  kill       Termina forzosamente el executor y cancela el agente
+  switch     Cambia el modelo del agente a uno exacto y reinicia el executor
+  diff       Muestra el git diff del worktree del agente contra su commit base
+  logs       Muestra el historial de mensajes/conversación del agente
+  inspect    Inspecciona en detalle el estado, tarea, worktree, checkpoints y runs del agente
   help       Print this message or the help of the given subcommand(s)
 
 Options:

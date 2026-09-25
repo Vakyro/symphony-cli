@@ -1,10 +1,10 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-09-24 · por codex/gpt-5.x
+**Actualizado:** 2026-09-24 · por antigravity/gemini-3.7-flash
 **Fase actual:** P06 · Agent runtime, checkpoints y handoff (rama `phase/p06-runtime`)
-**Paso actual:** P06.S6 · Heartbeat y reclaim
-**Estado del paso:** PENDIENTE
-**En curso por:** codex/gpt-5.x desde 2026-09-24
+**Paso actual:** P06.S8 · Prueba de aceptación: forced kill
+**Estado del paso:** EN CURSO
+**En curso por:** antigravity/gemini-3.7-flash desde 2026-09-24
 
 ## Salud del repo
 - `cargo xtask check`: ✅ (158 tests; 1 live omitido)
@@ -18,11 +18,13 @@
 - [x] P06.S3 Checkpoints incrementales
 - [x] P06.S4 Handoff v1
 - [x] P06.S5 Cambio de executor
-- [ ] P06.S6 Heartbeat y reclaim   ← aquí
+- [x] P06.S6 Heartbeat y reclaim
+- [x] P06.S7 Comandos de agente
+- [ ] P06.S8 Prueba de aceptación: forced kill   ← aquí
 - (resto de P06 en PLAN.md)
 
 ## Próxima acción concreta
-Agregar heartbeat en memoria con persistencia periódica; detectar proceso muerto o inactividad, cerrar el run como `FAILED`, conservar worktree/checkpoint y abrir recovery. Implementar las acciones restart, failover, pause y stop de FLOW §16 con fake-agent `crash` y `hang`.
+Implementar test E2E de forced kill (P06.S8): fake-agent A trabaja -> kill sin cleanup -> fake-agent B continúa usando únicamente el handoff montado sobre checkpoint y git vivo -> finaliza la tarea.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
