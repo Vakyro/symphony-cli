@@ -44,12 +44,24 @@ pub(crate) enum Control {
         end: RunEndReason,
         done: oneshot::Sender<()>,
     },
+    /// El watchdog (P06.S6) perdió el latido: mata el árbol, cierra el run
+    /// `FAILED/NO_HEARTBEAT` y deja al agente `FAILED` con recovery item.
+    NoHeartbeat {
+        done: oneshot::Sender<()>,
+    },
     Send {
         bytes: Vec<u8>,
         done: oneshot::Sender<Result<(), String>>,
     },
     Suspend(oneshot::Sender<Result<(), String>>),
     Resume(oneshot::Sender<Result<(), String>>),
+}
+
+/// Quién pidió la parada, para el cierre del run en el pump.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum StopKind {
+    User,
+    NoHeartbeat,
 }
 
 pub struct LiveRun {
@@ -194,17 +206,27 @@ impl Runtime {
                 line = proc.next_output() => match line {
                     None => break None,
                     Some(OutputLine::Stdout(line)) => {
+                        self.beat(l.run_id);
                         if !self.handle_line(&l, &proc, &line, &mut fatal).await {
                             break None;
                         }
                     }
-                    Some(OutputLine::Stderr(_)) => {}
+                    Some(OutputLine::Stderr(_)) => self.beat(l.run_id),
                 },
                 ctl = rx.recv(), if control_open => match ctl {
                     None => control_open = false,
                     Some(Control::Stop { status, end, done }) => {
                         let _ = proc.terminate_tree();
-                        break Some((status, end, done));
+                        break Some((status, end, done, StopKind::User));
+                    }
+                    Some(Control::NoHeartbeat { done }) => {
+                        let _ = proc.terminate_tree();
+                        break Some((
+                            RunStatus::Failed,
+                            RunEndReason::NoHeartbeat,
+                            done,
+                            StopKind::NoHeartbeat,
+                        ));
                     }
                     Some(Control::Send { bytes, done }) => {
                         let _ = done.send(proc.write_stdin(&bytes).await.map_err(|e| e.to_string()));
@@ -224,19 +246,50 @@ impl Runtime {
         {
             live.remove(&l.agent_id);
         }
+        if let Ok(mut activity) = self.activity.lock() {
+            activity.remove(&l.run_id);
+        }
         let code = match exit {
             ExitStatus::Exited(c) => Some(c),
             _ => None,
         };
         match (stopped, fatal) {
-            (Some((status, end, done)), _) => {
+            (Some((status, end, done, kind)), _) => {
                 let run = l.run_id;
+                let (agent, project) = (l.agent_id, l.project_id);
                 let _ = self
                     .writer
                     .write(Box::new(move |t| {
-                        repo::close_run(t, run, status, end, code, now_ms())?;
-                        if status == RunStatus::HandedOff {
-                            repo::set_handoff_outcome(t, run, "CONTINUED")?;
+                        let now = now_ms();
+                        repo::close_run(t, run, status, end, code, now)?;
+                        match kind {
+                            StopKind::User => {
+                                if status == RunStatus::HandedOff {
+                                    repo::set_handoff_outcome(t, run, "CONTINUED")?;
+                                }
+                            }
+                            StopKind::NoHeartbeat => {
+                                repo::set_handoff_outcome(t, run, "FAILED_TO_CONTINUE")?;
+                                let reason = "el executor dejó de responder; el workspace y \
+                                                el último checkpoint quedan intactos"
+                                    .to_string();
+                                repo::set_agent_state(
+                                    t,
+                                    agent,
+                                    AgentState::Failed,
+                                    Some(&reason),
+                                    now,
+                                )?;
+                                repo::open_recovery_item(
+                                    t,
+                                    project,
+                                    Some(agent),
+                                    Some(run),
+                                    "NO_HEARTBEAT",
+                                    &reason,
+                                    now,
+                                )?;
+                            }
                         }
                         Ok(())
                     }))
@@ -795,6 +848,95 @@ impl Runtime {
             occurred_at: now_ms(),
         };
         self.bus.publish(ev).await.map_err(op_err)
+    }
+
+    /// Reabre un agente `FAILED` con un run nuevo desde su último checkpoint,
+    /// con el mismo proveedor/modelo del run anterior (FLOW §16, IDEA §5.10).
+    /// `change`/`resolution` son `RESTART` (crash) o `RECLAIM` (sin latido).
+    async fn recover(
+        &self,
+        agent_id: AgentId,
+        change: &'static str,
+        resolution: &str,
+        reason: &str,
+        reason_en: &str,
+    ) -> Result<RunId, AgentOpError> {
+        if self.is_live(agent_id) {
+            let number = self
+                .read_op(|c| repo::get_agent(c, agent_id))
+                .map_or_else(|_| "?".into(), |a| a.number.to_string());
+            return Err(AgentOpError(format!(
+                "el agente #{number} todavía tiene un executor vivo; detenlo antes de recuperarlo"
+            )));
+        }
+        let agent = self.read_op(|c| repo::get_agent(c, agent_id))?;
+        if agent.state != AgentState::Failed {
+            return Err(AgentOpError(format!(
+                "el agente #{} está {} y no necesita recuperación",
+                agent.number,
+                agent.state.as_str()
+            )));
+        }
+        let last = self
+            .read_op(|c| repo::runs_of(c, agent_id))?
+            .pop()
+            .ok_or_else(|| AgentOpError("el agente no tiene ningún run".into()))?;
+        let model = self
+            .read_op(|c| repo::eligible_model(c, &last.model_id))?
+            .map_err(|why| {
+                AgentOpError(format!("no se puede reabrir con el modelo anterior: {why}"))
+            })?;
+        if self.adapter(&model.provider_id).is_none() {
+            return Err(AgentOpError(format!(
+                "esta versión no tiene adapter para `{}`",
+                model.provider_id
+            )));
+        }
+        let run = self
+            .start_successor(
+                &agent,
+                Some(last.id),
+                model,
+                reason,
+                change,
+                reason_en,
+                None,
+            )
+            .await?;
+        let resolution = resolution.to_string();
+        self.writer
+            .write(Box::new(move |t| {
+                repo::resolve_recovery_items(t, agent_id, &resolution, now_ms())?;
+                Ok(())
+            }))
+            .await
+            .map_err(op_err)?;
+        Ok(run)
+    }
+
+    /// Reinicia un agente que falló (`CRASH` o similar) desde su checkpoint.
+    pub async fn restart(&self, agent_id: AgentId) -> Result<RunId, AgentOpError> {
+        self.recover(
+            agent_id,
+            "RESTART",
+            "RESTART",
+            "El usuario reinició el agente desde su último checkpoint.",
+            "user restart",
+        )
+        .await
+    }
+
+    /// Recupera un agente cuyo executor perdió el latido (`NO_HEARTBEAT`).
+    /// El workspace no se toca: el handoff sale del checkpoint + git vivo.
+    pub async fn reclaim(&self, agent_id: AgentId) -> Result<RunId, AgentOpError> {
+        self.recover(
+            agent_id,
+            "RECLAIM",
+            "RECLAIM",
+            "Se recuperó el agente tras perder el latido del executor.",
+            "reclaim after lost heartbeat",
+        )
+        .await
     }
 
     /// Suspende el árbol de procesos del executor (FLOW §7: `pause`). El agente queda `PAUSED`.

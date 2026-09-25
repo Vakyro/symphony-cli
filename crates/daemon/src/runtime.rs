@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use symphony_adapter_common::{HookCommand, ProviderAdapter};
 use symphony_core::{
@@ -20,7 +21,7 @@ use symphony_store::{WriterHandle, repo};
 use tokio_util::task::TaskTracker;
 
 use crate::bus::EventBus;
-use crate::executor::Launch;
+use crate::executor::{Control, Launch};
 
 /// Cómo se elige el executor (FLOW §6).
 #[derive(Debug, Clone, PartialEq)]
@@ -136,7 +137,19 @@ pub struct Inner {
     pub(crate) pumps: TaskTracker,
     /// Executors vivos: canal de control de cada uno.
     pub(crate) live: Mutex<HashMap<AgentId, crate::executor::LiveRun>>,
+    /// Watchdog (P06.S6): cada cuánto se persiste el latido y cuánto
+    /// silencio se tolera antes de declarar el run `NO_HEARTBEAT`.
+    pub(crate) heartbeat_every: Duration,
+    pub(crate) stale_after: Duration,
+    /// Última actividad (línea de salida) de cada run vivo, en memoria.
+    pub(crate) activity: Mutex<HashMap<RunId, Instant>>,
 }
+
+/// Persistencia del latido por defecto (producción).
+pub const DEFAULT_HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
+/// Silencio tolerado por defecto antes de un `NO_HEARTBEAT` (producción).
+/// Los CLIs pueden estar callados entre turnos; P10 afinará esto por agente.
+pub const DEFAULT_STALE_AFTER: Duration = Duration::from_secs(900);
 
 impl Runtime {
     pub fn new(
@@ -147,7 +160,30 @@ impl Runtime {
         adapters: Vec<Arc<dyn ProviderAdapter>>,
         hook: Option<HookCommand>,
     ) -> Self {
-        Self {
+        Self::new_with_watchdog(
+            home,
+            writer,
+            reader,
+            bus,
+            adapters,
+            hook,
+            DEFAULT_HEARTBEAT_EVERY,
+            DEFAULT_STALE_AFTER,
+        )
+    }
+
+    /// Como `new`, con el ritmo del watchdog explícito (tests de P06.S6).
+    pub fn new_with_watchdog(
+        home: &Path,
+        writer: WriterHandle,
+        reader: rusqlite::Connection,
+        bus: EventBus,
+        adapters: Vec<Arc<dyn ProviderAdapter>>,
+        hook: Option<HookCommand>,
+        heartbeat_every: Duration,
+        stale_after: Duration,
+    ) -> Self {
+        let rt = Self {
             inner: Arc::new(Inner {
                 home: home.to_path_buf(),
                 writer,
@@ -158,7 +194,62 @@ impl Runtime {
                 creating: tokio::sync::Mutex::new(()),
                 pumps: TaskTracker::new(),
                 live: Mutex::default(),
+                heartbeat_every,
+                stale_after,
+                activity: Mutex::default(),
             }),
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(rt.clone().watchdog());
+        }
+        rt
+    }
+
+    /// Marca actividad de un run vivo (lo llama el pump por cada línea).
+    pub(crate) fn beat(&self, run: RunId) {
+        if let Ok(mut activity) = self.activity.lock() {
+            activity.insert(run, Instant::now());
+        }
+    }
+
+    /// Persiste el latido de los runs vivos y cierra como `NO_HEARTBEAT` los
+    /// que llevan más de `stale_after` sin emitir nada (FLOW §16, IDEA §5.10).
+    async fn watchdog(self) {
+        let mut tick = tokio::time::interval(self.heartbeat_every);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let live: Vec<(AgentId, RunId)> = self
+                .live
+                .lock()
+                .map(|l| l.iter().map(|(a, r)| (*a, r.run_id)).collect())
+                .unwrap_or_default();
+            for (agent, run) in live {
+                let silent = self
+                    .activity
+                    .lock()
+                    .ok()
+                    .and_then(|a| a.get(&run).copied())
+                    .is_none_or(|t| t.elapsed() > self.stale_after);
+                let now = now_ms();
+                let _ = self
+                    .writer
+                    .write(Box::new(move |t| {
+                        repo::heartbeat(t, run, now)?;
+                        Ok(())
+                    }))
+                    .await;
+                if silent {
+                    tracing::warn!(
+                        agent = %agent,
+                        run = %run,
+                        "executor sin latido: se cierra como NO_HEARTBEAT y se abre recuperación"
+                    );
+                    let _ = self
+                        .control(agent, |done| Control::NoHeartbeat { done })
+                        .await;
+                }
+            }
         }
     }
 

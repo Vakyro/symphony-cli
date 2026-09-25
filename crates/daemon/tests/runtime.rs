@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use symphony_adapter_common::ProviderAdapter;
 use symphony_core::{AgentState, ContextMode, FailoverPolicy};
@@ -71,6 +72,21 @@ async fn env(script: &str, binary: Option<PathBuf>) -> Env {
 
 /// Como `env`, con varios proveedores fake (`provider`, guion), en ese orden.
 async fn env_with(providers_: &[(&'static str, &str)], binary: Option<PathBuf>) -> Env {
+    env_with_watchdog(
+        providers_,
+        binary,
+        Duration::from_secs(5),
+        Duration::from_secs(600),
+    )
+    .await
+}
+
+async fn env_with_watchdog(
+    providers_: &[(&'static str, &str)],
+    binary: Option<PathBuf>,
+    heartbeat_every: Duration,
+    stale_after: Duration,
+) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let repo = dir.path().join("repo");
@@ -102,13 +118,15 @@ async fn env_with(providers_: &[(&'static str, &str)], binary: Option<PathBuf>) 
         .await
         .unwrap();
     let bus = EventBus::new(writer.handle(), 64, ObjectStore::new(home.join("objects")));
-    let runtime = Runtime::new(
+    let runtime = Runtime::new_with_watchdog(
         &home,
         writer.handle(),
         writer.reader().unwrap(),
         bus.clone(),
         used,
         None,
+        heartbeat_every,
+        stale_after,
     );
     Env {
         _dir: dir,
@@ -1242,6 +1260,103 @@ async fn manual_switch_replaces_only_the_executor_and_remembers_the_model() {
         "beta/smart"
     );
     assert!(created.worktree.join("switched.txt").is_file());
+    assert_eq!(
+        git(&created.worktree, &["branch", "--show-current"]),
+        created.branch
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hung_executor_is_failed_and_reclaim_keeps_its_workspace() {
+    let script = r#"
+[[step]]
+kind = "edit"
+path = "before-hang.txt"
+content = "safe\n"
+[[step]]
+kind = "hang"
+"#;
+    let e = env_with_watchdog(
+        &[("fake", script)],
+        None,
+        Duration::from_millis(25),
+        Duration::from_millis(150),
+    )
+    .await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "recuperar cuelgue",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "NO_HEARTBEAT"
+    );
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "FAILED");
+    assert_eq!(
+        one::<String>(&e, "SELECT kind FROM recovery_items"),
+        "NO_HEARTBEAT"
+    );
+    assert!(one::<Option<i64>>(&e, "SELECT last_heartbeat_at FROM agent_runs").is_some());
+    assert!(created.worktree.join("before-hang.txt").is_file());
+
+    e.runtime.reclaim(created.agent_id).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(count(&e, "agent_runs"), 2);
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "RECLAIM"
+    );
+    assert_eq!(
+        one::<i64>(
+            &e,
+            "SELECT COUNT(*) FROM recovery_items WHERE status = 'RESOLVED' AND resolution = 'RECLAIM'"
+        ),
+        1
+    );
+    assert!(created.worktree.join("before-hang.txt").is_file());
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn crashed_executor_can_restart_from_its_checkpoint() {
+    let e = env("[[step]]\nkind = \"crash\"\n", None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "reiniciar crash",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+
+    e.runtime.restart(created.agent_id).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(count(&e, "agent_runs"), 2);
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "RESTART"
+    );
+    assert_eq!(
+        one::<i64>(
+            &e,
+            "SELECT COUNT(*) FROM recovery_items WHERE status = 'RESOLVED' AND resolution = 'RESTART'"
+        ),
+        1
+    );
     assert_eq!(
         git(&created.worktree, &["branch", "--show-current"]),
         created.branch

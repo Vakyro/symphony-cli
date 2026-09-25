@@ -1293,6 +1293,21 @@ pub fn open_recovery_item(
     Ok(())
 }
 
+/// Resuelve los items de recuperación abiertos de un agente (restart, reclaim,
+/// failover aceptado…). Devuelve cuántos cerró.
+pub fn resolve_recovery_items(
+    conn: &Connection,
+    agent: AgentId,
+    resolution: &str,
+    now: i64,
+) -> Result<usize, RepoError> {
+    Ok(conn.execute(
+        "UPDATE recovery_items SET status = 'RESOLVED', resolution = ?2, resolved_at = ?3
+         WHERE agent_id = ?1 AND status = 'OPEN'",
+        params![agent.to_string(), resolution, now],
+    )?)
+}
+
 /// Al arrancar el daemon (con el lock de instancia tomado): toda sesión que
 /// siga `ACTIVE` es de un daemon anterior que murió sin cerrarla. Se marca
 /// `INTERRUPTED` y se abre un `recovery_items(SESSION_INTERRUPTED)` por cada una
