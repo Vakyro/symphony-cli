@@ -2,22 +2,8 @@
 // Código de test: CONSTRAINTS C3 permite unwrap/expect.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::PathBuf;
-use std::process::Command;
-
-/// `symphonyd` vive en otro paquete: cargo no lo construye para los tests de este.
-fn symphonyd() -> PathBuf {
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_symphony"))
-        .with_file_name(format!("symphonyd{}", std::env::consts::EXE_SUFFIX));
-    if !bin.is_file() {
-        let status = Command::new(env!("CARGO"))
-            .args(["build", "-p", "symphony-daemon", "--bin", "symphonyd"])
-            .status()
-            .expect("cargo build symphonyd");
-        assert!(status.success(), "no se pudo construir symphonyd");
-    }
-    bin
-}
+mod common;
+use common::symphonyd;
 
 #[test]
 fn cli_commands() {

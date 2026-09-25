@@ -24,6 +24,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "macros"] }
 
 [dev-dependencies]
+symphony-store = { path = "../store" }
 tempfile.workspace = true
 trycmd.workspace = true
 

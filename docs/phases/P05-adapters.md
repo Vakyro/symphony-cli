@@ -23,6 +23,13 @@
 - **Archivos clave:** `crates/daemon/src/bus.rs`, `crates/daemon/tests/bus.rs`
 - **Cómo se verificó:** 5 000 eventos con un suscriptor que nunca lee (capacidad 16) y otro que lee todo: el productor no se frena, **los 5 000 quedan persistidos en orden**, el colgado recibe `Lagged`, el vivo cuenta los 5 000 (recibidos + perdidos por atraso) y el estado del agente queda al día. `cargo xtask check` → 116 passed.
 
+### P05.S3 · `symphony hook emit` — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** subcomando oculto `symphony hook emit` (`crates/cli/src/hook.rs`): sin `SYMPHONY_AGENT_ID` no hace nada; si no, lee el JSON por stdin (máx. 4 MiB) y lo manda al daemon (`hook.emit`, con `SYMPHONY_RUN_ID`/`PROJECT_ID`/`PROVIDER`), esperando la decisión hasta 10 s. **Nunca rompe al CLI** (cualquier problema → exit 0 sin salida), **nunca arranca el daemon** y en P05 **no imprime nada** (imprimir `allow` saltearía los permisos propios del usuario; `deny` llega en P08). Se resuelve antes que todo en `main`. Daemon: `hook.emit` valida parámetros y que el agente exista en el proyecto, traduce con `parse_standard_hook` y publica en el bus; responde `{"decision":"allow"}`.
+- **Archivos clave:** `crates/cli/src/hook.rs`, `crates/daemon/src/server.rs` (`hook_emit`), `crates/cli/tests/{hook_emit.rs,cmd/hook-emit-*.toml}`
+- **Cómo se verificó:** trycmd sin env (no-op) y con payload inválido (silencio, exit 0); E2E: con el daemon caído el hook sale 0 y no lo arranca; con el daemon arriba 20 `PreToolUse` → 20 `CommandRequested` y un `PostToolUse` de Write → `ToolFinished` + `FileModified` en `events`; un agente inexistente no escribe nada. **Latencia del proceso `symphony hook emit` completo: mediana 30 ms, p90 46 ms, máx 65 ms** (Windows, debug).
+- **Arreglos que salieron:** (1) la recuperación al arrancar convertía IDs a ULID y una fila rara impedía arrancar el daemon; ahora usa texto. (2) Los tests del CLI podían usar un `symphonyd` viejo; ahora se construye siempre (`tests/common`).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

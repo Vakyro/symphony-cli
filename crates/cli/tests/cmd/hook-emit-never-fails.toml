@@ -1,0 +1,9 @@
+# Con agente pero payload inválido y daemon quizás caído: exit 0, sin salida.
+bin.name = "symphony"
+args = ["hook", "emit"]
+stdin = "esto no es json"
+stdout = ""
+stderr = ""
+
+[env.add]
+SYMPHONY_AGENT_ID = "agent-inexistente"

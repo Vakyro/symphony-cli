@@ -1572,6 +1572,7 @@ dependencies = [
  "serde_json",
  "symphony-core",
  "symphony-protocol",
+ "symphony-store",
  "tempfile",
  "thiserror",
  "tokio",

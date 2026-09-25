@@ -668,15 +668,16 @@ pub fn close_run(
 /// siga `ACTIVE` es de un daemon anterior que murió sin cerrarla. Se marca
 /// `INTERRUPTED` y se abre un `recovery_items(SESSION_INTERRUPTED)` por cada una
 /// (FLOW §16, Journey E). Devuelve las sesiones recuperadas.
-pub fn interrupt_orphan_sessions(conn: &Connection, now: i64) -> Result<Vec<SessionId>, RepoError> {
-    let orphans: Vec<(SessionId, ProjectId, Option<u32>)> = conn
+pub fn interrupt_orphan_sessions(conn: &Connection, now: i64) -> Result<Vec<String>, RepoError> {
+    // IDs como texto: la recuperación no puede fallar por una fila inesperada.
+    let orphans: Vec<(String, String, Option<u32>)> = conn
         .prepare("SELECT id, project_id, daemon_pid FROM sessions WHERE status = 'ACTIVE' AND ended_at IS NULL")?
-        .query_map([], |r| Ok((col(r, 0)?, col(r, 1)?, r.get(2)?)))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
     for (session, project, pid) in &orphans {
         conn.execute(
             "UPDATE sessions SET status = 'INTERRUPTED', ended_at = ?2 WHERE id = ?1",
-            params![session.to_string(), now],
+            params![session, now],
         )?;
         let detail = match pid {
             Some(pid) => format!(

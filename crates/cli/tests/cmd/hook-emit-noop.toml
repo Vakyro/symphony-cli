@@ -1,0 +1,6 @@
+# Sin SYMPHONY_AGENT_ID (el CLI se usa fuera de Symphony): no hace nada.
+bin.name = "symphony"
+args = ["hook", "emit"]
+stdin = '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"}}'
+stdout = ""
+stderr = ""

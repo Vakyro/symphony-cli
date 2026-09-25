@@ -1,4 +1,5 @@
 mod client;
+mod hook;
 
 use std::time::Duration;
 
@@ -24,6 +25,18 @@ enum Cmd {
         #[command(subcommand)]
         action: DaemonCmd,
     },
+    /// Uso interno: lo ejecutan los hooks de los CLIs.
+    #[command(hide = true)]
+    Hook {
+        #[command(subcommand)]
+        action: HookCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    /// Envía al daemon el JSON del hook que llega por stdin.
+    Emit,
 }
 
 #[derive(Subcommand)]
@@ -38,6 +51,14 @@ enum DaemonCmd {
 
 fn main() -> miette::Result<()> {
     let cli = Cli::parse();
+    // Antes que nada: un hook nunca puede fallar por el home, el runtime o el daemon.
+    if let Some(Cmd::Hook {
+        action: HookCmd::Emit,
+    }) = cli.command
+    {
+        hook::emit();
+        return Ok(());
+    }
     let home = SymphonyHome::resolve().into_diagnostic()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -53,6 +74,9 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
             println!("La TUI de Symphony llega en la versión 0.1 (P07).");
             println!("Mientras tanto: `symphony status` o `symphony --help`.");
         }
+        Some(Cmd::Hook {
+            action: HookCmd::Emit,
+        }) => hook::emit(),
         Some(Cmd::Status) => {
             let mut conn = client::connect_or_start(home).await?;
             print_status(&client::call(&mut conn, "status", json!({})).await?);
