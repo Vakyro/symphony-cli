@@ -199,7 +199,7 @@ fn spawn_uses_headless_stream_json_and_injects_hooks_per_invocation() {
         .unwrap();
     assert_eq!(
         cmd,
-        r#""C:/Program Files/Symphony/symphony.exe" "hook" "emit""#
+        r#"'C:/Program Files/Symphony/symphony.exe' 'hook' 'emit'"#
     );
     assert_eq!(hooks["PreToolUse"][0]["hooks"][0]["timeout"], 30);
 
@@ -288,5 +288,22 @@ fn live_detect_and_short_turn() {
             .iter()
             .any(|e| matches!(e, AgentEvent::AssistantText { .. })),
         "{events:?}"
+    );
+}
+
+#[test]
+fn hook_command_cannot_inject_through_the_path() {
+    // Una carpeta con `$(…)` y comillas no puede ejecutar nada: todo va entre comillas simples.
+    let hook = HookCommand {
+        program: r"C:\Users\a$(rm -rf ~)`x`'b\symphony.exe".into(),
+        args: vec!["hook".into(), "emit".into()],
+    };
+    let settings = hook_settings(&hook);
+    let cmd = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        cmd,
+        r#"'C:/Users/a$(rm -rf ~)`x`'\''b/symphony.exe' 'hook' 'emit'"#
     );
 }

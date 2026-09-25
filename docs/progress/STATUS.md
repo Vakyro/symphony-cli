@@ -3,11 +3,11 @@
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P05 · Adapters y event bus (rama `phase/p05-adapters`)
 **Paso actual:** P05.S7 · Cierre
-**Estado del paso:** EN CURSO
+**Estado del paso:** BLOQUEADO (necesita permiso de Leo para la sesión real)
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (128 tests)
+- `cargo xtask check`: ✅ (131 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -19,11 +19,11 @@
 - [x] P05.S4 Adapter Claude Code
 - [x] P05.S5 Adapter Codex
 - [x] P05.S6 Registro de proveedores y modelos
-- [ ] P05.S7 Cierre   ← aquí
+- [ ] P05.S7 Cierre   ← aquí (revisión de seguridad hecha; falta la sesión real con permiso)
 - (resto de P05 en PLAN.md)
 
 ## Próxima acción concreta
-Revisión de seguridad de hooks (inyección de comandos, env, rutas); criterio de salida: una sesión real de cada CLI (con permiso de Leo) produce eventos canónicos.
+Con permiso de Leo: una sesión real corta de Claude (haiku) y de Codex (luna) por Symphony → eventos canónicos en `events`. Después: merge, tag `p05-done`.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
@@ -33,12 +33,10 @@ Revisión de seguridad de hooks (inyección de comandos, env, rutas); criterio d
 - Hipótesis descartadas:
 
 ## Bloqueos y preguntas para Leo
-- (ninguno)
+- ¿Permiso para una sesión real corta de Claude Code y de Codex (criterio de salida de P05)?
 
 ## Pendientes arrastrados
-- P05: verificar que el servidor del named pipe pertenece al usuario actual antes de mandar datos sensibles (bitácora P02.S8).
 - P05–P07: repositorios de executor_changes, messages, provider_failures, tool_calls, checkpoints, checkpoint_refs, handoffs y recovery_items (bitácora P03.S3).
-- P05: hooks por invocación (Claude `--settings`, Codex `-c hooks.*` en sintaxis PowerShell) según ADR-0003; resolver el ejecutable nativo en vez del shim `.cmd` (LEARNINGS Test A/B).
 
 ## Fases
 | Fase | Estado | Tag |

@@ -50,6 +50,16 @@
 - **Archivos clave:** `crates/daemon/src/providers.rs`, `crates/daemon/src/server.rs`, `crates/cli/src/main.rs`, `crates/cli/tests/providers.rs`
 - **Cómo se verificó:** test con PATH simulado: ninguno → ambos `NOT_FOUND`; solo `claude` → Claude `READY` 9.9.9 con 4 modelos y Codex `NOT_FOUND`; los dos → ambos `READY`. `cargo xtask check` → 128 passed.
 
+### P05.S7 · Cierre — 🟡 (falta la sesión real de cada CLI: requiere permiso de Leo)
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Revisión de seguridad de hooks** (inyección de comandos, env, rutas), leyendo el camino completo CLI → hook → `symphony hook emit` → IPC → daemon → `events`:
+  1. **Corregido:** el comando del hook de Claude iba entre comillas dobles de bash; una ruta con `$(…)` o comillas invertidas se habría expandido. Ahora usa comillas simples (literales en bash). Test `hook_command_cannot_inject_through_the_path`.
+  2. **Corregido:** los comandos de las herramientas se guardaban sin redactar en `events.payload_json` (un `export TOKEN=…` quedaba en claro). `parse_standard_hook` los redacta. Test `tool_commands_are_redacted_before_storage`.
+  3. **Corregido (pendiente de P02.S8):** el cliente verifica que el socket/pipe lo atiende el daemon registrado en `<home>/run/symphonyd.pid` (pid del par vía `peer_creds`); un pipe suplantado por otro usuario se rechaza antes de mandar datos. Test `client_refuses_a_socket_served_by_another_process`.
+  4. Sin cambios, ya correcto: Codex usa comillas simples de PowerShell (`''` escapa) dentro de TOML válido; `symphony hook emit` limita el payload a 4 MiB, solo actúa con `SYMPHONY_AGENT_ID`, nunca arranca el daemon y no imprime nada (no pisa los permisos del usuario); el daemon valida que el agente exista en el proyecto; los hooks se inyectan por invocación (nada queda en el worktree ni se commitea).
+- **Pendiente para cerrar la fase:** criterio de salida "una sesión real de cada CLI produce eventos canónicos en `events`" → correr el live L3 de Claude y un turno real de Codex (poca cuota: modelos baratos, una respuesta). **Requiere permiso de Leo.**
+
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

@@ -75,8 +75,11 @@ fn find_claude() -> Option<PathBuf> {
 }
 
 /// Comando del hook con comillas de shell tipo bash (Claude corre los hooks así, P01 Test B).
+///
+/// Comillas simples: bash no expande nada adentro (`$`, comillas invertidas), así una
+/// ruta rara no puede inyectar comandos. Una `'` se escribe `'\''`.
 fn hook_command_line(hook: &HookCommand) -> String {
-    let quote = |s: &str| format!("\"{}\"", s.replace('\\', "/").replace('"', "\\\""));
+    let quote = |s: &str| format!("'{}'", s.replace('\\', "/").replace('\'', "'\\''"));
     std::iter::once(quote(&hook.program.to_string_lossy()))
         .chain(hook.args.iter().map(|a| quote(a)))
         .collect::<Vec<_>>()

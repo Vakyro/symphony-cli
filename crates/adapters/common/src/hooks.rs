@@ -44,10 +44,11 @@ pub fn parse_standard_hook(payload: &Value) -> Vec<AgentEvent> {
     let kind = tool_kind(&tool);
     let tool_use_id = str_field(payload, "tool_use_id");
     let input = payload.get("tool_input");
+    // Los comandos van a `events` y a `tool_calls.command`: siempre redactados (DB §3.F).
     let command = input
         .and_then(|i| i.get("command"))
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .map(|c| symphony_core::redact(c).into_owned());
     let path = input
         .and_then(|i| i.get("file_path").or_else(|| i.get("path")))
         .and_then(Value::as_str)
@@ -178,5 +179,30 @@ mod tests {
             Some(FailureType::Auth)
         );
         assert_eq!(classify_error_category("inventado"), None);
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tool_commands_are_redacted_before_storage() {
+        let ev = parse_standard_hook(&json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "export GITHUB_TOKEN=ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123 && npm publish"}
+        }));
+        let [
+            AgentEvent::ToolRequested {
+                command: Some(c), ..
+            },
+        ] = ev.as_slice()
+        else {
+            panic!("{ev:?}")
+        };
+        assert!(!c.contains("ghp_"), "{c}");
+        assert!(c.contains("npm publish"));
     }
 }
