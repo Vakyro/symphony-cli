@@ -5,8 +5,8 @@
 | Estado | EN CURSO |
 | Rama | phase/p07-tui |
 | Inicio / cierre | 2026-09-25 / — |
-| Agentes que trabajaron | claude-code/opus-5.5 (S1–S7) |
-| Tag | — |
+| Agentes que trabajaron | claude-code/opus-5.5 (S1–S8) |
+| Tag | v0.1.0 (S8); p07-done al cerrar la fase |
 | Docs usados | FLOW §1–§8, §12, §13, §16, §18, §20 (Journey A), §21; PLAN P07; DB §3 (providers, models, recovery_items, executor_changes, tool_calls) |
 
 ## Pasos
@@ -60,6 +60,19 @@
   - Acciones: `m` manda un mensaje, `p` pausa o reanuda según el estado, `s` cambia el modelo (Model Picker), `d` abre el diff y `x x` detiene el agente (pide confirmación).
   - La Conversación muestra el separador `EXECUTOR_CHANGE` (FLOW §13.4) y arranca desde lo más nuevo.
 - **Verificación:** snapshots `view_06`–`view_09` y `view_12_24`; `stop_needs_confirmation_and_switch_uses_the_picker`, `pause_toggles_with_the_state` y `tabs_fetch_their_data`.
+- **«Abrir en el CLI»** (attach de ADR-0005; agregado 2026-09-25, a pedido de Leo):
+  - Tecla `o` en la vista del agente, o `symphony attach <agente> [--print]`.
+  - Abre una terminal nueva con la sesión del agente en el CLI oficial, interactivo y en su worktree:
+    - Claude: `claude --resume <id> --model <m> --permission-mode …`.
+    - Codex: `codex resume <id> -m <m> -c sandbox_mode=…`.
+    - La terminal se abre con `cmd /c start` en Windows, Terminal.app (`osascript`) en macOS y `x-terminal-emulator` en Linux.
+  - **Nunca con el executor vivo** (serían dos procesos sobre la misma sesión) y nunca antes de que el agente haya corrido.
+  - Siempre devuelve el comando para copiarlo, por si no se puede abrir una terminal.
+  - Deja una nota `SYSTEM` en la conversación.
+  - **Verificación:**
+    - `attach_opens_the_last_cli_session_only_when_idle` (runtime), `open_in_the_cli_reports_the_terminal_or_the_command` (TUI), tests de quoting en `crates/daemon/src/attach.rs`.
+    - **Manual en Windows con Claude Code real:** un agente `claude/haiku` terminó y `symphony attach 1` abrió una consola nueva con `claude.exe --resume 2035eb18-… --model haiku`. Nota `SYSTEM` en `symphony logs 1`.
+  - El regreso («al volver, Symphony retoma con `resume`», ADR-0005) llega con el pendiente de mensajes después del turno.
 
 ### P07.S6 · Providers y Recovery Center — ✅
 - **Qué se hizo:**
@@ -79,6 +92,19 @@
   - La primera corrida live falló y destapó 4 bugs, corregidos en este paso (ver «Bugs encontrados»).
 - **Fuera de v0.1:** el resto de Journey A (validación, merge preflight, integrar y archivar) es P08.
 
+### P07.S8 · Release v0.1.0 — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-25 · con permiso de Leo para el tag y el push.
+- **Qué se hizo:**
+  - Versión del workspace `0.0.1` → `0.1.0` (`symphony --version` → `symphony 0.1.0`).
+  - `CHANGELOG.md` con git-cliff 2.14.2, vía `npx git-cliff@latest`: binario precompilado, sin `cargo install`. `cliff.toml` agrupa por tipo de Conventional Commit en español y solo toma tags `v*`, no los `pNN-done`. Excluye bitácoras, `wip` y merges de fase. Resultado: 58 entradas en `0.1.0`.
+  - Build release local para Windows: `cargo build --release -p symphony-cli -p symphony-daemon` en 6 min 28 s. `symphony.exe` 2.9 MB, `symphonyd.exe` 9.5 MB. Los instaladores llegan en P13.
+  - Tag `v0.1.0` en la rama de fase y push de la rama y el tag. La CI corre en la rama; los tags no disparan workflows. El merge a `main` y `p07-done` quedan para el cierre de la fase (P07.S9, después de la replanificación P07.S10).
+- **Prueba de humo de los binarios release** (home temporal):
+  - `symphony status` en frío (autoarranca el daemon) en 0.33 s.
+  - `providers` detecta Claude 2.1.282 y Codex 0.157.0.
+  - **RAM de `symphonyd` en reposo: 16.5 MB** (presupuesto R2 < 100 MB).
+- **Para regenerar el CHANGELOG:** `npx --yes git-cliff@latest --tag vX.Y.Z -o CHANGELOG.md`.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -92,7 +118,6 @@
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|
-| Falta la acción «Abrir en el CLI» (attach) de ADR-0005 para P07.S5 | No se puede abrir la sesión del agente en el CLI oficial desde la TUI | — | Pendiente de P07; necesita abrir una terminal nueva por OS. Preguntar a Leo si entra en v0.1 |
 | Mensajes a Claude **después** de su turno | Con la adenda de ADR-0005 el proceso sale al terminar el turno; `m` devuelve «el agente no tiene un executor corriendo» | mandar un mensaje a un agente `COMPLETED` | `resume` (`claude --resume <id>`) con el mensaje: siguiente paso natural |
 | Los cambios de estado no pasan por el bus | La TUI los ve con hasta 3 s de retraso | pausar un agente desde la CLI con la TUI abierta | Sondeo marcado `ponytail:`; `agent.changed` si hace falta |
 | «Archive» de completados | Home agrupa los completados pero no los archiva | — | Llega con merge (P08) |
@@ -126,7 +151,7 @@
 
 ## Pruebas
 - Comandos: `cargo nextest run -p symphony-tui`, `cargo nextest run -p symphony-daemon --test daemon`, `cargo xtask check`.
-- Totales: `cargo xtask check` → 195 passed, 1 skipped (live de la CLI; el live de la TUI pasa como omitido sin `SYMPHONY_LIVE`). Dos corridas completas seguidas en verde. `cargo deny check` → ok (avisos de duplicados: `unicode-width` 0.1/0.2 por ratatui, `hashbrown`, `syn`).
+- Totales: `cargo xtask check` → 199 passed, 1 skipped (live de la CLI; el live de la TUI pasa como omitido sin `SYMPHONY_LIVE`). Dos corridas completas seguidas en verde. `cargo deny check` → ok (avisos de duplicados: `unicode-width` 0.1/0.2 por ratatui, `hashbrown`, `syn`).
 - Live L3: `live_journey_a_with_claude_code` ✅ (17 s, 17 eventos).
 
 ## Notas para el siguiente agente

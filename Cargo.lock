@@ -2454,7 +2454,7 @@ checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "symphony-adapter-claude"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde_json",
  "symphony-adapter-common",
@@ -2464,7 +2464,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-adapter-codex"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde_json",
  "symphony-adapter-common",
@@ -2475,7 +2475,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-adapter-common"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2486,7 +2486,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-cli"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "clap",
  "miette",
@@ -2507,7 +2507,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-context"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "insta",
  "symphony-core",
@@ -2515,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "proptest",
  "regex",
@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-daemon"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "miette",
  "proptest",
@@ -2557,7 +2557,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-git"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "tempfile",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-object-store"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "rusqlite",
@@ -2578,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-process"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "processkit",
  "sysinfo",
@@ -2589,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-protocol"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "interprocess",
  "proptest",
@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-store"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "rusqlite",
@@ -2616,7 +2616,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-testkit"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2631,7 +2631,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-tui"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "insta",
  "ratatui",
@@ -3527,7 +3527,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.0.1"
+version = "0.1.0"
 
 [[package]]
 name = "yoke"
