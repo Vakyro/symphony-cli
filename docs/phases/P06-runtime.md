@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p06-runtime |
 | Inicio / cierre | 2026-09-24 / — |
-| Agentes que trabajaron | claude-code/opus-5.5 (S1–S4) |
+| Agentes que trabajaron | claude-code/opus-5.5 (S1–S4), codex/gpt-5.x (S5–S6), antigravity/gemini-3.7-flash (S7–S8) |
 | Tag | — |
 | Docs usados | FLOW §6, §7, §16; DB §3.C, §3.G, §3.I; IDEA §5.5 |
 
@@ -131,11 +131,19 @@
   - **Runtime & Store ops:** agregadas operaciones `find_agent_by_ident` (soporta `1`, `#1`, `agent-1` y ULID), `list_agents_rows` y `agent_messages` en store; `stop`, `kill`, `diff` (live worktree con fallback a CAS blob), `logs` (con descompresión de CAS object store) e `inspect` en runtime.
   - **CLI subcommands:** `symphony` implementa `spawn`, `agents`, `send`, `pause`, `resume`, `stop`, `kill`, `switch`, `diff`, `logs`, `inspect` con salida formateada amigable para humanos.
   - **Trycmd snapshots & Tests:** actualizado snapshot de `--help` y agregado test de integración `crates/cli/tests/agents.rs`.
-- **Archivos clave:** `crates/daemon/src/server.rs`, `crates/daemon/src/executor.rs`, `crates/daemon/src/providers.rs`, `crates/store/src/repo.rs`, `crates/cli/src/main.rs`, `crates/cli/tests/agents.rs`, `crates/cli/tests/cmd/help.toml`
+### P06.S8 · Prueba de aceptación: forced kill — ✅
+- **Agente:** antigravity/gemini-3.7-flash · **Fecha:** 2026-09-24
+- **Qué se hizo:**
+  - Implementada la prueba de aceptación automatizada Test D (IDEA §8) en `crates/daemon/tests/runtime.rs`:
+    1. **fake-agent A (`claude/fast`)** trabaja en la tarea ("Implementar sistema de usuarios con autenticación"), crea `email.js` y `password.js`, declara en su mensaje el plan para los siguientes módulos (`users.js` y `users_test.js`) y se cuelga.
+    2. El watchdog detecta la ausencia de heartbeat y realiza un forced kill sin cleanup, dejando el run en `FAILED` con `NO_HEARTBEAT`.
+    3. **fake-agent B (`codex/fast`)** toma el relevo mediante `Runtime::switch`. Recibe únicamente el prompt de handoff generado automáticamente desde el último checkpoint y el git vivo (con el objetivo, qué seguía y diff de archivos creados).
+    4. **fake-agent B** implementa los archivos restantes (`users.js` y `users_test.js`) y completa la tarea con éxito (`COMPLETED`, task `DONE`).
+    5. Se verifican todos los artefactos en el worktree, la consistencia de la rama git, y las tablas `agent_runs`, `handoffs`, `executor_changes` y `messages`.
+- **Archivos clave:** `crates/daemon/tests/runtime.rs`
 - **Cómo se verificó:**
-  - `symphony-cli::agents agent_lifecycle_cli_commands`
-  - `symphony-cli::cli cli_commands`
-  - `cargo xtask check` → 161 passed, 1 skipped.
+  - `forced_kill_test_d_acceptance_test`
+  - `cargo xtask check` → 162 passed, 1 skipped.
 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
@@ -147,6 +155,7 @@
 | Checkpoints incrementales monótonos, podados, sin objetos colgantes | proptest `checkpoints_stay_monotonic_and_consistent` | ✅ |
 | Prompt de handoff con plantilla fija, desde checkpoint + git vivo | snapshots `insta` + `handoff_combines_the_checkpoint_with_live_git` | ✅ |
 | Control completo de agentes por CLI e IPC (`spawn`, `agents`, `inspect`, etc.) | `crates/cli/tests/agents.rs` + trycmd `help.toml` | ✅ |
+| Forced kill acceptance test (Test D): un agente sobrevive al crash de su CLI | `forced_kill_test_d_acceptance_test` | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
@@ -174,7 +183,7 @@
 
 ## Pruebas
 - Comando(s): `cargo xtask check`
-- Totales: 155 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
+- Totales: 162 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
 
 ## Estado final
 (al cerrar)

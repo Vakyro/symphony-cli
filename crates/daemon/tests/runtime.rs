@@ -1282,8 +1282,8 @@ kind = "hang"
     let e = env_with_watchdog(
         &[("fake", script)],
         None,
-        Duration::from_millis(50),
-        Duration::from_millis(500),
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
     )
     .await;
     let created = e
@@ -1363,5 +1363,163 @@ async fn crashed_executor_can_restart_from_its_checkpoint() {
         git(&created.worktree, &["branch", "--show-current"]),
         created.branch
     );
+    e.writer.shutdown();
+}
+
+/// P06.S8: Prueba de aceptación forced kill (IDEA §8, Test D).
+/// fake-agent A trabaja y se cuelga/muere sin cleanup;
+/// fake-agent B continúa solo con el handoff estructurado;
+/// se verifica que la tarea se completa y todos los artefactos y estados quedan íntegros.
+#[tokio::test(flavor = "multi_thread")]
+async fn forced_kill_test_d_acceptance_test() {
+    let script_a = r#"
+[[step]]
+kind = "edit"
+path = "email.js"
+content = "export function validateEmail(e) { return e.includes('@'); }\n"
+[[step]]
+kind = "edit"
+path = "password.js"
+content = "export function hashPassword(p) { return 'hash:' + p; }\n"
+[[step]]
+kind = "say"
+text = "Creados módulos email y password.\nNext: implementar UserStore en users.js y tests en users_test.js"
+[[step]]
+kind = "hang"
+"#;
+    let script_b = r#"
+[[step]]
+kind = "edit"
+path = "users.js"
+content = "import { validateEmail } from './email.js';\nexport class UserStore { constructor() { this.users = []; } }\n"
+[[step]]
+kind = "edit"
+path = "users_test.js"
+content = "import { UserStore } from './users.js';\n// tests passed\n"
+[[step]]
+kind = "say"
+text = "Tarea completada con éxito: módulo users y tests agregados."
+"#;
+
+    let e = env_with_watchdog(
+        &[("claude", script_a), ("codex", script_b)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Implementar sistema de usuarios con autenticación",
+            Execution::Exact("claude/fast".into()),
+        ))
+        .await
+        .unwrap();
+
+    // 1. fake-agent A trabaja, crea archivos y se cuelga. El watchdog lo mata forzosamente.
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    // Comprobamos que el run 1 murió por NO_HEARTBEAT y el agente quedó en FAILED
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs WHERE seq = 1"),
+        "NO_HEARTBEAT"
+    );
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "FAILED");
+    assert!(created.worktree.join("email.js").is_file());
+    assert!(created.worktree.join("password.js").is_file());
+
+    // 2. fake-agent B (Codex) retoma el trabajo mediante switch con handoff automático
+    let _new_run = e
+        .runtime
+        .switch(created.agent_id, "codex/fast")
+        .await
+        .unwrap();
+
+    // 3. fake-agent B corre con el handoff recibido y completa la tarea
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    // 4. Verificaciones completas de aceptación (Test D)
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "COMPLETED");
+    assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "DONE");
+    assert_eq!(count(&e, "agent_runs"), 2);
+    assert_eq!(count(&e, "executor_changes"), 1);
+
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let runs: Vec<(String, String, String, Option<String>)> = conn
+        .prepare("SELECT provider_id, model_id, status, end_reason FROM agent_runs ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        runs,
+        vec![
+            (
+                "claude".into(),
+                "claude/fast".into(),
+                "FAILED".into(),
+                Some("NO_HEARTBEAT".into()),
+            ),
+            (
+                "codex".into(),
+                "codex/fast".into(),
+                "EXITED".into(),
+                Some("COMPLETED".into()),
+            ),
+        ]
+    );
+
+    // Los handoffs registran el traspaso
+    assert_eq!(count(&e, "handoffs"), 2);
+    assert_eq!(
+        one::<i64>(
+            &e,
+            "SELECT COUNT(*) FROM handoffs WHERE outcome = 'CONTINUED'"
+        ),
+        1
+    );
+
+    // Los mensajes registran los prompts enviados a cada run
+    let user_messages: Vec<String> = conn
+        .prepare("SELECT content FROM messages WHERE role = 'USER' ORDER BY created_at")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    assert_eq!(user_messages.len(), 2);
+    let handoff_prompt = &user_messages[1];
+    assert!(
+        handoff_prompt.contains("Implementar sistema de usuarios con autenticación"),
+        "debe contener el objetivo"
+    );
+    assert!(
+        handoff_prompt.contains("implementar UserStore en users.js y tests en users_test.js"),
+        "debe contener el qué seguía extraído del último mensaje"
+    );
+    assert!(
+        handoff_prompt.contains("email.js") && handoff_prompt.contains("password.js"),
+        "debe reflejar los archivos creados por el agente A"
+    );
+
+    // Todos los archivos existen en el worktree final
+    assert!(created.worktree.join("email.js").is_file());
+    assert!(created.worktree.join("password.js").is_file());
+    assert!(created.worktree.join("users.js").is_file());
+    assert!(created.worktree.join("users_test.js").is_file());
+
+    // La rama de git se mantuvo consistente
+    assert_eq!(
+        git(&created.worktree, &["branch", "--show-current"]),
+        created.branch
+    );
+
     e.writer.shutdown();
 }

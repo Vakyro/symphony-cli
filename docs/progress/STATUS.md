@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por antigravity/gemini-3.7-flash
 **Fase actual:** P06 · Agent runtime, checkpoints y handoff (rama `phase/p06-runtime`)
-**Paso actual:** P06.S8 · Prueba de aceptación: forced kill
+**Paso actual:** P06.S9 · Cierre
 **Estado del paso:** EN CURSO
 **En curso por:** antigravity/gemini-3.7-flash desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (158 tests; 1 live omitido)
+- `cargo xtask check`: ✅ (162 tests; 1 live omitido)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -20,11 +20,11 @@
 - [x] P06.S5 Cambio de executor
 - [x] P06.S6 Heartbeat y reclaim
 - [x] P06.S7 Comandos de agente
-- [ ] P06.S8 Prueba de aceptación: forced kill   ← aquí
-- (resto de P06 en PLAN.md)
+- [x] P06.S8 Prueba de aceptación: forced kill
+- [ ] P06.S9 Cierre de fase P06   ← aquí
 
 ## Próxima acción concreta
-Implementar test E2E de forced kill (P06.S8): fake-agent A trabaja -> kill sin cleanup -> fake-agent B continúa usando únicamente el handoff montado sobre checkpoint y git vivo -> finaliza la tarea.
+Completar el protocolo de cierre de fase P06 (PLAN §4.6): verificar criterios de salida de P06, documentar estado final en bitácora, merge a main y tag `p06-done`.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
