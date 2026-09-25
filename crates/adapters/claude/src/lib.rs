@@ -208,6 +208,10 @@ impl ProviderAdapter for ClaudeAdapter {
         user_message(prompt)
     }
 
+    fn close_stdin_after_prompt(&self) -> bool {
+        false
+    }
+
     fn encode_user_message(&self, text: &str) -> Option<Vec<u8>> {
         Some(user_message(text))
     }

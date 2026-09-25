@@ -1563,6 +1563,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "symphony-adapter-codex"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "symphony-adapter-common",
+ "symphony-core",
+ "tempfile",
+ "toml_edit",
+]
+
+[[package]]
 name = "symphony-adapter-common"
 version = "0.0.1"
 dependencies = [

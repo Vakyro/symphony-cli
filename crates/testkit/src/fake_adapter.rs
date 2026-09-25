@@ -106,6 +106,10 @@ impl ProviderAdapter for FakeAdapter {
         format!("{prompt}\n").into_bytes()
     }
 
+    fn close_stdin_after_prompt(&self) -> bool {
+        false
+    }
+
     fn encode_user_message(&self, text: &str) -> Option<Vec<u8>> {
         Some(format!("{text}\n").into_bytes())
     }

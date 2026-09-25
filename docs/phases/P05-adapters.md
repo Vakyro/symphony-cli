@@ -37,6 +37,13 @@
 - **Archivos clave:** `crates/adapters/claude/src/lib.rs`, `crates/adapters/claude/tests/claude.rs`
 - **Cómo se verificó:** suite de contrato con 11 líneas de stream reales + 4 sintéticas documentadas, 9 hooks reales y 6 errores; cuota; comando de spawn/resume y JSON de `--settings`; codificación de mensajes. `cargo xtask check` → 121 passed. El live L3 (`SYMPHONY_LIVE=1`) existe pero no se corrió.
 
+### P05.S5 · Adapter Codex — ✅ (L3 live no escrito: falta permiso)
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony-adapter-codex`: `codex exec -s <sandbox> --json -m M … -` (prompt por stdin hasta EOF → `close_stdin_after_prompt() = true`, nuevo en el trait); `exec resume <id> -` con `-c sandbox_mode=…`; binario nativo de npm en vez del shim; hooks con 6 overrides `-c hooks.<Evento>=[…]` + `--dangerously-bypass-hook-trust`, comando en **PowerShell** (`& … …`) en Windows y en sh en Unix, siempre TOML válido; `encode_user_message = None` (solo entre turnos, ADR-0005). Stream: `thread.started` (sesión), `agent_message` (texto), `error`/`turn.failed` (errores; `Reconnecting…` = red transitoria, P01 Test D); los avisos `item.completed/error` se ignoran. `quota_from_rollout`: cuota KNOWN (5 h y 7 días) desde el rollout.
+- **Fixtures L1:** `fixtures/providers/codex/{exec-stream,hooks}.jsonl` (P01, sanitizados).
+- **Archivos clave:** `crates/adapters/codex/src/lib.rs`, `crates/adapters/codex/tests/codex.rs`
+- **Cómo se verificó:** suite de contrato con 10 líneas reales + 1 sintética, 7 hooks reales y 5 errores; avisos vs. errores; comando de spawn/resume; comando del hook con comilla simple en la ruta; TOML del override; cuota desde un rollout con la forma real. `cargo xtask check` → 127 passed.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

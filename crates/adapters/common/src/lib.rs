@@ -204,6 +204,9 @@ pub trait ProviderAdapter: Send + Sync {
     fn resume_spec(&self, req: &ResumeRequest) -> Result<ProcessSpec, AdapterError>;
     /// Bytes a escribir en stdin para el prompt inicial.
     fn encode_prompt(&self, prompt: &str) -> Vec<u8>;
+    /// `true` si el CLI lee el prompt hasta EOF (Codex `exec -`): el runtime cierra stdin
+    /// después de escribirlo. `false` si stdin queda abierto para más mensajes (Claude).
+    fn close_stdin_after_prompt(&self) -> bool;
     /// Bytes para un mensaje del usuario a media tarea, o `None` si el CLI solo los
     /// acepta entre turnos (Codex, ADR-0005).
     fn encode_user_message(&self, text: &str) -> Option<Vec<u8>>;
