@@ -400,7 +400,15 @@ async fn agent_create(req: Request, state: &State) -> Response {
         priority,
     };
 
-    match state.runtime.create_agent(create_req).await {
+    // En su propia tarea: si el request vence (REQUEST_TIMEOUT), la creación
+    // termina igual (o hace su rollback) en vez de cortarse con el worktree a medias.
+    let runtime = state.runtime.clone();
+    let created = tokio::spawn(async move { runtime.create_agent(create_req).await }).await;
+    let created = match created {
+        Ok(result) => result,
+        Err(e) => return Response::error(req.id, "internal", e.to_string()),
+    };
+    match created {
         Ok(c) => Response::ok(
             req.id,
             json!({

@@ -122,10 +122,12 @@ pub async fn start_daemon(home: &Path) -> Result<u32, ClientError> {
 #[cfg(windows)]
 fn detach(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    // Consola propia y oculta, no `DETACHED_PROCESS` (que anula CREATE_NO_WINDOW):
+    // sin consola, cada programa de consola que lanza el daemon (git, los CLIs)
+    // obliga a Windows a crearle una, y eso tardaba ~3 s por proceso (P07).
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
     stop_inheriting_std_handles();
 }
 
