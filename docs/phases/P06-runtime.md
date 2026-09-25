@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA |
 | Rama | phase/p06-runtime |
-| Inicio / cierre | 2026-09-24 / — |
-| Agentes que trabajaron | claude-code/opus-5.5 (S1–S4), codex/gpt-5.x (S5–S6), antigravity/gemini-3.7-flash (S7–S8) |
-| Tag | — |
+| Inicio / cierre | 2026-09-24 / 2026-09-24 |
+| Agentes que trabajaron | claude-code/opus-5.5 (S1–S4), codex/gpt-5.x (S5–S6), antigravity/gemini-3.7-flash (S7–S9) |
+| Tag | p06-done |
 | Docs usados | FLOW §6, §7, §16; DB §3.C, §3.G, §3.I; IDEA §5.5 |
 
 ## Pasos
@@ -145,6 +145,17 @@
   - `forced_kill_test_d_acceptance_test`
   - `cargo xtask check` → 162 passed, 1 skipped.
 
+### P06.S9 · Cierre — ✅
+- **Agente:** antigravity/gemini-3.7-flash · **Fecha:** 2026-09-24
+- **Qué se hizo:**
+  - Verificados todos los criterios de salida de la Fase P06:
+    1. Journey C funciona de punta a punta con `fake-agent`.
+    2. Forced kill (Test D) verificado mediante test automatizado de aceptación.
+    3. Ningún agente queda con dos runs abiertos (garantizado por índice único parcial en SQLite y proptests).
+  - Verificación global con `cargo xtask check` (162 tests passed, 1 skipped live) y `cargo deny check` limpio.
+  - Actualizada la bitácora de fase y STATUS.md.
+  - Merge a `main` y etiquetado con tag `p06-done`.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -166,6 +177,7 @@
 - **Orden git → transacción.** El worktree se crea antes de escribir en la base. Así el rollback se reduce a borrar el worktree y la rama; no hay filas `CREATING` que limpiar.
 - **Exit 0 del CLI = tarea terminada** (agente `COMPLETED`). P06.S5 y P06.S6 afinan esto con failover y heartbeat.
 - **Rama con los últimos 8 caracteres de la sesión.** Se usa `symphony/<sesión>/agent-NNN` recortando el ULID de la sesión a sus últimos 8 caracteres (en minúsculas), para que el nombre sea corto.
+- **IPC y CLI desacoplados:** Los subcomandos CLI operan exclusivamente sobre IPC delegando todo el estado y gestión de procesos al runtime en `symphonyd`.
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
@@ -182,12 +194,14 @@
 - Crear un agente con worktree y lanzar fake-agent: < 2 s en Windows debug (tests).
 
 ## Pruebas
-- Comando(s): `cargo xtask check`
+- Comando(s): `cargo xtask check`, `cargo deny check`
 - Totales: 162 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
 
 ## Estado final
-(al cerrar)
+Fase P06 completamente finalizada y verificada con 162 tests automáticos pasando en verde.
+El runtime de agentes, la creación de worktrees por agente, el event bus con deduplicación y redacción de mensajes/tool-calls, los checkpoints incrementales monótonos con poda automática, el motor de handoff determinista combinando checkpoints con git vivo, la recuperación y el cambio de executor por cuota/heartbeat, los comandos de agente vía IPC/CLI y la prueba de aceptación forced kill (Test D) están implementados y probados.
 
 ## Notas para el siguiente agente
+- La fase P07 arrancará en la rama `phase/p07-tui` para construir la TUI (ratatui/crossterm) comunicándose con el daemon por IPC.
 - `Runtime` recibe los adapters inyectados. Los tests usan `FakeAdapter` sobre fake-agent y nunca un CLI real.
 - `Runtime::wait_executors` espera a que terminen los pumps. Úsalo en los tests antes de mirar la base, y haz `flush` del writer.

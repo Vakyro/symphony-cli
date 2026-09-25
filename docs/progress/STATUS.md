@@ -1,10 +1,10 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-09-24 · por antigravity/gemini-3.7-flash
-**Fase actual:** P06 · Agent runtime, checkpoints y handoff (rama `phase/p06-runtime`)
-**Paso actual:** P06.S9 · Cierre
-**Estado del paso:** EN CURSO
-**En curso por:** antigravity/gemini-3.7-flash desde 2026-09-24
+**Fase actual:** P07 · TUI y release v0.1 (rama `phase/p07-tui`)
+**Paso actual:** P07.S1 · Arquitectura TUI
+**Estado del paso:** LISTO PARA EMPEZAR
+**En curso por:** —
 
 ## Salud del repo
 - `cargo xtask check`: ✅ (162 tests; 1 live omitido)
@@ -12,7 +12,7 @@
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
 
-## Progreso de la fase actual
+## Progreso de la fase anterior (P06)
 - [x] P06.S1 Ciclo de vida del agente
 - [x] P06.S2 Mensajes y tool calls
 - [x] P06.S3 Checkpoints incrementales
@@ -21,17 +21,15 @@
 - [x] P06.S6 Heartbeat y reclaim
 - [x] P06.S7 Comandos de agente
 - [x] P06.S8 Prueba de aceptación: forced kill
-- [ ] P06.S9 Cierre de fase P06   ← aquí
+- [x] P06.S9 Cierre de fase P06
 
 ## Próxima acción concreta
-Completar el protocolo de cierre de fase P06 (PLAN §4.6): verificar criterios de salida de P06, documentar estado final en bitácora, merge a main y tag `p06-done`.
+Arrancar la fase P07 en la rama `phase/p07-tui`: crear el crate `tui` con arquitectura desacoplada comunicándose exclusivamente con el daemon vía IPC (suscripción de eventos + requests) sin abrir SQLite directamente (P07.S1).
 
 ## Handoff para el siguiente agente
-(llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
-- Estaba haciendo:
-- Archivo/función a medias:
-- Comandos corridos y resultado:
-- Hipótesis descartadas:
+- Fase P06 completada y testeada con 162 pruebas unitarias y de integración pasando en verde.
+- P06 verificó Journey C, forced kill acceptance test (Test D) y la suite completa de comandos CLI sobre IPC.
+- Siguiente paso: comenzar P07.S1 creando el crate `tui` y la estructura de vistas de terminal con `ratatui` y `crossterm`.
 
 ## Bloqueos y preguntas para Leo
 - (ninguno)
@@ -49,5 +47,6 @@ Completar el protocolo de cierre de fase P06 (PLAN §4.6): verificar criterios d
 | P03 | ✅ | p03-done |
 | P04 | ✅ | p04-done |
 | P05 | ✅ | p05-done |
-| P06 | 🟡 en curso | |
-| P07–P16 | ⏳ (P08–P16 provisionales hasta P07.S10) | |
+| P06 | ✅ | p06-done |
+| P07 | 🟡 en curso | |
+| P08–P16 | ⏳ (P08–P16 provisionales hasta P07.S10) | |
