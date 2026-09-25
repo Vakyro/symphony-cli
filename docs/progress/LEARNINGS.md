@@ -83,3 +83,11 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **Tests del CLI con un `symphonyd` viejo:** cargo no reconstruye binarios de otros paquetes para `-p symphony-cli`. `tests/common::symphonyd()` corre `cargo build -p symphony-daemon` una vez por proceso.
 - **La recuperación al arrancar trabaja con IDs como texto:** una fila con un ID inesperado impedía arrancar el daemon.
 - **En Unix, un CLI que aborta llega como `ExitStatus::Killed(Some(señal))`, no como exit code** (en Windows es `Exited(134)`). Una señal que Symphony no mandó es un crash: run `FAILED`. `KILLED` solo para stop/kill del usuario.
+
+## P07
+
+- **Un test que lanza `symphonyd` y falla deja al daemon huérfano**, y este hereda el pipe de nextest: `cargo nextest … | grep` se queda colgado para siempre, y el `symphonyd.exe` huérfano bloquea `target/debug/symphonyd.exe` («Acceso denegado» en el siguiente build). Envuelve el `Child` en un guard que lo mate en `Drop` (`KillOnDrop` en `crates/daemon/tests/daemon.rs`, `Daemon` en `crates/tui/tests/daemon.rs`). Para limpiar a mano: `tasklist | grep symphonyd`, confirmar que el ejecutable es de `target/debug` y `taskkill //PID <pid> //F`.
+- **En PowerShell de esta máquina `cargo` no está en el PATH;** en Git Bash sí: `export PATH="$HOME/.cargo/bin:$PATH"`.
+- **`cargo xtask check 2>&1 | tail` en segundo plano no muestra nada hasta el final:** redirige a un archivo (`> "$TEMP/check.log" 2>&1`) y filtra después.
+- **ratatui 0.30:** `ratatui::init()`/`restore()` ya ponen el modo raw, la pantalla alterna y el hook de panic. crossterm se usa por el re-export `ratatui::crossterm` (no hace falta otra dependencia). Para `.add_modifier` sobre un `Span` hace falta `use ratatui::style::Stylize`.
+- **Windows manda eventos `KeyEventKind::Release`:** si no se filtran, cada tecla cuenta doble.

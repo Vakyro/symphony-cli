@@ -15,3 +15,5 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-09-24 21:36 · antigravity/gemini-3.7-flash · inicio · P06.S7 · rama phase/p06-runtime
 - 2026-09-24 · antigravity/gemini-3.7-flash · cierre · P06 completa (S7–S9), tag p06-done. Runtime, comandos CLI e IPC, y Test D forced kill verificados (162 tests). Listo para P07 (TUI).
 
+- 2026-09-25 09:00 · claude-code/opus-5.5 · inicio · P07.S1 · rama phase/p07-tui
+- 2026-09-25 · claude-code/opus-5.5 · pausa · P07.S1–S6 ✅, S7 🟡 (snapshots + E2E con fake-agent; falta la prueba manual con Leo). Suscripción al bus y 8 métodos IPC nuevos en el daemon; 2 bugs corregidos (flags de enum ignorados, `logs --limit`). 191 tests
