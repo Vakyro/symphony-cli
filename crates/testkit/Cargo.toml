@@ -11,6 +11,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+symphony-adapter-common = { path = "../adapters/common" }
+symphony-core = { path = "../core" }
 serde.workspace = true
 serde_json.workspace = true
 toml_edit.workspace = true

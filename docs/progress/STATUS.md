@@ -2,22 +2,23 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P05 · Adapters y event bus (rama `phase/p05-adapters`)
-**Paso actual:** P05.S1 · Trait `ProviderAdapter`
+**Paso actual:** P05.S2 · Event bus
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (111 tests)
+- `cargo xtask check`: ✅ (115 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
-- [ ] P05.S1 Trait `ProviderAdapter`   ← aquí
+- [x] P05.S1 Trait `ProviderAdapter`
+- [ ] P05.S2 Event bus   ← aquí
 - (resto de P05 en PLAN.md)
 
 ## Próxima acción concreta
-`crates/adapters/common`: trait de STACK §18.1 + eventos canónicos (IDEA §5.3); adapter `fake` sobre `fake-agent` con una suite de contrato compartida.
+Ver PLAN P05.S2.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

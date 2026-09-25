@@ -9,6 +9,7 @@ members = [
     "crates/object-store",
     "crates/git",
     "crates/process",
+    "crates/adapters/common",
     "crates/testkit",
     "xtask",
 ]

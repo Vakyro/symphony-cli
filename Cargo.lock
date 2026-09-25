@@ -1553,6 +1553,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
+name = "symphony-adapter-common"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "symphony-core",
+ "symphony-process",
+ "thiserror",
+]
+
+[[package]]
 name = "symphony-cli"
 version = "0.0.1"
 dependencies = [
@@ -1666,6 +1677,8 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
+ "symphony-adapter-common",
+ "symphony-core",
  "symphony-git",
  "symphony-process",
  "tempfile",

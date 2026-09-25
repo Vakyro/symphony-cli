@@ -1,6 +1,6 @@
 //! `fake-agent`: imita un CLI de proveedor para E2E sin gastar suscripciones.
 //!
-//!   fake-agent run --script <guion.toml> [--hook <programa> [--hook-arg <a>]...] [--transcript <archivo.jsonl>]
+//!   fake-agent run --script <guion.toml> [--hook <programa> [--hook-arg <a>]...] [--transcript <archivo.jsonl>] [--model <m>] [--session-id <id>]
 //!   fake-agent record-hook <archivo.jsonl>
 //!
 //! `run` emite un stream JSONL por stdout (al estilo de `claude -p --output-format
@@ -99,7 +99,7 @@ impl Agent {
             "PreToolUse",
             json!({"tool_name": tool, "tool_input": input, "tool_use_id": id}),
         ) {
-            emit(&json!({"type": "tool_result", "id": id, "denied": true}));
+            emit(&json!({"type": "tool_result", "id": id, "name": tool, "denied": true}));
             return;
         }
         let (ok, response) = act();
@@ -109,7 +109,7 @@ impl Agent {
             "PostToolUseFailure"
         };
         self.hook(event, json!({"tool_name": tool, "tool_input": input, "tool_use_id": id, "tool_response": response}));
-        emit(&json!({"type": "tool_result", "id": id, "ok": ok, "output": response}));
+        emit(&json!({"type": "tool_result", "id": id, "name": tool, "ok": ok, "output": response}));
     }
 
     fn fail(&mut self, error: &str, extra: Value) -> ExitCode {
@@ -252,6 +252,7 @@ fn main() -> ExitCode {
         Some("run") => {
             let (mut script, mut hook, mut hook_args, mut transcript) =
                 (None, None, Vec::new(), None);
+            let (mut model, mut session): (Option<String>, Option<String>) = (None, None);
             let mut it = args.iter().skip(1);
             while let Some(a) = it.next() {
                 match (a.as_str(), it.next()) {
@@ -259,6 +260,8 @@ fn main() -> ExitCode {
                     ("--hook", Some(v)) => hook = Some(v.clone()),
                     ("--hook-arg", Some(v)) => hook_args.push(v.clone()),
                     ("--transcript", Some(v)) => transcript = Some(PathBuf::from(v)),
+                    ("--model", Some(v)) => model = Some(v.clone()),
+                    ("--session-id", Some(v)) => session = Some(v.clone()),
                     _ => return usage(),
                 }
             }
@@ -276,11 +279,10 @@ fn main() -> ExitCode {
                 }
             };
             let mut agent = Agent {
-                session_id: script
-                    .session_id
-                    .clone()
+                session_id: session
+                    .or_else(|| script.session_id.clone())
                     .unwrap_or_else(|| format!("fake-{}", now_ms())),
-                model: script.model.clone(),
+                model: model.unwrap_or_else(|| script.model.clone()),
                 cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 hook: hook.map(|h| (h, hook_args)),
                 transcript,
