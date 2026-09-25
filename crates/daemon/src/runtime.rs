@@ -601,15 +601,19 @@ async fn pump(
             .await;
         }
         other => {
-            let (status, code) = match other {
-                ExitStatus::Exited(c) => (RunStatus::Failed, Some(c)),
-                ExitStatus::Killed(_) => (RunStatus::Killed, None),
-                ExitStatus::Unknown => (RunStatus::Failed, None),
+            // Una señal que Symphony no mandó (abort, OOM killer) es un crash: `FAILED`.
+            // `KILLED` queda para stop/kill del usuario (P06.S7).
+            let cli = l.adapter.cli_name();
+            let (code, reason) = match other {
+                ExitStatus::Exited(c) => (Some(c), format!("{cli} terminó con código {c}")),
+                ExitStatus::Killed(Some(sig)) => {
+                    (None, format!("{cli} terminó por la señal {sig}"))
+                }
+                ExitStatus::Killed(None) | ExitStatus::Unknown => {
+                    (None, format!("{cli} terminó de forma inesperada"))
+                }
             };
-            let reason = match code {
-                Some(c) => format!("{} terminó con código {c}", l.adapter.cli_name()),
-                None => format!("{} terminó de forma inesperada", l.adapter.cli_name()),
-            };
+            let status = RunStatus::Failed;
             finish_run(
                 &writer,
                 &l,
