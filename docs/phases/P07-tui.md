@@ -68,28 +68,32 @@
   - Vista 30 (Recovery Center) con acciones `restart`, `reclaim`, `stop` y `dismiss` sobre `recovery.act`. `stop` cierra el item como `ARCHIVE`; `restart` y `reclaim` lo resuelven con la lógica del runtime (P06.S6).
 - **Verificación:** snapshots `view_22_providers` y `view_30_recovery_center`; `recovery_actions_and_disconnection`. En el daemon, `recovery_center_and_tui_views_over_ipc` cubre `recovery.list` filtrado por proyecto, `restart` sin agente con error claro, acción inválida, `dismiss`, doble `dismiss`, desactivar un proveedor que sobrevive al refresh, sus modelos que pasan a no disponibles, `project.status` fuera de un repo y `agent.history` de un agente inexistente.
 
-### P07.S7 · Snapshots y E2E — 🟡
+### P07.S7 · Snapshots y E2E — ✅
 - **Hecho:**
-  - 16 snapshots `insta` (una o más por vista) revisados a mano.
-  - E2E con fake-agent, que es la parte de Journey A que existe en v0.1: abrir, inicializar, crear agente, verlo trabajar y volver al Home.
-- **Pendiente:**
-  - Probar la TUI en una **terminal real**. Los snapshots y el E2E no ejercitan el modo raw, el redimensionado ni las teclas de Windows; no se pudo hacer desde la herramienta del agente.
-  - Prueba manual con **Claude Code real** (necesita permiso de Leo).
-  - Documentar Journey A con capturas.
-  - El resto de Journey A (validación, merge preflight, integrar y archivar) es P08.
+  - 16 snapshots `insta` (una o más por vista) revisados a mano, más tests de render de la vista de agente sin executor y terminado.
+  - E2E con fake-agent: abrir, inicializar, crear agente, verlo trabajar y volver al Home (`tui_drives_a_real_daemon_over_ipc_only`).
+  - **Terminal real (Leo, 2026-09-25):** recorrió la TUI en su terminal. Resultado: «está de maravilla»; no reportó fallas.
+  - **Journey A live con Claude Code real** (permiso de Leo, 2026-09-25): `crates/tui/tests/live.rs::live_journey_a_with_claude_code` maneja la misma lógica de la TUI (`App` + IPC) contra un daemon real con `claude/haiku`. Recorre abrir → inicializar → formulario New Agent → Model Picker (`claude/haiku`) → vista del agente → Conversación → `COMPLETED` → Actividad → Cambios (diff con `## Usage`) → Historial → Home.
+    - **Resultado:** ✅ en 17 s, con 17 eventos del bus. Claude editó el README; el run quedó `EXITED · COMPLETED`.
+    - Repetible con `SYMPHONY_LIVE=1 cargo nextest run -p symphony-tui --no-capture live_`.
+  - La primera corrida live falló y destapó 4 bugs, corregidos en este paso (ver «Bugs encontrados»).
+- **Fuera de v0.1:** el resto de Journey A (validación, merge preflight, integrar y archivar) es P08.
 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
 | TUI solo por IPC contra un daemon real, con eventos del bus | `tui_drives_a_real_daemon_over_ipc_only` | ✅ |
-| Las 13 vistas de P07 renderizan (01–09, 12, 13, 22, 24, 30) | 16 snapshots `insta` | ✅ |
+| Las 13 vistas de P07 renderizan (01–09, 12, 13, 22, 24, 30) | 16 snapshots `insta` + 2 tests de render | ✅ |
 | Ramas de FLOW §4, §6, §8.2, §16 | 11 tests de lógica en `crates/tui/tests/views.rs` | ✅ |
 | Recovery Center y vistas por IPC | `recovery_center_and_tui_views_over_ipc` | ✅ |
+| TUI en una terminal real de Windows | Prueba manual de Leo | ✅ |
+| Journey A con Claude Code real | `live_journey_a_with_claude_code` (L3) | ✅ 17 s |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|
-| TUI no probada en una terminal real | Posibles detalles de teclado o redimensionado en Windows | `symphony` en una terminal | Leo la prueba (P07.S7) |
+| Falta la acción «Abrir en el CLI» (attach) de ADR-0005 para P07.S5 | No se puede abrir la sesión del agente en el CLI oficial desde la TUI | — | Pendiente de P07; necesita abrir una terminal nueva por OS. Preguntar a Leo si entra en v0.1 |
+| Mensajes a Claude **después** de su turno | Con la adenda de ADR-0005 el proceso sale al terminar el turno; `m` devuelve «el agente no tiene un executor corriendo» | mandar un mensaje a un agente `COMPLETED` | `resume` (`claude --resume <id>`) con el mensaje: siguiente paso natural |
 | Los cambios de estado no pasan por el bus | La TUI los ve con hasta 3 s de retraso | pausar un agente desde la CLI con la TUI abierta | Sondeo marcado `ponytail:`; `agent.changed` si hace falta |
 | «Archive» de completados | Home agrupa los completados pero no los archiva | — | Llega con merge (P08) |
 
@@ -108,6 +112,12 @@
 ## Bugs encontrados y corregidos de paso
 - **`symphony spawn --failover none|same-provider` y `--context-mode` se ignoraban:** la CLI mandaba `none`, el enum solo acepta `NONE`, y el daemon caía en silencio a `ANY`. Ahora el daemon rechaza valores inválidos (`enum_param`) y la CLI los normaliza (`db_value`). Tests: `flags_map_to_db_values` y el enum inválido del E2E de la TUI.
 - **`symphony logs --limit N` devolvía los primeros N mensajes, no los últimos.** `repo::agent_messages` ahora devuelve los últimos N en orden cronológico.
+- **Los agentes de Claude nunca terminaban** (visto en la primera corrida live): el agente quedaba `RUNNING` para siempre después de que Claude respondía. Con `--input-format stream-json` el CLI espera otro mensaje y no sale. Ahora el `result` produce `TurnFinished` y el executor cierra stdin (adenda de ADR-0005). `fake-agent --stdin stream` imita a Claude para que los tests cubran este camino.
+- **Claude negaba hasta los `Read` si el worktree tenía una ruta 8.3** (`C:\Users\LATITU~1\…`, lo que devuelve `%TEMP%` en esta máquina). Reproducido a mano con `claude -p`: *«the permission system is flagging the Windows path»*. Ahora el daemon arranca con la forma larga de su home (`transport::long_path`), y de ahí salen todas las rutas de worktree. El nombre del pipe también usa la forma larga: antes, la misma carpeta escrita de dos formas daba dos pipes distintos.
+- **Cada proceso que lanzaba el daemon tardaba ~3 s en Windows:** `git` durante `agent.create`, que llegaba al timeout de 10 s, y `claude --version`/`codex --version` al arrancar. El daemon se lanzaba con `DETACHED_PROCESS`, que anula `CREATE_NO_WINDOW`; sin consola, Windows le creaba una a cada hijo de consola. Ahora se lanza con una consola propia oculta (`CREATE_NO_WINDOW` sin `DETACHED_PROCESS`), y `symphony spawn` con autoarranque pasó de timeout (16.8 s) a 0.6 s. Lo reveló un test de la CLI que pasaba en la mañana: el costo depende del estado de Windows (probablemente la terminal por defecto).
+- **Un `agent.create` que llegaba al timeout dejaba el worktree y la rama huérfanos**, sin agente en la base. El timeout del request cortaba el future a mitad de camino. Ahora la creación corre en su propia tarea: termina (o hace su rollback) aunque el cliente deje de esperar.
+- **Vista de agente:** una tarea larga empujaba fuera la línea de failover y checkpoint (ahora el encabezado no hace wrap). Un agente terminado mostraba «sin executor»; ahora muestra el último. A un agente «decidir después» le falta pista de cómo arrancarlo: ahora el Resumen dice «pulsa s».
+- **El watchdog mataba como `NO_HEARTBEAT` a un CLI lento en arrancar** (era el «flake» de `forced_kill_test_d_acceptance_test` y `hung_executor_…` con la suite cargada). Un run sin actividad registrada contaba como silencioso desde el primer tick (`is_none_or`): 100 ms en los tests, 5 s en producción, y Claude por el shim de npm puede tardar más en su primera línea. Ahora el run marca actividad al lanzarse. Test de regresión: `slow_starting_executor_is_not_taken_for_hung` (con `startup_delay_ms` en el guion del fake-agent), que falla sin la corrección (`NO_HEARTBEAT`) y pasa con ella. Los umbrales de los tests no cambiaron.
 
 ## Dependencias agregadas
 | Crate | Versión | Para qué | ¿Estaba en STACK §58? |
@@ -116,8 +126,8 @@
 
 ## Pruebas
 - Comandos: `cargo nextest run -p symphony-tui`, `cargo nextest run -p symphony-daemon --test daemon`, `cargo xtask check`.
-- Totales: `cargo xtask check` → 191 passed, 1 skipped (live). `cargo deny check` → ok (avisos de duplicados: `unicode-width` 0.1/0.2 por ratatui, `hashbrown`, `syn`).
-- Flake visto una vez: `forced_kill_test_d_acceptance_test` (P06) falló con la suite compilando binarios en paralelo (watchdog de 1.5 s en el test). Aislado 4/4 y dos corridas completas en verde. Si reaparece: subir el umbral del watchdog **del test** con justificación, no la aserción.
+- Totales: `cargo xtask check` → 195 passed, 1 skipped (live de la CLI; el live de la TUI pasa como omitido sin `SYMPHONY_LIVE`). Dos corridas completas seguidas en verde. `cargo deny check` → ok (avisos de duplicados: `unicode-width` 0.1/0.2 por ratatui, `hashbrown`, `syn`).
+- Live L3: `live_journey_a_with_claude_code` ✅ (17 s, 17 eventos).
 
 ## Notas para el siguiente agente
 - **Snapshots:** `INSTA_UPDATE=always cargo nextest run -p symphony-tui` los regenera. Revísalos en `crates/tui/tests/snapshots/` antes de commitear.

@@ -41,3 +41,13 @@ Reglas:
 - **P05.S5 (Codex):** `spawn` = `exec --json`; `send_message` = encolar en Symphony y entregarlo con `exec resume` al terminar el turno (o interrumpir si Leo lo pide). La UI tiene que dejar claro que en Codex el mensaje entra en el próximo turno.
 - **P07.S5:** vista Conversation propia + acción "Abrir en el CLI" (attach con pausa).
 - Se revisa si Codex estabiliza `app-server` (JSON-RPC) con soporte para dirigir el turno en curso: sería la vía para hablarle a media tarea sin interrumpir.
+
+## Adenda 2026-09-25 (P07.S7, claude-code/opus-5.5): fin de turno de Claude
+
+**Problema (visto en la primera corrida live de la TUI):** con `--input-format stream-json`, Claude no sale al terminar su turno: se queda esperando el siguiente mensaje por stdin. El runtime tomaba el exit del CLI como fin de la tarea (P06), así que el agente quedaba `RUNNING` («trabajando») indefinidamente, hasta que el watchdog lo mataba como `NO_HEARTBEAT` (15 min). El fake-agent salía solo al terminar su guion, por eso ningún test lo detectó.
+
+**Decisión:** el `result` del stream de Claude se traduce a `TurnFinished`. Al verlo, el executor cierra stdin en los CLIs que lo dejan abierto (`close_stdin_after_prompt() == false`), y el CLI sale con su exit code real. También se cierra ante un error fatal de proveedor. Queda igual que Codex: un proceso por turno, y los mensajes después del turno van con `resume`.
+
+**Consecuencias:**
+- Un mensaje de Leo **durante** el turno sigue entrando por stdin, en el mismo turno. Uno **después** del turno encuentra el proceso terminado: hace falta `resume` (pendiente; hoy `agent.send` devuelve un error claro).
+- `fake-agent run --stdin stream` (lo pasa el fake adapter) imita a Claude: no sale hasta que le cierran stdin. Así los tests cubren este camino.

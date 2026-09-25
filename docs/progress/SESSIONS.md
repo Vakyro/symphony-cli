@@ -17,3 +17,4 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 
 - 2026-09-25 09:00 · claude-code/opus-5.5 · inicio · P07.S1 · rama phase/p07-tui
 - 2026-09-25 · claude-code/opus-5.5 · pausa · P07.S1–S6 ✅, S7 🟡 (snapshots + E2E con fake-agent; falta la prueba manual con Leo). Suscripción al bus y 8 métodos IPC nuevos en el daemon; 2 bugs corregidos (flags de enum ignorados, `logs --limit`). 191 tests
+- 2026-09-25 · claude-code/opus-5.5 · pausa · P07.S7 ✅: Leo probó la TUI en su terminal; Journey A live con Claude Code (haiku) en 17 s. La primera corrida live destapó 4 bugs (Claude nunca terminaba el turno, rutas 8.3, consola del daemon en Windows con ~3 s por proceso, worktree huérfano tras un timeout, watchdog con CLIs lentos); corregidos. Adenda en ADR-0005. Además: watchdog mataba CLIs lentos en arrancar (era el «flake»). 195 tests
