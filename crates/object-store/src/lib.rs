@@ -214,7 +214,7 @@ impl ObjectStore {
         let cutoff_ms = now_ms() - i64::try_from(grace.as_millis()).unwrap_or(i64::MAX);
 
         let dead: Vec<String> = conn
-            .prepare("SELECT hash FROM blobs WHERE ref_count = 0 AND created_at < ?1")?
+            .prepare("SELECT hash FROM blobs WHERE ref_count = 0 AND created_at <= ?1")?
             .query_map([cutoff_ms], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
         for hash in dead {
@@ -248,7 +248,7 @@ impl ObjectStore {
                 let old = file
                     .metadata()
                     .and_then(|m| m.modified())
-                    .is_ok_and(|t| t < cutoff);
+                    .is_ok_and(|t| t <= cutoff);
                 if !old {
                     continue;
                 }

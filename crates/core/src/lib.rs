@@ -1,12 +1,14 @@
 //! Modelo de dominio de Symphony: IDs, enums de DB y transiciones de estado.
 //! AGENT ≠ MODEL: el agente no guarda el modelo actual; eso vive en su run abierto.
 
+mod ansi;
 mod config;
 mod enums;
 mod ids;
 mod redact;
 mod transitions;
 
+pub use ansi::{AnsiMode, sanitize};
 pub use config::{
     Config, ConfigError, ContextConfig, DEFAULT_CONFIG, LoggingConfig, PerformanceConfig,
     ProjectConfig, ProjectSection, ProvidersConfig, RoutingConfig, SymphonyHome, create_project,

@@ -77,3 +77,6 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **nextest corta en la primera falla (fail-fast):** que un test no aparezca en el log de CI no significa que pasó.
 - **H4 en la práctica:** el daemon lanzado por el CLI heredaba el pipe de stdout de quien lanzó al CLI, y `trycmd` esperaba para siempre. Solución: `SetHandleInformation(…, HANDLE_FLAG_INHERIT, 0)` sobre los std handles propios antes del spawn (`crates/cli/src/client.rs`).
 - **"Socket cerrado" no significa "daemon terminado":** el daemon borra el socket y después cierra la base y suelta el lock. Un `stop` seguido de un autoarranque chocaba con el lock (visto en CI de macOS). La señal confiable es el **lock de instancia libre** (`transport::daemon_lock_held`).
+- **`git merge-tree --write-tree` devuelve exit 1 con conflictos y también con una rama inexistente.** Distinguirlos por el OID del tree al comienzo del stdout.
+- **PELIGRO: en Windows, `git worktree remove --force` sigue las junctions y borra su destino** (p. ej. el `node_modules` del repo base enlazado con la estrategia LINK). `Repo::worktree_remove` suelta los enlaces del primer nivel antes de llamar a git. Hay un test.
+- **Comparaciones de tiempo con margen 0 tienen que ser `<=`:** en Linux, crear y consultar pasa en el mismo milisegundo (el GC con `grace = 0` no borraba nada en CI).
