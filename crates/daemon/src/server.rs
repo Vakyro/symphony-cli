@@ -11,6 +11,11 @@ use serde_json::{Value, json};
 use symphony_protocol::transport::{self, ListenerExt as _, LocalStream};
 use symphony_protocol::{Connection, Message, PROTOCOL_VERSION, Request, Response};
 use symphony_store::{Writer, repo};
+
+use crate::bus::{BusEvent, EventBus, EventSource};
+
+/// Eventos que un suscriptor de la TUI puede atrasarse antes de perder los viejos.
+const TUI_BUFFER: usize = 1024;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -96,6 +101,8 @@ struct State {
     shutdown: CancellationToken,
     /// Conexión de solo lectura (las escrituras van por el `Writer`).
     reader: Mutex<rusqlite::Connection>,
+    bus: EventBus,
+    writer: symphony_store::WriterHandle,
 }
 
 fn now_ms() -> i64 {
@@ -132,6 +139,9 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     let db_path = symphony_core::SymphonyHome::at(home).db_path();
     let writer = Writer::start(&db_path)?;
     recover(&writer).await?;
+    if let Err(e) = refresh_providers(&writer.handle()).await {
+        tracing::warn!(error = %e, "no se pudo registrar a los proveedores");
+    }
     let reader = writer.reader()?;
     let listener = transport::listen(home).map_err(io("no se pudo abrir el socket IPC"))?;
     tracing::info!(pid = std::process::id(), home = %home.display(), "daemon listo");
@@ -140,6 +150,8 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         home: home.to_path_buf(),
         shutdown: shutdown.clone(),
         reader: Mutex::new(reader),
+        bus: EventBus::new(writer.handle(), TUI_BUFFER),
+        writer: writer.handle(),
     });
     let tracker = TaskTracker::new();
 
@@ -223,12 +235,102 @@ async fn dispatch(req: Request, state: &State) -> Response {
             state.shutdown.cancel();
             Response::ok(req.id, json!({ "stopping": true }))
         }
+        "hook.emit" => hook_emit(req, state).await,
+        "providers.list" => providers_list(req, state),
+        "providers.refresh" => match refresh_providers(&state.writer).await {
+            Ok(()) => providers_list(req, state),
+            Err(e) => Response::error(req.id, "store_error", e.to_string()),
+        },
         other => Response::error(
             req.id,
             "unknown_method",
             format!("método desconocido: `{other}`"),
         ),
     }
+}
+
+/// Detecta los CLIs (fuera del runtime: lanza procesos) y guarda el resultado.
+async fn refresh_providers(
+    writer: &symphony_store::WriterHandle,
+) -> Result<(), symphony_store::StoreError> {
+    let detected =
+        tokio::task::spawn_blocking(|| crate::providers::detect_all(&crate::providers::builtin()))
+            .await
+            .unwrap_or_default();
+    crate::providers::save(writer, detected, now_ms()).await
+}
+
+fn providers_list(req: Request, state: &State) -> Response {
+    let listed = state.reader.lock().ok().map(|c| crate::providers::list(&c));
+    match listed {
+        Some(Ok(v)) => Response::ok(req.id, json!({ "providers": v })),
+        Some(Err(e)) => Response::error(req.id, "store_error", e.to_string()),
+        None => Response::error(req.id, "store_error", "lector de la base no disponible"),
+    }
+}
+
+/// Un hook de un CLI (vía `symphony hook emit`) → eventos canónicos → bus.
+/// En P05 la decisión es siempre `allow`; el scheduler (P08) podrá retener o denegar.
+async fn hook_emit(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let text = |k: &str| {
+        p.get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let (Some(agent_id), Some(project_id)) = (text("agent_id"), text("project_id")) else {
+        return Response::error(req.id, "invalid_params", "faltan `agent_id` o `project_id`");
+    };
+    let Some(payload) = p.get("payload").filter(|v| v.is_object()) else {
+        return Response::error(
+            req.id,
+            "invalid_params",
+            "`payload` tiene que ser el JSON del hook",
+        );
+    };
+    let known = state
+        .reader
+        .lock()
+        .ok()
+        .and_then(|c| {
+            c.query_row(
+                "SELECT 1 FROM agents WHERE id = ?1 AND project_id = ?2",
+                [&agent_id, &project_id],
+                |_| Ok(()),
+            )
+            .ok()
+        })
+        .is_some();
+    if !known {
+        return Response::error(
+            req.id,
+            "unknown_agent",
+            format!("el agente `{agent_id}` no existe en este proyecto"),
+        );
+    }
+    // El esquema de hooks es común a Claude Code y Codex (P01 Test B). Con el
+    // registro de adapters (P05.S6) se usa el `parse_hook` del proveedor.
+    let events = symphony_adapter_common::hooks::parse_standard_hook(payload);
+    let n = events.len();
+    for event in events {
+        let ev = BusEvent {
+            project_id: project_id.clone(),
+            agent_id: Some(agent_id.clone()),
+            run_id: text("run_id"),
+            source: EventSource::Hook,
+            event,
+            occurred_at: now_ms(),
+        };
+        if state.bus.publish(ev).await.is_err() {
+            return Response::error(
+                req.id,
+                "store_closed",
+                "la base de datos no acepta escrituras",
+            );
+        }
+    }
+    Response::ok(req.id, json!({ "decision": "allow", "events": n }))
 }
 
 fn status(state: &State) -> Value {

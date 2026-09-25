@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a0d481-550a-7be0-bf21-1adadc3c1860"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_3","type":"command_execution","command":"\"C:\\\\Program Files\\\\WindowsApps\\\\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe\\\\pwsh.exe\" -Command 'node -e \"console.log(42)\"'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"command_execution","command":"\"C:\\\\Program Files\\\\WindowsApps\\\\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe\\\\pwsh.exe\" -Command 'node -e \"console.log(42)\"'","aggregated_output":"42\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"42"}}
+{"type":"turn.completed","usage":{"input_tokens":35976,"cached_input_tokens":27136,"cache_write_input_tokens":0,"output_tokens":88,"reasoning_output_tokens":8}}
+{"type":"item.started","item":{"id":"item_10","type":"file_change","changes":[{"path":"C:\\Users\\user\\symphony-spike\\d-t1-claude\\test\\password.test.js","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_10","type":"file_change","changes":[{"path":"C:\\Users\\user\\symphony-spike\\d-t1-claude\\test\\password.test.js","kind":"add"}],"status":"completed"}}
+{"type":"error","message":"Reconnecting... 2/5 (stream disconnected before completion: Host desconocido. (os error 11001))"}

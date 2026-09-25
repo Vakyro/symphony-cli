@@ -80,3 +80,5 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **`git merge-tree --write-tree` devuelve exit 1 con conflictos y también con una rama inexistente.** Distinguirlos por el OID del tree al comienzo del stdout.
 - **PELIGRO: en Windows, `git worktree remove --force` sigue las junctions y borra su destino** (p. ej. el `node_modules` del repo base enlazado con la estrategia LINK). `Repo::worktree_remove` suelta los enlaces del primer nivel antes de llamar a git. Hay un test.
 - **Comparaciones de tiempo con margen 0 tienen que ser `<=`:** en Linux, crear y consultar pasa en el mismo milisegundo (el GC con `grace = 0` no borraba nada en CI).
+- **Tests del CLI con un `symphonyd` viejo:** cargo no reconstruye binarios de otros paquetes para `-p symphony-cli`. `tests/common::symphonyd()` corre `cargo build -p symphony-daemon` una vez por proceso.
+- **La recuperación al arrancar trabaja con IDs como texto:** una fila con un ID inesperado impedía arrancar el daemon.

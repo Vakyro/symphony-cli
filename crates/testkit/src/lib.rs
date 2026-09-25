@@ -4,8 +4,10 @@
 //! en stdout, hooks reales, transcript y los errores que Symphony tiene que
 //! manejar (429, cuota, auth, crash, cuelgue). CI nunca gasta suscripciones.
 
+pub mod fake_adapter;
 pub mod script;
 
+pub use fake_adapter::FakeAdapter;
 pub use script::{Script, Step};
 
 use std::path::PathBuf;

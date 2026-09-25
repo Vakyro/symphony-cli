@@ -15,6 +15,9 @@ name = "symphonyd"
 path = "src/main.rs"
 
 [dependencies]
+symphony-adapter-claude = { path = "../adapters/claude" }
+symphony-adapter-codex = { path = "../adapters/codex" }
+symphony-adapter-common = { path = "../adapters/common" }
 symphony-core = { path = "../core" }
 symphony-protocol = { path = "../protocol" }
 symphony-store = { path = "../store" }
@@ -31,4 +34,4 @@ thiserror.workspace = true
 [dev-dependencies]
 symphony-store = { path = "../store" }
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros", "time", "io-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "io-util", "sync"] }

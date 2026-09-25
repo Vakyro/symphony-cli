@@ -1,0 +1,18 @@
+[package]
+name = "symphony-adapter-common"
+description = "Contrato de los provider adapters de Symphony: trait, eventos canónicos y suite de contrato"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+symphony-core = { path = "../../core" }
+symphony-process = { path = "../../process" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -80,9 +80,47 @@ fn endpoint(home: &Path) -> io::Result<Name<'static>> {
     format!("symphonyd-{:016x}", fnv1a(key.as_bytes())).to_ns_name::<GenericNamespaced>()
 }
 
-/// Conecta con el daemon de este directorio de Symphony.
+/// Conecta con el daemon de este directorio de Symphony y verifica que del otro
+/// lado esté **ese** daemon (el pid de `<home>/run/symphonyd.pid`, que solo el
+/// usuario puede escribir). Así un pipe creado antes por otro usuario local
+/// (el nombre es predecible) nunca recibe datos (revisión de seguridad P02.S8).
 pub async fn connect(home: &Path) -> io::Result<Connection<LocalStream>> {
-    Stream::connect(endpoint(home)?).await.map(Connection::new)
+    let stream = Stream::connect(endpoint(home)?).await?;
+    verify_server(home, &stream)?;
+    Ok(Connection::new(stream))
+}
+
+fn verify_server(home: &Path, stream: &LocalStream) -> io::Result<()> {
+    use interprocess::local_socket::traits::StreamCommon as _;
+    let creds = stream.peer_creds()?;
+    let Some(peer) = creds.pid().map(i64::from) else {
+        // macOS no informa el pid del par: se exige al menos el mismo usuario
+        // (dueño del directorio `run/`, que crea el daemon), además del 0700.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let owner = std::fs::metadata(run_dir(home))?.uid();
+            if creds.euid().is_some_and(|uid| uid != owner) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "el socket de Symphony lo atiende otro usuario",
+                ));
+            }
+        }
+        return Ok(());
+    };
+    let expected = std::fs::read_to_string(run_dir(home).join("symphonyd.pid"))
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok());
+    match expected {
+        Some(pid) if pid == peer => Ok(()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "el socket de Symphony lo atiende otro proceso (pid {peer}), no el daemon de este usuario"
+            ),
+        )),
+    }
 }
 
 /// Crea (o valida) un directorio privado `0700` que pertenezca al mismo usuario

@@ -1,4 +1,5 @@
 mod client;
+mod hook;
 
 use std::time::Duration;
 
@@ -24,6 +25,29 @@ enum Cmd {
         #[command(subcommand)]
         action: DaemonCmd,
     },
+    /// CLIs de IA detectados (Claude Code, Codex, …).
+    Providers {
+        #[command(subcommand)]
+        action: Option<ProvidersCmd>,
+    },
+    /// Uso interno: lo ejecutan los hooks de los CLIs.
+    #[command(hide = true)]
+    Hook {
+        #[command(subcommand)]
+        action: HookCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProvidersCmd {
+    /// Vuelve a detectar los CLIs instalados.
+    Refresh,
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    /// Envía al daemon el JSON del hook que llega por stdin.
+    Emit,
 }
 
 #[derive(Subcommand)]
@@ -38,6 +62,14 @@ enum DaemonCmd {
 
 fn main() -> miette::Result<()> {
     let cli = Cli::parse();
+    // Antes que nada: un hook nunca puede fallar por el home, el runtime o el daemon.
+    if let Some(Cmd::Hook {
+        action: HookCmd::Emit,
+    }) = cli.command
+    {
+        hook::emit();
+        return Ok(());
+    }
     let home = SymphonyHome::resolve().into_diagnostic()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -52,6 +84,18 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
         None => {
             println!("La TUI de Symphony llega en la versión 0.1 (P07).");
             println!("Mientras tanto: `symphony status` o `symphony --help`.");
+        }
+        Some(Cmd::Hook {
+            action: HookCmd::Emit,
+        }) => hook::emit(),
+        Some(Cmd::Providers { action }) => {
+            let method = if matches!(action, Some(ProvidersCmd::Refresh)) {
+                "providers.refresh"
+            } else {
+                "providers.list"
+            };
+            let mut conn = client::connect_or_start(home).await?;
+            print_providers(&client::call(&mut conn, method, json!({})).await?);
         }
         Some(Cmd::Status) => {
             let mut conn = client::connect_or_start(home).await?;
@@ -110,6 +154,30 @@ fn print_status(status: &Value) {
     println!("  versión:  {}", status["version"].as_str().unwrap_or("?"));
     println!("  activo:   {}", human_duration(uptime_s));
     println!("  home:     {}", status["home"].as_str().unwrap_or("?"));
+}
+
+fn print_providers(v: &Value) {
+    let empty = Vec::new();
+    let rows = v["providers"].as_array().unwrap_or(&empty);
+    if rows.is_empty() {
+        println!("No hay proveedores registrados.");
+        return;
+    }
+    println!(
+        "{:<10} {:<10} {:<10} {:>7}  RUTA",
+        "PROVEEDOR", "ESTADO", "VERSIÓN", "MODELOS"
+    );
+    for p in rows {
+        let text = |k: &str| p[k].as_str().unwrap_or("—").to_string();
+        println!(
+            "{:<10} {:<10} {:<10} {:>7}  {}",
+            text("display_name"),
+            text("setup_state"),
+            text("cli_version"),
+            p["models"],
+            text("cli_path")
+        );
+    }
 }
 
 fn human_duration(secs: u64) -> String {
