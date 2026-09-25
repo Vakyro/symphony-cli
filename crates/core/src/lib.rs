@@ -19,8 +19,8 @@ pub use enums::{
     PerformanceProfile, ProviderState, QuotaCertainty, RunEndReason, RunStatus, TaskStatus,
 };
 pub use ids::{
-    AgentId, CheckpointId, ContextObjectId, InvalidId, MessageId, ProjectId, RecoveryItemId, RunId,
-    SessionId, TaskId, ToolCallId, WorktreeId,
+    AgentId, CheckpointId, ContextObjectId, HandoffId, InvalidId, MessageId, ProjectId,
+    RecoveryItemId, RunId, SessionId, TaskId, ToolCallId, WorktreeId,
 };
 pub use redact::{REDACTED, redact};
 pub use transitions::InvalidTransition;

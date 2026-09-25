@@ -886,6 +886,105 @@ pub fn prune_checkpoints(
     Ok(hashes)
 }
 
+/// El último checkpoint válido del agente (lo que usa un handoff).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LatestCheckpoint {
+    pub id: symphony_core::CheckpointId,
+    pub seq: i64,
+    pub objective: String,
+    pub plan_tail: Option<String>,
+    pub current_step: Option<String>,
+    pub next_step: Option<String>,
+    pub summary_json: Option<String>,
+    /// `ctx://…` del diff guardado en ese checkpoint.
+    pub diff_uri: Option<String>,
+}
+
+pub fn latest_checkpoint(
+    conn: &Connection,
+    agent: AgentId,
+) -> Result<Option<LatestCheckpoint>, RepoError> {
+    Ok(conn
+        .query_row(
+            "SELECT c.id, c.seq, c.objective, c.plan_tail, c.current_step, c.next_step, c.summary_json, o.uri
+             FROM checkpoints c LEFT JOIN context_objects o ON o.id = c.diff_object_id
+             WHERE c.agent_id = ?1 AND c.is_valid = 1 ORDER BY c.seq DESC LIMIT 1",
+            [agent.to_string()],
+            |r| {
+                Ok(LatestCheckpoint {
+                    id: col(r, 0)?,
+                    seq: r.get(1)?,
+                    objective: r.get(2)?,
+                    plan_tail: r.get(3)?,
+                    current_step: r.get(4)?,
+                    next_step: r.get(5)?,
+                    summary_json: r.get(6)?,
+                    diff_uri: r.get(7)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Caracteres de toda la conversación del agente (cortos + largos en el object store):
+/// lo que costaría reenviar el historial sin optimizar.
+pub fn conversation_chars(conn: &Connection, agent: AgentId) -> Result<i64, RepoError> {
+    Ok(conn.query_row(
+        "SELECT COALESCE((SELECT SUM(LENGTH(content)) FROM messages WHERE agent_id = ?1), 0)
+              + COALESCE((SELECT SUM(b.size_bytes) FROM messages m
+                          JOIN context_objects o ON o.id = m.content_object_id
+                          JOIN blobs b ON b.hash = o.blob_hash WHERE m.agent_id = ?1), 0)",
+        [agent.to_string()],
+        |r| r.get(0),
+    )?)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewHandoff {
+    pub id: symphony_core::HandoffId,
+    pub agent_id: AgentId,
+    /// `None` en el primer spawn.
+    pub checkpoint_id: Option<symphony_core::CheckpointId>,
+    pub to_run_id: RunId,
+    pub mode: ContextMode,
+    pub tokens_raw_estimate: i64,
+    pub tokens_sent: i64,
+    pub build_ms: i64,
+}
+
+/// Un handoff inicia exactamente un run (`to_run_id` UNIQUE).
+pub fn insert_handoff(conn: &Connection, h: &NewHandoff, now: i64) -> Result<(), RepoError> {
+    conn.execute(
+        "INSERT INTO handoffs (id, agent_id, checkpoint_id, to_run_id, mode, tokens_raw_estimate, tokens_sent, build_ms, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            h.id.to_string(),
+            h.agent_id.to_string(),
+            h.checkpoint_id.map(|c| c.to_string()),
+            h.to_run_id.to_string(),
+            h.mode.as_str(),
+            h.tokens_raw_estimate,
+            h.tokens_sent,
+            h.build_ms,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+/// `outcome`: `CONTINUED` · `NEEDED_RETRIEVAL` · `FAILED_TO_CONTINUE` · `RETRIED_SAFER` (CHECK de la tabla).
+pub fn set_handoff_outcome(
+    conn: &Connection,
+    to_run: RunId,
+    outcome: &str,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE handoffs SET outcome = ?2 WHERE to_run_id = ?1",
+        params![to_run.to_string(), outcome],
+    )?;
+    Ok(())
+}
+
 // --- conversación y tool calls ----------------------------------------------
 
 /// Valores de `messages.role` (DB §3.C).

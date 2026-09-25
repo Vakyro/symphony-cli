@@ -2,6 +2,7 @@
 
 pub mod bus;
 pub mod checkpoint;
+pub mod handoff;
 pub mod logging;
 pub mod providers;
 pub mod recorder;

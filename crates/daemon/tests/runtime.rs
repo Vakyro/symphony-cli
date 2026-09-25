@@ -965,3 +965,85 @@ proptest::proptest! {
             .block_on(run_checkpoint_case(ops));
     }
 }
+
+// --- P06.S4: handoff v1 ------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_combines_the_checkpoint_with_live_git() {
+    let script = r#"
+[[step]]
+kind = "say"
+text = "Voy por partes.\n- [x] leer\n- [ ] correr los tests de auth"
+
+[[step]]
+kind = "edit"
+path = "README.md"
+content = "demo\narreglado\n"
+
+[[step]]
+kind = "edit"
+path = "src/nuevo.txt"
+content = "contenido nuevo\n"
+
+[[step]]
+kind = "run"
+command = ["git", "no-such-subcommand"]
+"#;
+    let e = env(script, None).await;
+    let objective = "Arreglar auth";
+    let created = e
+        .runtime
+        .create_agent(req(&e, objective, Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let (run, _) = created.run.clone().unwrap();
+
+    // El primer spawn quedó registrado como handoff sin checkpoint.
+    let first: String = one(
+        &e,
+        &format!(
+            "SELECT COALESCE(checkpoint_id,'-') || '|' || mode || '|' || tokens_sent || '|' || tokens_raw_estimate
+             FROM handoffs WHERE to_run_id = '{run}'"
+        ),
+    );
+    let tokens = symphony_context::handoff::estimate_tokens(objective);
+    assert_eq!(first, format!("-|BALANCED|{tokens}|{tokens}"));
+
+    // Algo que pasó después del último checkpoint: git manda.
+    std::fs::write(created.worktree.join("tardio.txt"), "escrito tarde\n").unwrap();
+
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "El executor anterior se quedó sin cuota.")
+        .await
+        .unwrap();
+    let latest: String = one(
+        &e,
+        &format!(
+            "SELECT id FROM checkpoints WHERE agent_id = '{}' ORDER BY seq DESC LIMIT 1",
+            created.agent_id
+        ),
+    );
+    assert_eq!(h.checkpoint_id.map(|c| c.to_string()), Some(latest));
+    assert_eq!(h.mode, ContextMode::Balanced);
+    let p = &h.prompt;
+    for want in [
+        "El executor anterior se quedó sin cuota.",
+        "## Objetivo\nArreglar auth",
+        "## Qué seguía\ncorrer los tests de auth",
+        "$ git no-such-subcommand\n(falló con código",
+        "- `git no-such-subcommand` falló",
+        " M README.md",
+        "?? src/nuevo.txt",
+        "+arreglado",
+        "--- src/nuevo.txt (archivo nuevo)\ncontenido nuevo",
+        "--- tardio.txt (archivo nuevo)\nescrito tarde",
+    ] {
+        assert!(p.contains(want), "falta {want:?} en:\n{p}");
+    }
+    assert_eq!(h.tokens_sent, symphony_context::handoff::estimate_tokens(p));
+    assert!(h.tokens_raw_estimate > h.tokens_sent, "{h:?}");
+    e.writer.shutdown();
+}

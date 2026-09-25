@@ -70,7 +70,8 @@ ulid_id!(
     RecoveryItemId,
     MessageId,
     ToolCallId,
-    ContextObjectId
+    ContextObjectId,
+    HandoffId
 );
 
 #[cfg(test)]

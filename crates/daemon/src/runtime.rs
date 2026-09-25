@@ -173,6 +173,15 @@ impl Runtime {
             .cloned()
     }
 
+    /// Arma el prompt para que otro executor continúe al agente (P06.S4).
+    pub async fn prepare_handoff(
+        &self,
+        agent: AgentId,
+        reason: &str,
+    ) -> Result<crate::handoff::PreparedHandoff, String> {
+        crate::handoff::prepare(&self.reader, agent, reason).await
+    }
+
     /// Espera a que terminen los executors lanzados y sus checkpoints (apagado y tests).
     pub async fn wait_executors(&self) {
         self.pumps.close();
@@ -377,6 +386,19 @@ impl Runtime {
                     .as_ref()
                     .map(|(m, _)| (m.provider_id.clone(), m.model_id.clone())),
             ),
+            handoff: run_id.map(|run| {
+                let tokens = symphony_context::handoff::estimate_tokens(&objective);
+                repo::NewHandoff {
+                    id: symphony_core::HandoffId::new(),
+                    agent_id,
+                    checkpoint_id: None,
+                    to_run_id: run,
+                    mode: req.context_mode,
+                    tokens_raw_estimate: tokens,
+                    tokens_sent: tokens,
+                    build_ms: 0,
+                }
+            }),
             now,
         };
         if let Err(e) = self.writer.write(Box::new(move |t| tx_data.apply(t))).await {
@@ -546,6 +568,8 @@ struct TxData {
     agent: repo::Agent,
     checkpoint: repo::NewCheckpoint,
     run: Option<(RunId, (String, String))>,
+    /// Handoff del primer spawn: el prompt es el objetivo, sin checkpoint previo.
+    handoff: Option<repo::NewHandoff>,
     now: i64,
 }
 
@@ -563,6 +587,9 @@ impl TxData {
         repo::insert_agent(t, &self.agent, now)?;
         if let Some((run_id, (provider, model))) = &self.run {
             repo::open_run(t, *run_id, self.agent.id, provider, model, now)?;
+        }
+        if let Some(h) = &self.handoff {
+            repo::insert_handoff(t, h, now)?;
         }
         repo::insert_checkpoint(t, &self.checkpoint, now)?;
         Ok(())

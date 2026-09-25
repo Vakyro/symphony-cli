@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P06 · Agent runtime, checkpoints y handoff (rama `phase/p06-runtime`)
-**Paso actual:** P06.S4 · Handoff v1
+**Paso actual:** P06.S5 · Cambio de executor
 **Estado del paso:** PENDIENTE
 **En curso por:** —
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (149 tests)
+- `cargo xtask check`: ✅ (155 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -16,11 +16,12 @@
 - [x] P06.S1 Ciclo de vida del agente
 - [x] P06.S2 Mensajes y tool calls
 - [x] P06.S3 Checkpoints incrementales
-- [ ] P06.S4 Handoff v1   ← aquí
+- [x] P06.S4 Handoff v1
+- [ ] P06.S5 Cambio de executor   ← aquí
 - (resto de P06 en PLAN.md)
 
 ## Próxima acción concreta
-Prompt de arranque armado desde el checkpoint (objetivo, plan vigente, diff, fallos recientes, archivos tocados) con plantilla fija; guardar `handoffs` con `tokens_sent` estimados y `outcome`. Snapshot `insta` del prompt para un checkpoint fijo.
+`switch` manual y failover básico: si el adapter clasifica `QUOTA_EXHAUSTED` o `AUTH` y la `failover_policy` lo permite, siguiente proveedor habilitado; `executor_changes` + separador en la conversación; con `failover = NONE` → `WAITING_PROVIDER` + recovery item. Usar `Runtime::prepare_handoff` + `repo::insert_handoff`. E2E con fake-agent.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

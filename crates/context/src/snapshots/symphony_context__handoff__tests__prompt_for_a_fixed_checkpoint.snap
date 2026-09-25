@@ -1,0 +1,53 @@
+---
+source: crates/context/src/handoff.rs
+expression: h.prompt
+---
+Retomas una tarea de código que otro executor dejó a medias. El executor anterior (anthropic/claude-sonnet) se quedó sin cuota.
+Ya estás en su worktree, con su rama y sus cambios. No empieces de cero: revisa lo que ya existe y continúa desde donde quedó.
+
+## Objetivo
+Arreglar la rotación de refresh tokens y agregar tests de regresión
+
+## Último plan del executor anterior
+Ya cambié `rotate()` para invalidar el token viejo.
+- [x] rotate
+- [ ] test de regresión para el 401
+
+## En qué estaba
+Bash: npm test -- auth
+
+## Qué seguía
+test de regresión para el 401
+
+## Último comando y su resultado
+$ npm test -- auth
+(falló con código 1)
+
+## Fallos recientes
+- `npm test -- auth` falló (código 1)
+
+## Archivos tocados
+- src/auth.ts
+- test/auth.test.ts
+
+## Estado de git
+ M src/auth.ts
+?? test/auth.test.ts
+
+## Diff contra la base
+diff --git a/src/auth.ts b/src/auth.ts
+--- a/src/auth.ts
++++ b/src/auth.ts
+@@ -1,3 +1,4 @@
+ export function rotate(t) {
++  revoke(t);
+   return issue();
+ }
+
+## Archivos nuevos (sin commit)
+--- test/auth.test.ts (archivo nuevo)
+test('401 tras rotar', () => {});
+
+--- fixtures/logo.png (archivo nuevo, binario o ilegible: no se incluye)
+
+Continúa hasta terminar el objetivo. Si algo del estado de arriba contradice lo que ves en el worktree, manda el worktree.

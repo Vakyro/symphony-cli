@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p06-runtime |
 | Inicio / cierre | 2026-09-24 / — |
-| Agentes que trabajaron | claude-code/opus-5.5 (S1–S3) |
+| Agentes que trabajaron | claude-code/opus-5.5 (S1–S4) |
 | Tag | — |
 | Docs usados | FLOW §6, §7, §16; DB §3.C, §3.G, §3.I; IDEA §5.5 |
 
@@ -79,6 +79,28 @@
   - El conteo de tests en `summary_json` llega con el parser de salidas (P09).
   - Al reiniciar el daemon se pierde el acumulado en memoria. El último checkpoint guardado sigue siendo válido para el handoff.
 
+### P06.S4 · Handoff v1 — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:**
+  - **Crate nuevo `symphony-context`** (STACK §4.1) con `handoff::assemble`. Es una función pura, sin E/S ni LLM, que arma el prompt de arranque con una plantilla fija.
+    - **Secciones:** motivo del cambio, objetivo, último plan, en qué estaba, qué seguía, último comando y resultado, fallos recientes, archivos tocados, `git status`, diff contra la base y archivos nuevos.
+    - **Límites por modo** (`agents.context_mode`): `RAW` no recorta nada (salida de emergencia). `SAFE`, `BALANCED` y `AGGRESSIVE` recortan el diff y los archivos nuevos, con un presupuesto total, y avisan cuántos caracteres se omitieron y dónde está el original.
+    - **`estimate_tokens`:** ~4 caracteres por token, determinista.
+  - **`symphony_daemon::handoff::prepare`** (`Runtime::prepare_handoff`) junta el último checkpoint válido con el **git vivo** del worktree (ADR-0004, H2: git manda): status, diff redactado, numstat y archivos nuevos redactados de hasta 1 MiB y UTF-8.
+    - `tokens_raw_estimate` = el prompt sin recortes + toda la conversación del agente.
+    - También mide `build_ms`.
+  - **Tabla `handoffs`:** el primer spawn ya deja su fila (`checkpoint_id` NULL, prompt = objetivo). Hay `insert_handoff` y `set_handoff_outcome` para P06.S5.
+- **Archivos clave:** `crates/context/src/handoff.rs` (+ `snapshots/`), `crates/daemon/src/handoff.rs`, `crates/store/src/repo.rs` (`latest_checkpoint`, `conversation_chars`, `insert_handoff`, `set_handoff_outcome`), `crates/core/src/ids.rs` (`HandoffId`)
+- **Cómo se verificó:**
+  - Snapshot `insta` del prompt para un checkpoint fijo, y otro para un checkpoint sin progreso.
+  - Tests de recorte por modo, presupuesto de archivos nuevos y tokens.
+  - `handoff_combines_the_checkpoint_with_live_git`: sesión fake-agent más un archivo escrito después del último checkpoint, que igual aparece en el prompt.
+  - `cargo xtask check` → 155 passed, 1 skipped. `cargo deny check` → ok.
+- **Pendiente / notas:**
+  - `outcome` se llena al cambiar de executor (P06.S5, P06.S8).
+  - Si el diff vivo se recorta, el puntero apunta al diff del último checkpoint, no al vivo.
+  - Niveles L0–L5 de archivos y decisiones vigentes llegan con el context engine (P09).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -87,6 +109,7 @@
 | Razón humana en `FAILED` + Recovery | `executor_that_cannot_start_…`, `executor_crash_…` | ✅ |
 | Conversación y tool calls espejadas, sin duplicados, con secretos redactados | `session_mirrors_…`, `duplicates_from_hook_and_stream_…` | ✅ |
 | Checkpoints incrementales monótonos, podados, sin objetos colgantes | proptest `checkpoints_stay_monotonic_and_consistent` | ✅ |
+| Prompt de handoff con plantilla fija, desde checkpoint + git vivo | snapshots `insta` + `handoff_combines_the_checkpoint_with_live_git` | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
@@ -107,13 +130,14 @@
 | Crate | Versión | Para qué | ¿Estaba en STACK §58? |
 |---|---|---|---|
 | (ninguna nueva; daemon ahora usa `symphony-git`, `symphony-process` y, en tests, `symphony-testkit`) | | | |
+| insta (dev) | 1.48.0 | Snapshots del prompt de handoff (P06.S4) | Sí: STACK §24.3 y §4 (tests) |
 
 ## Métricas
 - Crear un agente con worktree y lanzar fake-agent: < 2 s en Windows debug (tests).
 
 ## Pruebas
 - Comando(s): `cargo xtask check`
-- Totales: 149 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
+- Totales: 155 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
 
 ## Estado final
 (al cerrar)
