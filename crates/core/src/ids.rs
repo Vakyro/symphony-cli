@@ -67,7 +67,10 @@ ulid_id!(
     RunId,
     WorktreeId,
     CheckpointId,
-    RecoveryItemId
+    RecoveryItemId,
+    MessageId,
+    ToolCallId,
+    ContextObjectId
 );
 
 #[cfg(test)]

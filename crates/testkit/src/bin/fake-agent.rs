@@ -92,7 +92,10 @@ impl Agent {
     }
 
     fn tool(&mut self, tool: &str, input: Value, act: impl FnOnce() -> (bool, Value)) {
-        let id = format!("toolu_{}", now_ms());
+        // Único aunque dos herramientas caigan en el mismo milisegundo (el core deduplica por id).
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("toolu_{}_{n}", now_ms());
         emit(&json!({"type": "tool_use", "id": id, "name": tool, "input": input}));
         self.transcript(&json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": id, "name": tool, "input": input}]}}));
         if self.hook(

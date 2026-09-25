@@ -448,6 +448,20 @@ impl Runtime {
             hook: self.hook.clone(),
             env,
         };
+        // El prompt inicial es el primer mensaje de la conversación (P06.S2).
+        let prompt_ev = BusEvent {
+            project_id: l.project_id.to_string(),
+            agent_id: Some(l.agent_id.to_string()),
+            run_id: Some(l.run_id.to_string()),
+            source: EventSource::User,
+            event: AgentEvent::UserMessage {
+                text: l.prompt.clone(),
+            },
+            occurred_at: now_ms(),
+        };
+        if self.bus.publish(prompt_ev).await.is_err() {
+            return Err("la base de datos no acepta escrituras".into());
+        }
         let started = async {
             let spec = l
                 .adapter
@@ -478,6 +492,7 @@ impl Runtime {
                     Some(&reason),
                 )
                 .await;
+                self.bus.run_ended(l.run_id);
                 return Err(reason);
             }
         };
@@ -625,6 +640,7 @@ async fn pump(
             .await;
         }
     }
+    bus.run_ended(l.run_id);
 }
 
 /// Cierra el run y deja al agente en `COMPLETED` (sin `failure`) o `FAILED` con razón + recovery item.

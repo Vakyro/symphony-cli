@@ -11,6 +11,7 @@ use symphony_core::{AgentState, ContextMode, FailoverPolicy};
 use symphony_daemon::bus::EventBus;
 use symphony_daemon::providers;
 use symphony_daemon::runtime::{CreateAgent, CreateError, Execution, Runtime};
+use symphony_object_store::ObjectStore;
 use symphony_store::Writer;
 use symphony_testkit::FakeAdapter;
 
@@ -90,7 +91,7 @@ async fn env(script: &str, binary: Option<PathBuf>) -> Env {
         &home,
         writer.handle(),
         writer.reader().unwrap(),
-        EventBus::new(writer.handle(), 64),
+        EventBus::new(writer.handle(), 64, ObjectStore::new(home.join("objects"))),
         vec![Arc::new(used)],
         None,
     );
@@ -518,5 +519,121 @@ async fn executor_crash_fails_the_agent_and_opens_recovery() {
         one::<i64>(&e, "SELECT COUNT(*) FROM agent_runs WHERE ended_at IS NULL"),
         0
     );
+    e.writer.shutdown();
+}
+
+/// P06.S2: una sesión deja la conversación y las tool calls coherentes.
+#[tokio::test(flavor = "multi_thread")]
+async fn session_mirrors_conversation_and_tool_calls() {
+    let long = "x".repeat(symphony_daemon::recorder::INLINE_MAX + 100);
+    let script = format!(
+        r#"
+[[step]]
+kind = "say"
+text = "Primero miro el estado"
+
+[[step]]
+kind = "run"
+command = ["git", "status", "--short"]
+
+[[step]]
+kind = "edit"
+path = "src/fix.txt"
+content = "ok\n"
+
+[[step]]
+kind = "run"
+command = ["git", "no-such-subcommand"]
+
+[[step]]
+kind = "say"
+text = "{long}"
+"#
+    );
+    let e = env(&script, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Arreglar el build",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let run_id = created.run.unwrap().0.to_string();
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+
+    // Conversación: prompt, texto corto y texto largo (al object store), en orden y con su run.
+    type Msg = (String, Option<String>, Option<String>, Option<String>);
+    let msgs: Vec<Msg> = conn
+        .prepare(
+            "SELECT role, content, content_object_id, run_id FROM messages ORDER BY created_at, rowid",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let roles: Vec<&str> = msgs.iter().map(|m| m.0.as_str()).collect();
+    assert_eq!(roles, ["USER", "ASSISTANT", "ASSISTANT"], "{msgs:?}");
+    assert_eq!(msgs[0].1.as_deref(), Some("Arreglar el build"));
+    assert_eq!(msgs[1].1.as_deref(), Some("Primero miro el estado"));
+    assert!(msgs.iter().all(|m| m.3.as_deref() == Some(run_id.as_str())));
+    let (_, content, object, _) = &msgs[2];
+    assert!(content.is_none());
+    let (kind, hash, refs): (String, String, i64) = conn
+        .query_row(
+            "SELECT o.kind, o.blob_hash, b.ref_count FROM context_objects o
+             JOIN blobs b ON b.hash = o.blob_hash WHERE o.id = ?1",
+            [object.as_deref().unwrap()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((kind.as_str(), refs), ("CONVERSATION", 1));
+    let stored = ObjectStore::new(e.home.join("objects")).get(&hash).unwrap();
+    assert_eq!(stored, long.as_bytes());
+
+    // Tool calls: una por herramienta, todas cerradas, con resultado y comando.
+    type Call = (String, Option<String>, String, Option<i32>, i64, bool);
+    let calls: Vec<Call> = conn
+        .prepare(
+            "SELECT tool_name, command, status, exit_code, op_class, finished_at >= started_at
+             FROM tool_calls WHERE run_id = ?1 ORDER BY requested_at, rowid",
+        )
+        .unwrap()
+        .query_map([&run_id], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let summary: Vec<(&str, Option<&str>, &str)> = calls
+        .iter()
+        .map(|c| (c.0.as_str(), c.1.as_deref(), c.2.as_str()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("Bash", Some("git status --short"), "DONE"),
+            ("Write", None, "DONE"),
+            ("Bash", Some("git no-such-subcommand"), "FAILED"),
+        ]
+    );
+    assert_eq!(calls[0].3, Some(0));
+    assert!(calls[2].3.is_some_and(|c| c != 0), "{calls:?}");
+    assert!(
+        calls.iter().all(|c| c.5),
+        "toda tool call cerrada: {calls:?}"
+    );
+    assert_eq!((calls[0].4, calls[1].4), (2, 1));
     e.writer.shutdown();
 }

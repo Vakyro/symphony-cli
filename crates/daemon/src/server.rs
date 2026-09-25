@@ -150,7 +150,13 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         home: home.to_path_buf(),
         shutdown: shutdown.clone(),
         reader: Mutex::new(reader),
-        bus: EventBus::new(writer.handle(), TUI_BUFFER),
+        bus: EventBus::new(
+            writer.handle(),
+            TUI_BUFFER,
+            symphony_object_store::ObjectStore::new(
+                symphony_core::SymphonyHome::at(home).objects_dir(),
+            ),
+        ),
         writer: writer.handle(),
     });
     let tracker = TaskTracker::new();

@@ -39,7 +39,11 @@ async fn slow_subscriber_never_blocks_the_producer_nor_loses_persisted_events() 
         )
         .unwrap();
     let writer = Writer::start(&db).unwrap();
-    let bus = EventBus::new(writer.handle(), 16);
+    let bus = EventBus::new(
+        writer.handle(),
+        16,
+        symphony_object_store::ObjectStore::new(dir.path().join("objects")),
+    );
 
     // Un suscriptor que no lee nunca (TUI colgada) y otro que lee todo.
     let mut stuck = bus.subscribe();

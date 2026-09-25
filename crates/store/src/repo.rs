@@ -763,6 +763,136 @@ pub fn insert_checkpoint(conn: &Connection, c: &NewCheckpoint, now: i64) -> Resu
     Ok(seq)
 }
 
+// --- conversación y tool calls ----------------------------------------------
+
+/// Valores de `messages.role` (DB §3.C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageRole {
+    User,
+    Assistant,
+    System,
+    ExecutorChange,
+}
+
+impl MessageRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "USER",
+            Self::Assistant => "ASSISTANT",
+            Self::System => "SYSTEM",
+            Self::ExecutorChange => "EXECUTOR_CHANGE",
+        }
+    }
+}
+
+/// Un mensaje corto va en `content`; uno largo, en `content_object_id`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewMessage {
+    pub id: symphony_core::MessageId,
+    pub agent_id: AgentId,
+    pub run_id: Option<RunId>,
+    pub role: MessageRole,
+    pub content: Option<String>,
+    pub content_object_id: Option<symphony_core::ContextObjectId>,
+}
+
+pub fn insert_message(conn: &Connection, m: &NewMessage, now: i64) -> Result<(), RepoError> {
+    conn.execute(
+        "INSERT INTO messages (id, agent_id, run_id, role, content, content_object_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            m.id.to_string(),
+            m.agent_id.to_string(),
+            m.run_id.map(|r| r.to_string()),
+            m.role.as_str(),
+            m.content,
+            m.content_object_id.map(|o| o.to_string()),
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+/// Objeto de contexto `ctx://…` sobre un blob ya guardado (`kind` lo valida el CHECK).
+#[allow(clippy::too_many_arguments)]
+pub fn insert_context_object(
+    conn: &Connection,
+    id: symphony_core::ContextObjectId,
+    uri: &str,
+    project: ProjectId,
+    agent: Option<AgentId>,
+    run: Option<RunId>,
+    kind: &str,
+    blob_hash: &str,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "INSERT INTO context_objects (id, uri, project_id, agent_id, run_id, kind, blob_hash, compressor, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'NONE', ?8)",
+        params![
+            id.to_string(),
+            uri,
+            project.to_string(),
+            agent.map(|a| a.to_string()),
+            run.map(|r| r.to_string()),
+            kind,
+            blob_hash,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewToolCall {
+    pub id: symphony_core::ToolCallId,
+    pub agent_id: AgentId,
+    pub run_id: RunId,
+    pub tool_name: String,
+    /// Ya redactado.
+    pub command: Option<String>,
+    pub op_class: i64,
+}
+
+/// Registra una herramienta pedida y dejada correr (sin retención: `RUNNING`, `NONE`).
+pub fn insert_tool_call(conn: &Connection, c: &NewToolCall, now: i64) -> Result<(), RepoError> {
+    conn.execute(
+        "INSERT INTO tool_calls (id, agent_id, run_id, tool_name, command, op_class, status, enforcement, requested_at, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'RUNNING', 'NONE', ?7, ?7)",
+        params![
+            c.id.to_string(),
+            c.agent_id.to_string(),
+            c.run_id.to_string(),
+            c.tool_name,
+            c.command,
+            c.op_class,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+/// Cierra una tool call abierta (`DONE` o `FAILED`). Una ya cerrada no cambia.
+pub fn finish_tool_call(
+    conn: &Connection,
+    id: symphony_core::ToolCallId,
+    ok: bool,
+    exit_code: Option<i32>,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE tool_calls SET status = ?2, exit_code = ?3, finished_at = ?4
+         WHERE id = ?1 AND status IN ('REQUESTED','QUEUED','RUNNING')",
+        params![
+            id.to_string(),
+            if ok { "DONE" } else { "FAILED" },
+            exit_code,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
 // --- recuperación -----------------------------------------------------------
 
 /// Abre un problema en el Recovery Center (`kind` lo valida el CHECK de la tabla).

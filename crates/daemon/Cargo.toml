@@ -20,6 +20,7 @@ symphony-adapter-codex = { path = "../adapters/codex" }
 symphony-adapter-common = { path = "../adapters/common" }
 symphony-core = { path = "../core" }
 symphony-git = { path = "../git" }
+symphony-object-store = { path = "../object-store" }
 symphony-process = { path = "../process" }
 symphony-protocol = { path = "../protocol" }
 symphony-store = { path = "../store" }

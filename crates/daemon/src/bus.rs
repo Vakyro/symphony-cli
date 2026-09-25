@@ -13,6 +13,9 @@ use symphony_adapter_common::AgentEvent;
 use symphony_store::{NewEvent, WriterClosed, WriterHandle};
 use tokio::sync::{broadcast, watch};
 
+use crate::recorder::Recorder;
+use symphony_object_store::ObjectStore;
+
 /// Valores de `events.source` (DB §3.F).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventSource {
@@ -60,17 +63,19 @@ pub type BusState = HashMap<String, AgentSnapshot>;
 #[derive(Clone)]
 pub struct EventBus {
     writer: WriterHandle,
+    recorder: Arc<Recorder>,
     tui: broadcast::Sender<Arc<BusEvent>>,
     state: Arc<watch::Sender<BusState>>,
 }
 
 impl EventBus {
     /// `tui_capacity`: cuántos eventos puede atrasarse un suscriptor antes de perder los más viejos.
-    pub fn new(writer: WriterHandle, tui_capacity: usize) -> Self {
+    pub fn new(writer: WriterHandle, tui_capacity: usize, objects: ObjectStore) -> Self {
         let (tui, _) = broadcast::channel(tui_capacity.max(1));
         let (state, _) = watch::channel(BusState::new());
         Self {
             writer,
+            recorder: Arc::new(Recorder::new(objects)),
             tui,
             state: Arc::new(state),
         }
@@ -89,6 +94,16 @@ impl EventBus {
                 occurred_at: ev.occurred_at,
             })
             .await?;
+        // Mensajes y tool calls derivados (P06.S2), en el mismo orden que el evento.
+        if let Some(write) = self.recorder.plan(&ev) {
+            match self.writer.write(write).await {
+                Ok(()) => {}
+                Err(symphony_store::StoreError::WriterClosed) => return Err(WriterClosed),
+                Err(e) => {
+                    tracing::warn!(error = %e, "no se pudo registrar el mensaje o la tool call")
+                }
+            }
+        }
         if let Some(agent) = &ev.agent_id {
             let (name, at) = (ev.event.type_name(), ev.occurred_at);
             self.state.send_modify(|s| {
@@ -101,6 +116,11 @@ impl EventBus {
         // Sin suscriptores, send falla: no es un error.
         let _ = self.tui.send(Arc::new(ev));
         Ok(())
+    }
+
+    /// El run terminó: suelta su estado de deduplicación.
+    pub fn run_ended(&self, run: symphony_core::RunId) {
+        self.recorder.run_ended(run);
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<BusEvent>> {

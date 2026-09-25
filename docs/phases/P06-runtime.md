@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p06-runtime |
 | Inicio / cierre | 2026-09-24 / — |
-| Agentes que trabajaron | claude-code/opus-5.5 (S1) |
+| Agentes que trabajaron | claude-code/opus-5.5 (S1–S2) |
 | Tag | — |
 | Docs usados | FLOW §6, §7, §16; DB §3.C, §3.G, §3.I; IDEA §5.5 |
 
@@ -34,12 +34,29 @@
   - Falta exponerlo por IPC (`agent.create`) y el comando `symphony spawn` (P06.S7).
   - El hook inyectado es `None` en los tests. El daemon real va a pasar `symphony hook emit`.
 
+### P06.S2 · Mensajes y tool calls — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony_daemon::recorder::Recorder`, dentro del `EventBus`, convierte cada evento canónico, venga de un hook o del stream, en filas de `messages` y `tool_calls`. Escribe por el writer único, después del evento y en el mismo orden.
+  - **Mensajes:** `AssistantText` se guarda como `ASSISTANT` y `UserMessage` como `USER`. El runtime publica el prompt inicial como `UserMessage` (source `USER`). Los mensajes de más de 4 KiB van al object store: blob + `context_objects` (`CONVERSATION`, `ctx://message/<id>`) + `add_ref`, con `content` NULL.
+  - **Tool calls:** `ToolRequested` crea la fila en `RUNNING`, con enforcement `NONE` y el comando redactado. `ToolFinished` la cierra como `DONE` o `FAILED`, con su exit code. Si llega un final sin su pedido, se registra la tool call entera.
+  - **Deduplicación:** las tool calls se deduplican por `tool_use_id` (hook + stream); sin id, se emparejan por orden de llegada. El prompt repetido por el hook `UserPromptSubmit` no se duplica. El estado en memoria se suelta al terminar el run.
+- **Archivos clave:** `crates/daemon/src/recorder.rs`, `crates/daemon/src/bus.rs`, `crates/store/src/repo.rs` (`insert_message`, `insert_context_object`, `insert_tool_call`, `finish_tool_call`), `crates/core/src/ids.rs` (`MessageId`, `ToolCallId`, `ContextObjectId`), `crates/daemon/tests/{runtime,recorder}.rs`
+- **Cómo se verificó:**
+  - `session_mirrors_conversation_and_tool_calls`: sesión fake-agent con un texto corto, un comando OK, una edición, un comando que falla y un texto de más de 4 KiB.
+  - `duplicates_from_hook_and_stream_are_recorded_once`.
+  - `cargo xtask check` → 144 passed, 1 skipped.
+- **Pendiente / notas:**
+  - `op_class` es provisional: comando = 2, edición u otra herramienta = 1. El clasificador real llega con el scheduler (P08).
+  - `cwd` y `output_object_id` quedan NULL: la salida de las herramientas va al object store con el context engine (P09).
+  - fake-agent ahora genera un `tool_use_id` único con un contador; antes, dos herramientas en el mismo milisegundo compartían id.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
 | Crear agente con modelo exacto y correr el executor en su worktree | `exact_model_creates_everything_and_runs_the_executor` | ✅ |
 | Nunca queda un agente "medio roto" | `workspace_failure_…`, `store_failure_after_the_worktree_rolls_it_back` | ✅ |
 | Razón humana en `FAILED` + Recovery | `executor_that_cannot_start_…`, `executor_crash_…` | ✅ |
+| Conversación y tool calls espejadas, sin duplicados, con secretos redactados | `session_mirrors_…`, `duplicates_from_hook_and_stream_…` | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
@@ -66,7 +83,7 @@
 
 ## Pruebas
 - Comando(s): `cargo xtask check`
-- Totales: 142 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
+- Totales: 144 passed, 1 skipped (live, sin `SYMPHONY_LIVE`)
 
 ## Estado final
 (al cerrar)
