@@ -92,8 +92,21 @@ pub async fn connect(home: &Path) -> io::Result<Connection<LocalStream>> {
 
 fn verify_server(home: &Path, stream: &LocalStream) -> io::Result<()> {
     use interprocess::local_socket::traits::StreamCommon as _;
-    // En Unix algunos SO no informan el pid: ahí la garantía es el directorio 0700.
-    let Some(peer) = stream.peer_creds()?.pid().map(i64::from) else {
+    let creds = stream.peer_creds()?;
+    let Some(peer) = creds.pid().map(i64::from) else {
+        // macOS no informa el pid del par: se exige al menos el mismo usuario
+        // (dueño del directorio `run/`, que crea el daemon), además del 0700.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let owner = std::fs::metadata(run_dir(home))?.uid();
+            if creds.euid().is_some_and(|uid| uid != owner) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "el socket de Symphony lo atiende otro usuario",
+                ));
+            }
+        }
         return Ok(());
     };
     let expected = std::fs::read_to_string(run_dir(home).join("symphonyd.pid"))

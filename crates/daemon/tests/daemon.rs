@@ -238,6 +238,11 @@ async fn startup_recovers_sessions_left_active_by_a_dead_daemon() {
 
 #[tokio::test]
 async fn client_refuses_a_socket_served_by_another_process() {
+    if cfg!(target_os = "macos") {
+        // macOS no informa el pid del par: ahí se verifica el uid (mismo usuario), que
+        // no se puede falsear sin una segunda cuenta. El 0700 del directorio sigue valiendo.
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("h");
     let mut daemon = spawn_daemon(&home);
