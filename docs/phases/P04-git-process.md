@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA |
 | Rama | phase/p04-git-process |
-| Inicio / cierre | 2026-09-24 / — |
+| Inicio / cierre | 2026-09-24 / 2026-09-24 |
 | Agentes que trabajaron | claude-code/opus-5.5 |
-| Tag | — |
+| Tag | p04-done |
 | Docs usados | STACK §7, §12, §48, §60; IDEA §5.9; DB §3.C, §3.F; ADR-0002, ADR-0005 |
 
 ## Pasos
@@ -51,9 +51,19 @@
 - **Qué se hizo:** `crates/testkit/tests/p04_integration.rs`: repo en `proyecto con espacios/` → worktree `agent-001` → `fake-agent` adentro con `symphony-process` → se lee el stream hasta el mensaje del asistente (el archivo editado aparece en `git status`) → el agente queda colgado → `terminate_tree` → borrar worktree y rama; el repo base queda intacto.
 - **Cómo se verificó:** local y CI en 3 OS.
 
+### P04.S7 · Cierre — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** revisión del diff (sin `unwrap`/`expect`/`todo!` fuera de tests; git sin prompts de credenciales; hashes y rutas validados; ANSI saneado). Merge a `main` y tag `p04-done`.
+
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
+| Worktrees por agente (espacios y acentos en rutas) | `crates/git/tests` | ✅ 3 OS |
+| Kill del árbol sin huérfanos | `crates/process/tests` (10 procesos) | ✅ 3 OS |
+| Borrar un worktree no borra el `node_modules` enlazado | `crates/git/tests/deps.rs` | ✅ 3 OS |
+| `fake-agent` con todos los escenarios | `crates/testkit/tests/fake_agent.rs` | ✅ 8 escenarios |
+| Worktree + agente + stream + kill + limpieza | `p04_integration.rs` | ✅ 3 OS |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
@@ -75,13 +85,16 @@
 | blake3 (en `git`) | 1.8 | `deps_lock_hash` | Sí |
 
 ## Métricas
+- pnpm con store caliente: 1.68 s y 1.54 s por worktree nuevo (P01 Test A: 24.3 s con npm sin store).
 (benchmarks, tiempos, RAM, cobertura — con comando)
 
 ## Pruebas
-- Comando(s): …
+- Comando(s): `cargo xtask check`, `cargo deny check`, CI (3 OS + MSRV); medición pnpm con `--run-ignored only pnpm`
+- Totales: 111 passed, 1 ignorado (pnpm con red)
 - Totales: N passed, M failed (cuáles y por qué)
 
 ## Estado final
+Aislamiento listo: worktrees por agente con git del sistema, dependencias sin reinstalar (pnpm store / enlace / instalación planificada), procesos contenidos por SO con kill del árbol sin huérfanos en los 3 OS, saneamiento de ANSI y un `fake-agent` con todos los escenarios para los E2E. Se encontró y corrigió un bug grave: en Windows, borrar un worktree seguía la junction de `node_modules` y borraba el del repo base.
 Resumen de 3–5 líneas para Leo.
 
 ## Notas para el siguiente agente
