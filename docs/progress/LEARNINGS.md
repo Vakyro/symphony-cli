@@ -82,3 +82,4 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **Comparaciones de tiempo con margen 0 tienen que ser `<=`:** en Linux, crear y consultar pasa en el mismo milisegundo (el GC con `grace = 0` no borraba nada en CI).
 - **Tests del CLI con un `symphonyd` viejo:** cargo no reconstruye binarios de otros paquetes para `-p symphony-cli`. `tests/common::symphonyd()` corre `cargo build -p symphony-daemon` una vez por proceso.
 - **La recuperación al arrancar trabaja con IDs como texto:** una fila con un ID inesperado impedía arrancar el daemon.
+- **En Unix, un CLI que aborta llega como `ExitStatus::Killed(Some(señal))`, no como exit code** (en Windows es `Exited(134)`). Una señal que Symphony no mandó es un crash: run `FAILED`. `KILLED` solo para stop/kill del usuario.

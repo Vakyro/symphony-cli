@@ -18,7 +18,11 @@ path = "src/main.rs"
 symphony-adapter-claude = { path = "../adapters/claude" }
 symphony-adapter-codex = { path = "../adapters/codex" }
 symphony-adapter-common = { path = "../adapters/common" }
+symphony-context = { path = "../context" }
 symphony-core = { path = "../core" }
+symphony-git = { path = "../git" }
+symphony-object-store = { path = "../object-store" }
+symphony-process = { path = "../process" }
 symphony-protocol = { path = "../protocol" }
 symphony-store = { path = "../store" }
 rusqlite.workspace = true
@@ -32,6 +36,8 @@ tracing-appender.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
+symphony-testkit = { path = "../testkit" }
 symphony-store = { path = "../store" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "io-util", "sync"] }

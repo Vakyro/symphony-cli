@@ -103,6 +103,7 @@ struct State {
     reader: Mutex<rusqlite::Connection>,
     bus: EventBus,
     writer: symphony_store::WriterHandle,
+    runtime: crate::runtime::Runtime,
 }
 
 fn now_ms() -> i64 {
@@ -143,15 +144,46 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         tracing::warn!(error = %e, "no se pudo registrar a los proveedores");
     }
     let reader = writer.reader()?;
+    let runtime_reader = writer.reader()?;
     let listener = transport::listen(home).map_err(io("no se pudo abrir el socket IPC"))?;
     tracing::info!(pid = std::process::id(), home = %home.display(), "daemon listo");
+
+    let bus = EventBus::new(
+        writer.handle(),
+        TUI_BUFFER,
+        symphony_object_store::ObjectStore::new(
+            symphony_core::SymphonyHome::at(home).objects_dir(),
+        ),
+    );
+    let hook_cmd = std::env::current_exe().ok().map(|exe| {
+        let sibling = exe
+            .parent()
+            .map(|d| d.join(format!("symphony{}", std::env::consts::EXE_SUFFIX)));
+        let prog = sibling
+            .filter(|p| p.is_file())
+            .unwrap_or_else(|| PathBuf::from("symphony"));
+        symphony_adapter_common::HookCommand {
+            program: prog,
+            args: vec!["hook".into(), "emit".into()],
+        }
+    });
+    let runtime = crate::runtime::Runtime::new(
+        home,
+        writer.handle(),
+        runtime_reader,
+        bus.clone(),
+        crate::providers::builtin_arc(),
+        hook_cmd,
+    );
+
     let state = Arc::new(State {
         started: Instant::now(),
         home: home.to_path_buf(),
         shutdown: shutdown.clone(),
         reader: Mutex::new(reader),
-        bus: EventBus::new(writer.handle(), TUI_BUFFER),
+        bus,
         writer: writer.handle(),
+        runtime,
     });
     let tracker = TaskTracker::new();
 
@@ -172,6 +204,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     {
         tracing::warn!("había conexiones abiertas al apagar; se cierran");
     }
+    state.bus.checkpoints_idle().await;
     drop(listener);
     transport::cleanup(home);
     writer.shutdown();
@@ -241,11 +274,286 @@ async fn dispatch(req: Request, state: &State) -> Response {
             Ok(()) => providers_list(req, state),
             Err(e) => Response::error(req.id, "store_error", e.to_string()),
         },
+        "agent.create" | "agent.spawn" => agent_create(req, state).await,
+        "agent.list" | "agents.list" => agent_list(req, state),
+        "agent.inspect" => agent_inspect(req, state).await,
+        "agent.send" => agent_send(req, state).await,
+        "agent.pause" => agent_pause(req, state).await,
+        "agent.resume" => agent_resume(req, state).await,
+        "agent.stop" => agent_stop(req, state).await,
+        "agent.kill" => agent_kill(req, state).await,
+        "agent.switch" => agent_switch(req, state).await,
+        "agent.diff" => agent_diff(req, state).await,
+        "agent.logs" => agent_logs(req, state).await,
         other => Response::error(
             req.id,
             "unknown_method",
             format!("método desconocido: `{other}`"),
         ),
+    }
+}
+
+async fn agent_create(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let title = match p.get("title").and_then(Value::as_str) {
+        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
+        _ => return Response::error(req.id, "invalid_params", "falta `title` con la tarea"),
+    };
+    let project_root = match p.get("project_root").and_then(Value::as_str) {
+        Some(r) => PathBuf::from(r),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    let description = p
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let execution = if let Some(model) = p.get("model").and_then(Value::as_str) {
+        crate::runtime::Execution::Exact(model.to_string())
+    } else if let Some(exact) = p.get("exact").and_then(Value::as_str) {
+        crate::runtime::Execution::Exact(exact.to_string())
+    } else if let Some(profile) = p.get("profile").and_then(Value::as_str) {
+        crate::runtime::Execution::Profile(profile.to_string())
+    } else {
+        crate::runtime::Execution::DecideLater
+    };
+    let failover = p
+        .get("failover")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<symphony_core::FailoverPolicy>().ok())
+        .unwrap_or(symphony_core::FailoverPolicy::Any);
+    let context_mode = p
+        .get("context_mode")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<symphony_core::ContextMode>().ok())
+        .unwrap_or(symphony_core::ContextMode::Balanced);
+    let priority = p.get("priority").and_then(Value::as_i64).unwrap_or(0);
+
+    let create_req = crate::runtime::CreateAgent {
+        project_root,
+        title,
+        description,
+        execution,
+        failover,
+        context_mode,
+        priority,
+    };
+
+    match state.runtime.create_agent(create_req).await {
+        Ok(c) => Response::ok(
+            req.id,
+            json!({
+                "agent_id": c.agent_id.to_string(),
+                "task_id": c.task_id.to_string(),
+                "number": c.number,
+                "task_code": c.task_code,
+                "worktree": c.worktree.display().to_string(),
+                "branch": c.branch,
+                "state": c.state.as_str(),
+                "state_reason": c.state_reason,
+                "run": c.run.map(|(r, m)| json!({ "run_id": r.to_string(), "model": m })),
+            }),
+        ),
+        Err(e) => Response::error(req.id, e.code(), e.to_string()),
+    }
+}
+
+fn agent_list(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let all = p.get("all").and_then(Value::as_bool).unwrap_or(false);
+    let project_id = p
+        .get("project_id")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<symphony_core::ProjectId>().ok())
+        .or_else(|| {
+            p.get("project_root").and_then(Value::as_str).and_then(|r| {
+                state.reader.lock().ok().and_then(|conn| {
+                    repo::project_by_root(&conn, r)
+                        .ok()
+                        .flatten()
+                        .map(|pr| pr.id)
+                })
+            })
+        });
+    let rows = match state.reader.lock() {
+        Ok(conn) => repo::list_agents_rows(&conn, project_id, all),
+        Err(_) => {
+            return Response::error(req.id, "store_error", "lector de la base no disponible");
+        }
+    };
+    match rows {
+        Ok(agents) => {
+            let list: Vec<Value> = agents
+                .into_iter()
+                .map(|a| {
+                    json!({
+                        "agent_id": a.agent_id.to_string(),
+                        "number": a.number,
+                        "state": a.state.as_str(),
+                        "state_reason": a.state_reason,
+                        "task_code": a.task_code,
+                        "task_title": a.task_title,
+                        "provider_id": a.provider_id,
+                        "model_id": a.model_id,
+                    })
+                })
+                .collect();
+            Response::ok(req.id, json!({ "agents": list }))
+        }
+        Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+fn resolve_agent_id(state: &State, p: &Value) -> Result<symphony_core::AgentId, String> {
+    let ident = p
+        .get("agent")
+        .or_else(|| p.get("agent_id"))
+        .or_else(|| p.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "falta parámetro `agent` o `agent_id`".to_string())?;
+    let project_id = p
+        .get("project_id")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<symphony_core::ProjectId>().ok())
+        .or_else(|| {
+            p.get("project_root").and_then(Value::as_str).and_then(|r| {
+                state.reader.lock().ok().and_then(|conn| {
+                    repo::project_by_root(&conn, r)
+                        .ok()
+                        .flatten()
+                        .map(|pr| pr.id)
+                })
+            })
+        });
+    state
+        .runtime
+        .find_agent(ident, project_id)
+        .map(|a| a.id)
+        .map_err(|e| e.0)
+}
+
+async fn agent_inspect(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.inspect(agent_id).await {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+async fn agent_send(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let text = match req
+        .params
+        .get("text")
+        .or_else(|| req.params.get("message"))
+        .and_then(Value::as_str)
+    {
+        Some(t) => t,
+        None => return Response::error(req.id, "invalid_params", "falta `text` o `message`"),
+    };
+    match state.runtime.send_message(agent_id, text).await {
+        Ok(()) => Response::ok(req.id, json!({ "ok": true })),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+async fn agent_pause(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.pause(agent_id).await {
+        Ok(()) => Response::ok(req.id, json!({ "ok": true, "state": "PAUSED" })),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+async fn agent_resume(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.resume(agent_id).await {
+        Ok(()) => Response::ok(req.id, json!({ "ok": true, "state": "RUNNING" })),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+async fn agent_stop(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.stop(agent_id).await {
+        Ok(()) => Response::ok(req.id, json!({ "ok": true, "state": "CANCELLED" })),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+async fn agent_kill(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.kill(agent_id).await {
+        Ok(()) => Response::ok(req.id, json!({ "ok": true, "state": "CANCELLED" })),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+async fn agent_switch(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let model = match req.params.get("model").and_then(Value::as_str) {
+        Some(m) => m,
+        None => return Response::error(req.id, "invalid_params", "falta `model`"),
+    };
+    match state.runtime.switch(agent_id, model).await {
+        Ok(run_id) => Response::ok(
+            req.id,
+            json!({ "ok": true, "run_id": run_id.to_string(), "model": model }),
+        ),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+async fn agent_diff(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.diff(agent_id).await {
+        Ok(diff) => Response::ok(req.id, json!({ "diff": diff })),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+async fn agent_logs(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let limit = req
+        .params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize);
+    match state.runtime.logs(agent_id, limit).await {
+        Ok(logs) => {
+            let messages: Vec<Value> = logs
+                .into_iter()
+                .map(|(role, content)| json!({ "role": role, "content": content }))
+                .collect();
+            Response::ok(req.id, json!({ "messages": messages }))
+        }
+        Err(e) => Response::error(req.id, "agent_error", e.0),
     }
 }
 

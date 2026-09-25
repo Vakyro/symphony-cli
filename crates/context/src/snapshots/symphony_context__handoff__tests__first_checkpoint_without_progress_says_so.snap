@@ -1,0 +1,38 @@
+---
+source: crates/context/src/handoff.rs
+expression: "assemble(&input, ContextMode::Balanced).prompt"
+---
+Retomas una tarea de código que otro executor dejó a medias. El executor anterior terminó de forma inesperada.
+Ya estás en su worktree, con su rama y sus cambios. No empieces de cero: revisa lo que ya existe y continúa desde donde quedó.
+
+## Objetivo
+Hacer X
+
+## Último plan del executor anterior
+(ninguno)
+
+## En qué estaba
+(ninguno)
+
+## Qué seguía
+(ninguno)
+
+## Último comando y su resultado
+(ninguno)
+
+## Fallos recientes
+(ninguno)
+
+## Archivos tocados
+(ninguno)
+
+## Estado de git
+(limpio)
+
+## Diff contra la base
+(ninguno)
+
+## Archivos nuevos (sin commit)
+(ninguno)
+
+Continúa hasta terminar el objetivo. Si algo del estado de arriba contradice lo que ves en el worktree, manda el worktree.
