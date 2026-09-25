@@ -44,7 +44,9 @@ fn expected_stream(line: &str) -> Vec<&'static str> {
             .filter(|c| c["type"] == "text")
             .map(|_| "AssistantText")
             .collect(),
-        // hooks, tool_result, result sin error, thinking, tareas: vienen por hooks o no importan.
+        // Fin del turno: el runtime cierra stdin para que el CLI salga (ADR-0005, adenda P07).
+        ("result", _) => vec!["TurnFinished"],
+        // hooks, tool_result, thinking, tareas: vienen por hooks o no importan.
         _ => vec![],
     }
 }

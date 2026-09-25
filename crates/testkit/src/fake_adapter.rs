@@ -101,6 +101,8 @@ impl ProviderAdapter for FakeAdapter {
             .arg("--script")
             .arg(&self.script)
             .args(["--model", &req.model])
+            // Como Claude: stdin abierto para mensajes; sale cuando se lo cierran.
+            .args(["--stdin", "stream"])
             .cwd(&req.worktree)
             .with_stdin();
         if let Some(id) = &req.session_id {

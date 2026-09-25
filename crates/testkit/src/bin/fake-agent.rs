@@ -24,6 +24,9 @@ struct Agent {
     hook: Option<(String, Vec<String>)>,
     transcript: Option<PathBuf>,
     turns: u32,
+    /// `--stdin stream`: como `claude -p --input-format stream-json`, no sale
+    /// hasta que le cierran stdin (aunque el turno ya haya terminado).
+    stdin_stream: bool,
 }
 
 fn emit(v: &Value) {
@@ -208,6 +211,9 @@ impl Agent {
         emit(
             &json!({"type": "result", "subtype": "success", "session_id": self.session_id, "num_turns": self.turns + 1}),
         );
+        if self.stdin_stream {
+            let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+        }
         ExitCode::SUCCESS
     }
 }
@@ -270,6 +276,7 @@ fn main() -> ExitCode {
             let (mut script, mut hook, mut hook_args, mut transcript) =
                 (None, None, Vec::new(), None);
             let (mut model, mut session): (Option<String>, Option<String>) = (None, None);
+            let mut stdin_stream = false;
             let mut it = args.iter().skip(1);
             while let Some(a) = it.next() {
                 match (a.as_str(), it.next()) {
@@ -279,6 +286,7 @@ fn main() -> ExitCode {
                     ("--transcript", Some(v)) => transcript = Some(PathBuf::from(v)),
                     ("--model", Some(v)) => model = Some(v.clone()),
                     ("--session-id", Some(v)) => session = Some(v.clone()),
+                    ("--stdin", Some(v)) if v == "stream" => stdin_stream = true,
                     _ => return usage(),
                 }
             }
@@ -304,7 +312,9 @@ fn main() -> ExitCode {
                 hook: hook.map(|h| (h, hook_args)),
                 transcript,
                 turns: 0,
+                stdin_stream,
             };
+            std::thread::sleep(Duration::from_millis(script.startup_delay_ms));
             agent.run(&script.steps)
         }
         _ => usage(),

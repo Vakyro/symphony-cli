@@ -1366,6 +1366,47 @@ async fn crashed_executor_can_restart_from_its_checkpoint() {
     e.writer.shutdown();
 }
 
+/// Un CLI lento en imprimir su primera línea no es un cuelgue: la inactividad
+/// se mide desde el arranque (antes moría como NO_HEARTBEAT en el primer tick).
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_starting_executor_is_not_taken_for_hung() {
+    let script = r#"
+startup_delay_ms = 600
+[[step]]
+kind = "edit"
+path = "slow.txt"
+content = "ok\n"
+[[step]]
+kind = "say"
+text = "listo"
+"#;
+    let e = env_with_watchdog(
+        &[("fake", script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "arranque lento",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "COMPLETED"
+    );
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "COMPLETED");
+    assert!(created.worktree.join("slow.txt").is_file());
+    e.writer.shutdown();
+}
+
 /// P06.S8: Prueba de aceptación forced kill (IDEA §8, Test D).
 /// fake-agent A trabaja y se cuelga/muere sin cleanup;
 /// fake-agent B continúa solo con el handoff estructurado;
