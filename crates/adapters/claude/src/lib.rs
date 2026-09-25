@@ -145,6 +145,10 @@ impl ProviderAdapter for ClaudeAdapter {
         "Claude"
     }
 
+    fn cli_name(&self) -> &'static str {
+        "claude"
+    }
+
     fn detect(&self) -> Result<Detection, AdapterError> {
         let cli_path = self.binary()?;
         let out = Command::new(&cli_path)
@@ -188,6 +192,10 @@ impl ProviderAdapter for ClaudeAdapter {
 
     fn supports_hooks(&self) -> bool {
         true
+    }
+
+    fn hooks_can_hold(&self) -> Option<bool> {
+        Some(true)
     }
 
     fn spawn_spec(&self, req: &SpawnRequest) -> Result<ProcessSpec, AdapterError> {

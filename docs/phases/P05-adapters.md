@@ -44,6 +44,12 @@
 - **Archivos clave:** `crates/adapters/codex/src/lib.rs`, `crates/adapters/codex/tests/codex.rs`
 - **Cómo se verificó:** suite de contrato con 10 líneas reales + 1 sintética, 7 hooks reales y 5 errores; avisos vs. errores; comando de spawn/resume; comando del hook con comilla simple en la ruta; TOML del override; cuota desde un rollout con la forma real. `cargo xtask check` → 127 passed.
 
+### P05.S6 · Registro de proveedores y modelos — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony_daemon::providers`: `builtin()` (Claude, Codex); `detect_all` corre cada `detect` en `spawn_blocking` (lanza procesos) y el resultado se guarda por el writer (`upsert_provider`/`upsert_model`). Estados: `READY`, `NOT_FOUND`, `ERROR`; `LOGIN_REQUIRED` recién se puede saber al primer fallo de login, porque Symphony no lee credenciales. Detección al arrancar el daemon + IPC `providers.list`/`providers.refresh`. CLI: `symphony providers [refresh]` con tabla. Trait: `cli_name()` y `hooks_can_hold()` (ADR-0003). `fake-agent` copiado como `claude`/`codex` responde `--version` como ese CLI.
+- **Archivos clave:** `crates/daemon/src/providers.rs`, `crates/daemon/src/server.rs`, `crates/cli/src/main.rs`, `crates/cli/tests/providers.rs`
+- **Cómo se verificó:** test con PATH simulado: ninguno → ambos `NOT_FOUND`; solo `claude` → Claude `READY` 9.9.9 con 4 modelos y Codex `NOT_FOUND`; los dos → ambos `READY`. `cargo xtask check` → 128 passed.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -58,6 +64,7 @@
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
+| PLAN P05.S6 | `trycmd` con PATH simulado | Test de integración en Rust (`crates/cli/tests/providers.rs`) | Cada escenario necesita su propio home, PATH y daemon, y hay que detenerlo al terminar: `trycmd` no da ese control por caso |
 | STACK §18.1 | Trait con `async spawn/resume/stop/health` | Métodos síncronos: `spawn_spec`/`resume_spec` devuelven un `ProcessSpec`; `stop` es el `terminate_tree` genérico; la salud se deriva de `ProviderError` | Adapters puros y testeables sin procesos; el trait se usa como `dyn` en el registro |
 
 ## Dependencias agregadas

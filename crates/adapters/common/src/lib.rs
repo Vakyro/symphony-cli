@@ -192,11 +192,15 @@ pub trait ProviderAdapter: Send + Sync {
     /// Slug estable del proveedor (`providers.id`): `anthropic`, `openai`, …
     fn provider_id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
+    /// Nombre del ejecutable (`providers.cli_name`): `claude`, `codex`, …
+    fn cli_name(&self) -> &'static str;
 
     fn detect(&self) -> Result<Detection, AdapterError>;
     fn auth_status(&self) -> AuthStatus;
     fn list_models(&self) -> Vec<ModelInfo>;
     fn supports_hooks(&self) -> bool;
+    /// Resultado de Test C (ADR-0003) para `providers.hooks_can_hold`; `None` = no probado.
+    fn hooks_can_hold(&self) -> Option<bool>;
 
     /// Comando para lanzar un turno nuevo en el worktree, con hooks inyectados por invocación.
     fn spawn_spec(&self, req: &SpawnRequest) -> Result<ProcessSpec, AdapterError>;

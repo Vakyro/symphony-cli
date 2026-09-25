@@ -6,9 +6,10 @@ Symphony: coordina tus CLIs de IA para código desde una sola terminal
 Usage: symphony[EXE] [COMMAND]
 
 Commands:
-  status  Estado del daemon (lo arranca si no está vivo)
-  daemon  Controla el daemon `symphonyd`
-  help    Print this message or the help of the given subcommand(s)
+  status     Estado del daemon (lo arranca si no está vivo)
+  daemon     Controla el daemon `symphonyd`
+  providers  CLIs de IA detectados (Claude Code, Codex, …)
+  help       Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help     Print help

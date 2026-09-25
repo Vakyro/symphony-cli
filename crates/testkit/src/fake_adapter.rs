@@ -41,6 +41,10 @@ impl ProviderAdapter for FakeAdapter {
         "Fake"
     }
 
+    fn cli_name(&self) -> &'static str {
+        "fake-agent"
+    }
+
     fn detect(&self) -> Result<Detection, AdapterError> {
         if self.binary.is_file() {
             Ok(Detection {
@@ -71,6 +75,10 @@ impl ProviderAdapter for FakeAdapter {
 
     fn supports_hooks(&self) -> bool {
         true
+    }
+
+    fn hooks_can_hold(&self) -> Option<bool> {
+        Some(true)
     }
 
     fn spawn_spec(&self, req: &SpawnRequest) -> Result<ProcessSpec, AdapterError> {

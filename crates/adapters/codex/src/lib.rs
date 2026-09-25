@@ -135,6 +135,10 @@ impl ProviderAdapter for CodexAdapter {
         "Codex"
     }
 
+    fn cli_name(&self) -> &'static str {
+        "codex"
+    }
+
     fn detect(&self) -> Result<Detection, AdapterError> {
         let cli_path = self.binary()?;
         let out = Command::new(&cli_path)
@@ -176,6 +180,10 @@ impl ProviderAdapter for CodexAdapter {
 
     fn supports_hooks(&self) -> bool {
         true
+    }
+
+    fn hooks_can_hold(&self) -> Option<bool> {
+        Some(true)
     }
 
     fn spawn_spec(&self, req: &SpawnRequest) -> Result<ProcessSpec, AdapterError> {

@@ -102,6 +102,7 @@ struct State {
     /// Conexión de solo lectura (las escrituras van por el `Writer`).
     reader: Mutex<rusqlite::Connection>,
     bus: EventBus,
+    writer: symphony_store::WriterHandle,
 }
 
 fn now_ms() -> i64 {
@@ -138,6 +139,9 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     let db_path = symphony_core::SymphonyHome::at(home).db_path();
     let writer = Writer::start(&db_path)?;
     recover(&writer).await?;
+    if let Err(e) = refresh_providers(&writer.handle()).await {
+        tracing::warn!(error = %e, "no se pudo registrar a los proveedores");
+    }
     let reader = writer.reader()?;
     let listener = transport::listen(home).map_err(io("no se pudo abrir el socket IPC"))?;
     tracing::info!(pid = std::process::id(), home = %home.display(), "daemon listo");
@@ -147,6 +151,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         shutdown: shutdown.clone(),
         reader: Mutex::new(reader),
         bus: EventBus::new(writer.handle(), TUI_BUFFER),
+        writer: writer.handle(),
     });
     let tracker = TaskTracker::new();
 
@@ -231,11 +236,36 @@ async fn dispatch(req: Request, state: &State) -> Response {
             Response::ok(req.id, json!({ "stopping": true }))
         }
         "hook.emit" => hook_emit(req, state).await,
+        "providers.list" => providers_list(req, state),
+        "providers.refresh" => match refresh_providers(&state.writer).await {
+            Ok(()) => providers_list(req, state),
+            Err(e) => Response::error(req.id, "store_error", e.to_string()),
+        },
         other => Response::error(
             req.id,
             "unknown_method",
             format!("método desconocido: `{other}`"),
         ),
+    }
+}
+
+/// Detecta los CLIs (fuera del runtime: lanza procesos) y guarda el resultado.
+async fn refresh_providers(
+    writer: &symphony_store::WriterHandle,
+) -> Result<(), symphony_store::StoreError> {
+    let detected =
+        tokio::task::spawn_blocking(|| crate::providers::detect_all(&crate::providers::builtin()))
+            .await
+            .unwrap_or_default();
+    crate::providers::save(writer, detected, now_ms()).await
+}
+
+fn providers_list(req: Request, state: &State) -> Response {
+    let listed = state.reader.lock().ok().map(|c| crate::providers::list(&c));
+    match listed {
+        Some(Ok(v)) => Response::ok(req.id, json!({ "providers": v })),
+        Some(Err(e)) => Response::error(req.id, "store_error", e.to_string()),
+        None => Response::error(req.id, "store_error", "lector de la base no disponible"),
     }
 }
 

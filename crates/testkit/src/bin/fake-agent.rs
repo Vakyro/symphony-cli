@@ -244,6 +244,20 @@ fn usage() -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Copiado como `claude` o `codex`, responde `--version` como ese CLI (tests de detección).
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        let me = std::env::args().next().map(std::path::PathBuf::from);
+        match me
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+        {
+            Some("claude") => println!("9.9.9 (Claude Code)"),
+            Some("codex") => println!("codex-cli 9.9.9"),
+            _ => println!("fake-agent {}", env!("CARGO_PKG_VERSION")),
+        }
+        return ExitCode::SUCCESS;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("record-hook") => args

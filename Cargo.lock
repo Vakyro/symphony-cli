@@ -1622,6 +1622,8 @@ dependencies = [
  "miette",
  "rusqlite",
  "serde_json",
+ "symphony-adapter-claude",
+ "symphony-adapter-codex",
  "symphony-adapter-common",
  "symphony-core",
  "symphony-protocol",
