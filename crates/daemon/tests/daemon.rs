@@ -235,3 +235,28 @@ async fn startup_recovers_sessions_left_active_by_a_dead_daemon() {
     call(&home, "shutdown", json!({})).await;
     assert!(wait_exit(&mut again).success());
 }
+
+#[tokio::test]
+async fn client_refuses_a_socket_served_by_another_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    let mut daemon = spawn_daemon(&home);
+    wait_ready(&home, &mut daemon).await;
+    let pid_file = home.join("run").join("symphonyd.pid");
+    let real = std::fs::read_to_string(&pid_file).unwrap();
+
+    // Simula que el socket lo atiende un proceso que no es el daemon registrado.
+    std::fs::write(&pid_file, "1\n").unwrap();
+    let Err(err) = transport::connect(&home).await else {
+        panic!("debió rechazar la conexión")
+    };
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+
+    std::fs::write(&pid_file, real).unwrap();
+    assert_eq!(
+        call(&home, "ping", json!({})).await,
+        Outcome::Ok(json!({"pong": true}))
+    );
+    call(&home, "shutdown", json!({})).await;
+    assert!(wait_exit(&mut daemon).success());
+}
