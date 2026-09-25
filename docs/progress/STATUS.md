@@ -2,23 +2,24 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P05 · Adapters y event bus (rama `phase/p05-adapters`)
-**Paso actual:** P05.S2 · Event bus
+**Paso actual:** P05.S3 · `symphony hook emit`
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (115 tests)
+- `cargo xtask check`: ✅ (116 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
 - [x] P05.S1 Trait `ProviderAdapter`
-- [ ] P05.S2 Event bus   ← aquí
+- [x] P05.S2 Event bus
+- [ ] P05.S3 `symphony hook emit`   ← aquí
 - (resto de P05 en PLAN.md)
 
 ## Próxima acción concreta
-Ver PLAN P05.S2.
+`symphony hook emit`: no-op sin SYMPHONY_AGENT_ID; envía el payload al daemon (`hook.emit`); nunca rompe al CLI ni autoarranca el daemon; en P05 siempre deja pasar sin imprimir nada.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

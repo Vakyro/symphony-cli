@@ -17,6 +17,12 @@
 - **Archivos clave:** `crates/adapters/common/src/{lib,hooks,contract}.rs`, `crates/testkit/src/fake_adapter.rs`, `crates/testkit/tests/fake_adapter.rs`
 - **Cómo se verificó:** el adapter fake pasa la suite de contrato; E2E: spawn con `symphony-process` → prompt por stdin → stream y hooks traducidos a eventos canónicos en el orden esperado. `cargo xtask check` → 115 passed.
 
+### P05.S2 · Event bus — ✅
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony_daemon::bus::EventBus`: `publish` persiste primero en `events` por el writer único (mpsc acotado, lotes; `type` = `AgentEvent::type_name()`, `payload_json` = el evento serializado) y después difunde por `broadcast` (TUI) y actualiza un `watch` con el último evento de cada agente. `EventSource` = valores de `events.source`.
+- **Archivos clave:** `crates/daemon/src/bus.rs`, `crates/daemon/tests/bus.rs`
+- **Cómo se verificó:** 5 000 eventos con un suscriptor que nunca lee (capacidad 16) y otro que lee todo: el productor no se frena, **los 5 000 quedan persistidos en orden**, el colgado recibe `Lagged`, el vivo cuenta los 5 000 (recibidos + perdidos por atraso) y el estado del agente queda al día. `cargo xtask check` → 116 passed.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
