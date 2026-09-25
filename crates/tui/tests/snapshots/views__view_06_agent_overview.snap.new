@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/views.rs
+assertion_line: 282
 expression: "draw(&agent_app(Tab::Overview))"
 ---
 " SYMPHONY arete-mobile · Agente                                                                 "

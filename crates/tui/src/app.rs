@@ -82,6 +82,7 @@ pub enum Req {
     Control,
     Send,
     Switch,
+    Attach,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -576,6 +577,19 @@ impl App {
                 self.info("Mensaje enviado.");
                 return self.refresh();
             }
+            Req::Attach => {
+                let cli = v["cli"].as_str().unwrap_or("el CLI");
+                if v["opened"].as_bool().unwrap_or(false) {
+                    self.info(format!("Sesión abierta en {cli} en una terminal nueva."));
+                } else {
+                    self.error(format!(
+                        "No pude abrir una terminal ({}). Córrelo a mano: {}",
+                        v["error"].as_str().unwrap_or("?"),
+                        v["command"].as_str().unwrap_or("")
+                    ));
+                }
+                return self.refresh();
+            }
         }
         Vec::new()
     }
@@ -1031,6 +1045,11 @@ impl App {
             KeyCode::Char('s') => {
                 self.pick_for = PickFor::Switch;
                 return self.go(Screen::ModelPicker);
+            }
+            KeyCode::Char('o') => {
+                let params = json!({ "agent": a.id });
+                self.info("Abriendo la sesión en el CLI oficial…");
+                return vec![call(Req::Attach, "agent.attach", params)];
             }
             KeyCode::Char('x') if confirm => {
                 return vec![call(Req::Control, "agent.stop", json!({ "agent": a.id }))];

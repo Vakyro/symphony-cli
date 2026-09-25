@@ -541,3 +541,30 @@ fn recovery_actions_and_disconnection() {
     app.update(Msg::Key(ctrl_c));
     assert!(app.quit);
 }
+
+#[test]
+fn open_in_the_cli_reports_the_terminal_or_the_command() {
+    let mut app = agent_app(Tab::Overview);
+    let calls = press(&mut app, KeyCode::Char('o'));
+    assert_eq!(methods(&calls), ["agent.attach"]);
+    assert_eq!(calls[0].params, json!({ "agent": "01AGENT1" }));
+    ok(
+        &mut app,
+        Req::Attach,
+        json!({ "cli": "Claude Code", "command": "claude --resume s1", "opened": true, "error": null }),
+    );
+    assert!(matches!(&app.notice, Some(Notice::Info(i)) if i.contains("Claude Code")));
+
+    press(&mut app, KeyCode::Char('o'));
+    ok(
+        &mut app,
+        Req::Attach,
+        json!({ "cli": "Claude Code", "command": "claude --resume s1", "opened": false,
+                "error": "no se pudo abrir una terminal" }),
+    );
+    assert!(
+        matches!(&app.notice, Some(Notice::Error(e)) if e.contains("claude --resume s1")),
+        "{:?}",
+        app.notice
+    );
+}

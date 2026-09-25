@@ -130,6 +130,17 @@ impl ProviderAdapter for FakeAdapter {
         format!("{prompt}\n").into_bytes()
     }
 
+    fn attach_spec(
+        &self,
+        cli_session_id: &str,
+        model: &str,
+        worktree: &std::path::Path,
+    ) -> Result<ProcessSpec, AdapterError> {
+        Ok(ProcessSpec::new(&self.binary)
+            .args(["attach", cli_session_id, "--model", model])
+            .cwd(worktree))
+    }
+
     fn close_stdin_after_prompt(&self) -> bool {
         false
     }

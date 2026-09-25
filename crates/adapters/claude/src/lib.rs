@@ -219,6 +219,18 @@ impl ProviderAdapter for ClaudeAdapter {
         user_message(prompt)
     }
 
+    fn attach_spec(
+        &self,
+        cli_session_id: &str,
+        model: &str,
+        worktree: &Path,
+    ) -> Result<ProcessSpec, AdapterError> {
+        Ok(ProcessSpec::new(self.binary()?)
+            .args(["--resume", cli_session_id, "--model", model])
+            .args(["--permission-mode", &self.permission_mode])
+            .cwd(worktree))
+    }
+
     fn close_stdin_after_prompt(&self) -> bool {
         false
     }

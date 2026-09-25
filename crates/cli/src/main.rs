@@ -113,6 +113,14 @@ enum Cmd {
         #[arg(short, long)]
         limit: Option<usize>,
     },
+    /// Abre la sesión del agente en el CLI oficial (Claude Code, Codex) en una terminal nueva.
+    Attach {
+        /// ID o número del agente.
+        agent: String,
+        /// Solo imprime el comando, sin abrir una terminal.
+        #[arg(long)]
+        print: bool,
+    },
     /// Inspecciona en detalle el estado, tarea, worktree, checkpoints y runs del agente.
     Inspect {
         /// ID o número del agente.
@@ -332,6 +340,30 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                     let content = m["content"].as_str().unwrap_or("");
                     println!("[{role}] {content}");
                 }
+            }
+        }
+        Some(Cmd::Attach { agent, print }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            let res = client::call(
+                &mut conn,
+                "agent.attach",
+                json!({ "agent": agent, "open": !print }),
+            )
+            .await?;
+            let command = res["command"].as_str().unwrap_or("");
+            if print {
+                println!("{command}");
+            } else if res["opened"].as_bool().unwrap_or(false) {
+                println!(
+                    "sesión del agente {agent} abierta en {} (terminal nueva)",
+                    res["cli"].as_str().unwrap_or("el CLI")
+                );
+            } else {
+                println!(
+                    "no se pudo abrir una terminal ({}); córrelo a mano:",
+                    res["error"].as_str().unwrap_or("?")
+                );
+                println!("  {command}");
             }
         }
         Some(Cmd::Inspect { agent }) => {

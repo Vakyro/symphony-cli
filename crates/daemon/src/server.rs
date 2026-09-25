@@ -337,6 +337,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.switch" => agent_switch(req, state).await,
         "agent.diff" => agent_diff(req, state).await,
         "agent.logs" => agent_logs(req, state).await,
+        "agent.attach" => agent_attach(req, state).await,
         "agent.activity" => agent_view(req, state, |c, a| {
             crate::views::activity(c, a, 200).map(|v| json!({ "items": v }))
         }),
@@ -625,6 +626,43 @@ async fn agent_logs(req: Request, state: &State) -> Response {
         }
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }
+}
+
+/// «Abrir en el CLI» (ADR-0005). `open: false` solo devuelve el comando.
+async fn agent_attach(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let open = req
+        .params
+        .get("open")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let (spec, cli) = match state.runtime.attach_spec(agent_id) {
+        Ok(v) => v,
+        Err(e) => return Response::error(req.id, "attach_unavailable", e.0),
+    };
+    let command = crate::attach::command_line(&spec);
+    let opened = if open {
+        crate::attach::open_terminal(&spec, &format!("Symphony · {cli}"))
+    } else {
+        Err("no se pidió abrir una terminal".into())
+    };
+    if opened.is_ok()
+        && let Err(e) = state.runtime.note_attached(agent_id, cli).await
+    {
+        tracing::warn!(error = %e.0, "no se pudo anotar el attach en la conversación");
+    }
+    Response::ok(
+        req.id,
+        json!({
+            "cli": cli,
+            "command": command,
+            "opened": opened.is_ok(),
+            "error": opened.err(),
+        }),
+    )
 }
 
 /// Enum de DB en un parámetro: ausente → `default`; inválido → error (nunca el default en silencio).

@@ -121,7 +121,7 @@ fn hints(app: &App) -> &'static str {
         Screen::Agent => match app.agent.as_ref() {
             Some(a) if a.typing => "Enter enviar · Esc cancelar",
             _ => {
-                "←→ pestaña · m mensaje · p pausa · s cambiar modelo · d diff · x detener · Esc volver"
+                "←→ pestaña · m mensaje · p pausa · s modelo · o abrir en el CLI · d diff · x detener · Esc"
             }
         },
         Screen::Recovery => {
