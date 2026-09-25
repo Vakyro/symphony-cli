@@ -30,6 +30,13 @@
 - **Cómo se verificó:** trycmd sin env (no-op) y con payload inválido (silencio, exit 0); E2E: con el daemon caído el hook sale 0 y no lo arranca; con el daemon arriba 20 `PreToolUse` → 20 `CommandRequested` y un `PostToolUse` de Write → `ToolFinished` + `FileModified` en `events`; un agente inexistente no escribe nada. **Latencia del proceso `symphony hook emit` completo: mediana 30 ms, p90 46 ms, máx 65 ms** (Windows, debug).
 - **Arreglos que salieron:** (1) la recuperación al arrancar convertía IDs a ULID y una fila rara impedía arrancar el daemon; ahora usa texto. (2) Los tests del CLI podían usar un `symphonyd` viejo; ahora se construye siempre (`tests/common`).
 
+### P05.S4 · Adapter Claude Code — ✅ (L3 live sin correr: falta permiso)
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-09-24
+- **Qué se hizo:** `symphony-adapter-claude`: `claude -p --input-format stream-json --output-format stream-json --verbose --model M --permission-mode <config> [--session-id|--resume]`; **nunca `--bare`**; binario nativo de npm (`@anthropic-ai/claude-code/bin/claude.exe`) en vez del shim `.cmd`; hooks por invocación con `--settings` (8 eventos, comando con comillas estilo bash, `timeout` 30 s por ADR-0003); prompt y mensajes a media tarea como líneas `stream-json` por stdin (ADR-0005). Fuentes: hooks para herramientas y turnos, stream para sesión (modelo real), texto, `api_retry` (error tipado), cuota KNOWN desde `rate_limit_event` (5 h y 7 días) y `result` con error. `parse_error` para límites de uso (diario/semanal), 429, auth, overloaded, modelo inexistente y red.
+- **Fixtures L1:** `fixtures/providers/claude-code/{stream,hooks}.jsonl` sacados de P01 y sanitizados (usuario y rutas reemplazados; `fixtures/providers/README.md`).
+- **Archivos clave:** `crates/adapters/claude/src/lib.rs`, `crates/adapters/claude/tests/claude.rs`
+- **Cómo se verificó:** suite de contrato con 11 líneas de stream reales + 4 sintéticas documentadas, 9 hooks reales y 6 errores; cuota; comando de spawn/resume y JSON de `--settings`; codificación de mensajes. `cargo xtask check` → 121 passed. El live L3 (`SYMPHONY_LIVE=1`) existe pero no se corrió.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

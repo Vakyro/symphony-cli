@@ -1,0 +1,19 @@
+[package]
+name = "symphony-adapter-claude"
+description = "Adapter de Claude Code para Symphony"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+symphony-adapter-common = { path = "../common" }
+symphony-core = { path = "../../core" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

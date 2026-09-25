@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P05 · Adapters y event bus (rama `phase/p05-adapters`)
-**Paso actual:** P05.S4 · Adapter Claude Code
+**Paso actual:** P05.S5 · Adapter Codex
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (120 tests)
+- `cargo xtask check`: ✅ (121 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -16,11 +16,12 @@
 - [x] P05.S1 Trait `ProviderAdapter`
 - [x] P05.S2 Event bus
 - [x] P05.S3 `symphony hook emit`
-- [ ] P05.S4 Adapter Claude Code   ← aquí
+- [x] P05.S4 Adapter Claude Code
+- [ ] P05.S5 Adapter Codex   ← aquí
 - (resto de P05 en PLAN.md)
 
 ## Próxima acción concreta
-Adapter de Claude Code según `docs/research/cli-claude-code.md`, ADR-0003 (hooks por `--settings`) y ADR-0005 (`-p --input-format stream-json`); fixtures sanitizados de P01 en `fixtures/providers/claude-code/`; suite de contrato; live test L3 opt-in.
+Adapter de Codex: `codex exec --json` (prompt por stdin, `-`), hooks `-c hooks.*` en sintaxis PowerShell + `--dangerously-bypass-hook-trust`, cuota desde el rollout, mensajes solo entre turnos (ADR-0005).
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
