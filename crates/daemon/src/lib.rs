@@ -9,3 +9,4 @@ pub mod providers;
 pub mod recorder;
 pub mod runtime;
 pub mod server;
+pub mod views;

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use symphony_protocol::transport::{self, ListenerExt as _, LocalStream};
-use symphony_protocol::{Connection, Message, PROTOCOL_VERSION, Request, Response};
+use symphony_protocol::{Connection, Event, Message, PROTOCOL_VERSION, Request, Response};
 use symphony_store::{Writer, repo};
 
 use crate::bus::{BusEvent, EventBus, EventSource};
@@ -227,11 +227,25 @@ async fn handle(stream: LocalStream, state: Arc<State>) {
                     Err(_) => Response::error(id, "timeout", "el daemon no respondió a tiempo"),
                 }
             }
-            Ok(Some(Message::Subscribe(sub))) => Response::error(
-                sub.id,
-                "unsupported",
-                "las suscripciones a eventos llegan con el event bus (P05)",
-            ),
+            Ok(Some(Message::Subscribe(sub))) => {
+                if !sub
+                    .topics
+                    .iter()
+                    .any(|t| t == TOPIC_AGENT_EVENT || t == "*")
+                {
+                    Response::error(
+                        sub.id,
+                        "unknown_topic",
+                        format!("tópicos disponibles: `{TOPIC_AGENT_EVENT}`"),
+                    )
+                } else {
+                    let ok = Response::ok(sub.id, json!({ "topics": [TOPIC_AGENT_EVENT] }));
+                    if conn.send(&Message::Response(ok)).await.is_ok() {
+                        stream_events(conn, &state).await;
+                    }
+                    return;
+                }
+            }
             Ok(Some(_)) => Response::error(
                 "",
                 "invalid_message",
@@ -251,6 +265,44 @@ async fn handle(stream: LocalStream, state: Arc<State>) {
             }
         };
         if conn.send(&Message::Response(reply)).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Tópico de los eventos canónicos de agentes (IDEA §5.3).
+pub const TOPIC_AGENT_EVENT: &str = "agent.event";
+/// El suscriptor se atrasó y perdió eventos: tiene que releer el estado.
+pub const TOPIC_LAGGED: &str = "bus.lagged";
+
+/// Conexión suscrita: reenvía el bus hasta que el cliente cierre o el daemon se apague.
+/// Lo que llega ya está persistido (el bus guarda antes de difundir).
+async fn stream_events(mut conn: Connection<LocalStream>, state: &State) {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut rx = state.bus.subscribe();
+    loop {
+        let event = tokio::select! {
+            () = state.shutdown.cancelled() => return,
+            // Una suscripción no manda nada más: cualquier mensaje o EOF la cierra.
+            _ = conn.recv() => return,
+            ev = rx.recv() => ev,
+        };
+        let msg = match event {
+            Ok(ev) => Event::new(
+                TOPIC_AGENT_EVENT,
+                json!({
+                    "project_id": ev.project_id,
+                    "agent_id": ev.agent_id,
+                    "run_id": ev.run_id,
+                    "type": ev.event.type_name(),
+                    "source": ev.source.as_str(),
+                    "occurred_at": ev.occurred_at,
+                }),
+            ),
+            Err(RecvError::Lagged(missed)) => Event::new(TOPIC_LAGGED, json!({ "missed": missed })),
+            Err(RecvError::Closed) => return,
+        };
+        if conn.send(&Message::Event(msg)).await.is_err() {
             return;
         }
     }
@@ -285,6 +337,18 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.switch" => agent_switch(req, state).await,
         "agent.diff" => agent_diff(req, state).await,
         "agent.logs" => agent_logs(req, state).await,
+        "agent.activity" => agent_view(req, state, |c, a| {
+            crate::views::activity(c, a, 200).map(|v| json!({ "items": v }))
+        }),
+        "agent.history" => agent_view(req, state, crate::views::history),
+        "models.list" => read_view(req, state, |c| {
+            crate::views::models(c).map(|v| json!({ "models": v }))
+        }),
+        "provider.set_enabled" => provider_set_enabled(req, state).await,
+        "project.status" => project_status(req, state).await,
+        "project.init" => project_init(req).await,
+        "recovery.list" => recovery_list(req, state),
+        "recovery.act" => recovery_act(req, state).await,
         other => Response::error(
             req.id,
             "unknown_method",
@@ -316,16 +380,14 @@ async fn agent_create(req: Request, state: &State) -> Response {
     } else {
         crate::runtime::Execution::DecideLater
     };
-    let failover = p
-        .get("failover")
-        .and_then(Value::as_str)
-        .and_then(|s| s.parse::<symphony_core::FailoverPolicy>().ok())
-        .unwrap_or(symphony_core::FailoverPolicy::Any);
-    let context_mode = p
-        .get("context_mode")
-        .and_then(Value::as_str)
-        .and_then(|s| s.parse::<symphony_core::ContextMode>().ok())
-        .unwrap_or(symphony_core::ContextMode::Balanced);
+    let failover = match enum_param(p, "failover", symphony_core::FailoverPolicy::Any) {
+        Ok(v) => v,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let context_mode = match enum_param(p, "context_mode", symphony_core::ContextMode::Balanced) {
+        Ok(v) => v,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
     let priority = p.get("priority").and_then(Value::as_i64).unwrap_or(0);
 
     let create_req = crate::runtime::CreateAgent {
@@ -554,6 +616,265 @@ async fn agent_logs(req: Request, state: &State) -> Response {
             Response::ok(req.id, json!({ "messages": messages }))
         }
         Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+/// Enum de DB en un parámetro: ausente → `default`; inválido → error (nunca el default en silencio).
+fn enum_param<T>(p: &Value, key: &str, default: T) -> Result<T, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match p.get(key).filter(|v| !v.is_null()) {
+        None => Ok(default),
+        Some(v) => v
+            .as_str()
+            .ok_or_else(|| format!("`{key}` tiene que ser texto"))?
+            .parse()
+            .map_err(|e: T::Err| format!("`{key}`: {e}")),
+    }
+}
+
+fn read_view(
+    req: Request,
+    state: &State,
+    f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<Value>,
+) -> Response {
+    let res = match state.reader.lock() {
+        Ok(conn) => f(&conn),
+        Err(_) => {
+            return Response::error(req.id, "store_error", "lector de la base no disponible");
+        }
+    };
+    match res {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+fn agent_view(
+    req: Request,
+    state: &State,
+    f: impl FnOnce(&rusqlite::Connection, &str) -> rusqlite::Result<Value>,
+) -> Response {
+    match resolve_agent_id(state, &req.params) {
+        Ok(id) => {
+            let id = id.to_string();
+            read_view(req, state, |c| f(c, &id))
+        }
+        Err(e) => Response::error(req.id, "agent_not_found", e),
+    }
+}
+
+async fn provider_set_enabled(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let (Some(id), Some(enabled)) = (
+        p.get("id").and_then(Value::as_str).map(str::to_string),
+        p.get("enabled").and_then(Value::as_bool),
+    ) else {
+        return Response::error(req.id, "invalid_params", "faltan `id` y `enabled`");
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let target = id.clone();
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let n = t.execute(
+                "UPDATE providers SET enabled = ?2 WHERE id = ?1",
+                rusqlite::params![target, i64::from(enabled)],
+            )?;
+            let _ = tx.send(n);
+            Ok(())
+        }))
+        .await;
+    match (written, rx.await) {
+        (Ok(()), Ok(1)) => Response::ok(req.id, json!({ "id": id, "enabled": enabled })),
+        (Ok(()), _) => Response::error(
+            req.id,
+            "provider_not_found",
+            format!("no existe el proveedor `{id}`"),
+        ),
+        (Err(e), _) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+fn project_root_param(p: &Value) -> PathBuf {
+    match p.get("project_root").and_then(Value::as_str) {
+        Some(r) => PathBuf::from(r),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    }
+}
+
+/// Launch (FLOW §4.1): ¿es un repo?, ¿está inicializado?, ¿hay algo que recuperar?
+async fn project_status(req: Request, state: &State) -> Response {
+    let root = project_root_param(&req.params);
+    let probe = root.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let repo = symphony_git::Repo::discover(&probe)?;
+        let branch = repo.current_branch()?;
+        Ok::<_, symphony_git::GitError>((repo.root().to_path_buf(), branch))
+    })
+    .await;
+    let Ok(Ok((repo_root, branch))) = found else {
+        return Response::ok(
+            req.id,
+            json!({ "path": root.display().to_string(), "is_repo": false }),
+        );
+    };
+    let root_text = repo_root.display().to_string();
+    let config = match symphony_core::load_project(&repo_root) {
+        Ok(c) => c,
+        Err(e) => return Response::error(req.id, "config_error", e.to_string()),
+    };
+    let dir_name = repo_root
+        .file_name()
+        .map_or_else(|| root_text.clone(), |n| n.to_string_lossy().into_owned());
+    let known = state.reader.lock().ok().and_then(|conn| {
+        let project = repo::project_by_root(&conn, &root_text).ok().flatten()?;
+        let open: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM recovery_items WHERE project_id = ?1 AND status = 'OPEN'",
+                [project.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        Some((project.id.to_string(), open))
+    });
+    Response::ok(
+        req.id,
+        json!({
+            "path": root.display().to_string(),
+            "is_repo": true,
+            "root": root_text,
+            "name": config.as_ref().map_or(dir_name, |c| c.project.name.clone()),
+            "branch": branch,
+            "initialized": config.is_some(),
+            "project_id": known.as_ref().map(|k| k.0.clone()),
+            "recovery_open": known.map_or(0, |k| k.1),
+        }),
+    )
+}
+
+/// First-run (FLOW §4.2): guarda nombre, perfil de rendimiento y failover en `project.toml`.
+async fn project_init(req: Request) -> Response {
+    let p = &req.params;
+    let root = project_root_param(p);
+    let performance = match enum_param(
+        p,
+        "performance",
+        symphony_core::PerformanceProfile::Balanced,
+    ) {
+        Ok(v) => v,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let failover = match enum_param(p, "failover", symphony_core::FailoverPolicy::Any) {
+        Ok(v) => v,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let name = p.get("name").and_then(Value::as_str).map(str::to_string);
+    let done = tokio::task::spawn_blocking(move || {
+        let repo = symphony_git::Repo::discover(&root).map_err(|e| e.to_string())?;
+        let branch = repo
+            .current_branch()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "main".into());
+        let dir_name = repo
+            .root()
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "proyecto".into());
+        let name = name.filter(|n| !n.trim().is_empty()).unwrap_or(dir_name);
+        symphony_core::init_project(
+            repo.root(),
+            &symphony_core::ProjectInit {
+                name: name.trim(),
+                default_branch: &branch,
+                performance,
+                failover,
+            },
+        )
+        .map(|c| (repo.root().display().to_string(), c.project.name))
+        .map_err(|e| e.to_string())
+    })
+    .await;
+    match done {
+        Ok(Ok((root, name))) => Response::ok(req.id, json!({ "root": root, "name": name })),
+        Ok(Err(e)) => Response::error(req.id, "init_failed", e),
+        Err(e) => Response::error(req.id, "init_failed", e.to_string()),
+    }
+}
+
+fn project_id_param(state: &State, p: &Value) -> Option<String> {
+    let root = p.get("project_root").and_then(Value::as_str)?;
+    let conn = state.reader.lock().ok()?;
+    repo::project_by_root(&conn, root)
+        .ok()
+        .flatten()
+        .map(|pr| pr.id.to_string())
+}
+
+fn recovery_list(req: Request, state: &State) -> Response {
+    let project = project_id_param(state, &req.params);
+    if req.params.get("project_root").is_some() && project.is_none() {
+        // Proyecto que Symphony todavía no conoce: nada que recuperar.
+        return Response::ok(req.id, json!({ "items": [] }));
+    }
+    read_view(req, state, |c| {
+        crate::views::recovery(c, project.as_deref()).map(|v| json!({ "items": v }))
+    })
+}
+
+/// Acciones del Recovery Center (FLOW §16): `restart`, `reclaim`, `stop` o `dismiss`.
+async fn recovery_act(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let (Some(id), Some(action)) = (
+        p.get("id").and_then(Value::as_str).map(str::to_string),
+        p.get("action").and_then(Value::as_str).map(str::to_string),
+    ) else {
+        return Response::error(req.id, "invalid_params", "faltan `id` y `action`");
+    };
+    let item = state
+        .reader
+        .lock()
+        .ok()
+        .and_then(|c| crate::views::recovery_item(&c, &id).ok().flatten());
+    let Some((agent, _kind)) = item else {
+        return Response::error(
+            req.id,
+            "recovery_not_found",
+            "ese problema ya no está abierto",
+        );
+    };
+    let agent = agent.and_then(|a| a.parse::<symphony_core::AgentId>().ok());
+    let close = |resolution: Option<&'static str>| {
+        let id = id.clone();
+        state.writer.write(Box::new(move |t| {
+            repo::close_recovery_item(t, &id, resolution, now_ms())?;
+            Ok(())
+        }))
+    };
+    let result = match (action.as_str(), agent) {
+        ("dismiss", _) => close(None).await.map_err(|e| e.to_string()),
+        ("restart", Some(a)) => state.runtime.restart(a).await.map(drop).map_err(|e| e.0),
+        ("reclaim", Some(a)) => state.runtime.reclaim(a).await.map(drop).map_err(|e| e.0),
+        ("stop", Some(a)) => match state.runtime.stop(a).await {
+            Ok(()) => close(Some("ARCHIVE")).await.map_err(|e| e.to_string()),
+            Err(e) => Err(e.0),
+        },
+        ("restart" | "reclaim" | "stop", None) => Err(format!(
+            "`{action}` necesita un agente; este problema no tiene uno"
+        )),
+        _ => {
+            return Response::error(
+                req.id,
+                "invalid_params",
+                format!("acción desconocida: `{action}` (restart, reclaim, stop, dismiss)"),
+            );
+        }
+    };
+    match result {
+        Ok(()) => Response::ok(req.id, json!({ "ok": true })),
+        Err(e) => Response::error(req.id, "recovery_failed", e),
     }
 }
 

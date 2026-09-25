@@ -1308,6 +1308,26 @@ pub fn resolve_recovery_items(
     )?)
 }
 
+/// Cierra un item abierto del Recovery Center: `resolution = None` lo descarta
+/// (`DISMISSED`); con resolución queda `RESOLVED`. Devuelve si estaba abierto.
+pub fn close_recovery_item(
+    conn: &Connection,
+    id: &str,
+    resolution: Option<&str>,
+    now: i64,
+) -> Result<bool, RepoError> {
+    let status = if resolution.is_some() {
+        "RESOLVED"
+    } else {
+        "DISMISSED"
+    };
+    Ok(conn.execute(
+        "UPDATE recovery_items SET status = ?2, resolution = ?3, resolved_at = ?4
+         WHERE id = ?1 AND status = 'OPEN'",
+        params![id, status, resolution, now],
+    )? == 1)
+}
+
 /// Al arrancar el daemon (con el lock de instancia tomado): toda sesión que
 /// siga `ACTIVE` es de un daemon anterior que murió sin cerrarla. Se marca
 /// `INTERRUPTED` y se abre un `recovery_items(SESSION_INTERRUPTED)` por cada una
@@ -1486,10 +1506,13 @@ pub fn agent_messages(
     agent: AgentId,
     limit: Option<usize>,
 ) -> Result<Vec<MessageRecord>, RepoError> {
+    // Con límite: los últimos N, en orden cronológico.
     let limit_clause = limit.map_or(String::new(), |l| format!("LIMIT {l}"));
     let sql = format!(
-        "SELECT id, agent_id, run_id, role, content, content_object_id, created_at
-         FROM messages WHERE agent_id = ?1 ORDER BY created_at ASC {limit_clause}"
+        "SELECT * FROM (
+             SELECT id, agent_id, run_id, role, content, content_object_id, created_at
+             FROM messages WHERE agent_id = ?1 ORDER BY created_at DESC, id DESC {limit_clause}
+         ) ORDER BY created_at ASC, id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([agent.to_string()], |r| {

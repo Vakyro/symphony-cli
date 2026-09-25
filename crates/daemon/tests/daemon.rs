@@ -236,6 +236,125 @@ async fn startup_recovers_sessions_left_active_by_a_dead_daemon() {
     assert!(wait_exit(&mut again).success());
 }
 
+/// Métodos de lectura y acciones de la TUI (P07): Recovery Center, proveedores y proyecto.
+#[tokio::test]
+async fn recovery_center_and_tui_views_over_ipc() {
+    use symphony_core::{ProjectId, SessionId, SymphonyHome};
+    use symphony_store::repo;
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    let db = SymphonyHome::at(&home).db_path();
+    {
+        let conn = symphony_store::open(&db).unwrap();
+        let project = ProjectId::new();
+        repo::insert_project(
+            &conn,
+            &repo::Project {
+                id: project,
+                name: "demo".into(),
+                root_path: "/repo".into(),
+                default_branch: "main".into(),
+                created_at: 1,
+            },
+        )
+        .unwrap();
+        repo::start_session(&conn, SessionId::new(), project, 999_999, 1).unwrap();
+    }
+    let mut daemon = spawn_daemon(&home);
+    wait_ready(&home, &mut daemon).await;
+    // Si el test falla, el daemon no puede quedar vivo (heredaría el pipe de nextest).
+    let mut daemon = KillOnDrop(daemon);
+    let ok = |o: Outcome| match o {
+        Outcome::Ok(v) => v,
+        Outcome::Error(e) => panic!("{}: {}", e.code, e.message),
+    };
+    let err = |o: Outcome| match o {
+        Outcome::Error(e) => e.code,
+        Outcome::Ok(v) => panic!("se esperaba un error: {v}"),
+    };
+
+    // Recovery Center: el item de la sesión interrumpida, sin agente.
+    let items = ok(call(&home, "recovery.list", json!({ "project_root": "/repo" })).await);
+    let items = items["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["kind"], "SESSION_INTERRUPTED");
+    assert_eq!(items[0]["agent_number"], Value::Null);
+    let id = items[0]["id"].clone();
+    let other = ok(call(&home, "recovery.list", json!({ "project_root": "/otro" })).await);
+    assert_eq!(other["items"], json!([]));
+    let code = err(call(
+        &home,
+        "recovery.act",
+        json!({ "id": id, "action": "restart" }),
+    )
+    .await);
+    assert_eq!(code, "recovery_failed");
+    let code = err(call(
+        &home,
+        "recovery.act",
+        json!({ "id": id, "action": "borrar" }),
+    )
+    .await);
+    assert_eq!(code, "invalid_params");
+    ok(call(
+        &home,
+        "recovery.act",
+        json!({ "id": id, "action": "dismiss" }),
+    )
+    .await);
+    let code = err(call(
+        &home,
+        "recovery.act",
+        json!({ "id": id, "action": "dismiss" }),
+    )
+    .await);
+    assert_eq!(code, "recovery_not_found");
+    let status = ok(call(&home, "status", json!({})).await);
+    assert_eq!(status["recovery_open"], json!(0));
+
+    // Proveedores: desactivar sobrevive a una nueva detección.
+    ok(call(
+        &home,
+        "provider.set_enabled",
+        json!({ "id": "anthropic", "enabled": false }),
+    )
+    .await);
+    let listed = ok(call(&home, "providers.refresh", json!({})).await);
+    let claude = listed["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "anthropic")
+        .unwrap()
+        .clone();
+    assert_eq!(claude["enabled"], json!(false));
+    let code = err(call(
+        &home,
+        "provider.set_enabled",
+        json!({ "id": "nadie", "enabled": true }),
+    )
+    .await);
+    assert_eq!(code, "provider_not_found");
+    let models = ok(call(&home, "models.list", json!({})).await);
+    for m in models["models"].as_array().unwrap() {
+        if m["provider_id"] == "anthropic" {
+            assert_eq!(m["available"], json!(false), "proveedor desactivado: {m}");
+        }
+    }
+
+    // Proyecto y agentes.
+    let not_repo = dir.path().join("suelto");
+    std::fs::create_dir_all(&not_repo).unwrap();
+    let st = ok(call(&home, "project.status", json!({ "project_root": not_repo })).await);
+    assert_eq!(st["is_repo"], json!(false));
+    let code = err(call(&home, "agent.history", json!({ "agent": "#7" })).await);
+    assert_eq!(code, "agent_not_found");
+
+    call(&home, "shutdown", json!({})).await;
+    assert!(wait_exit(&mut daemon.0).success());
+}
+
 #[tokio::test]
 async fn client_refuses_a_socket_served_by_another_process() {
     if cfg!(target_os = "macos") {
@@ -264,4 +383,13 @@ async fn client_refuses_a_socket_served_by_another_process() {
     );
     call(&home, "shutdown", json!({})).await;
     assert!(wait_exit(&mut daemon).success());
+}
+
+struct KillOnDrop(Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }

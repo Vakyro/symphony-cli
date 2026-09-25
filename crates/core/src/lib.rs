@@ -11,8 +11,8 @@ mod transitions;
 pub use ansi::{AnsiMode, sanitize};
 pub use config::{
     Config, ConfigError, ContextConfig, DEFAULT_CONFIG, LoggingConfig, PerformanceConfig,
-    ProjectConfig, ProjectSection, ProvidersConfig, RoutingConfig, SymphonyHome, create_project,
-    load_or_create, load_project, project_config_path, set_value,
+    ProjectConfig, ProjectInit, ProjectSection, ProvidersConfig, RoutingConfig, SymphonyHome,
+    init_project, load_or_create, load_project, project_config_path, set_value,
 };
 pub use enums::{
     AgentState, ContextMode, ExecutionMode, FailoverPolicy, FailureType, InvalidValue,

@@ -288,19 +288,27 @@ pub fn load_project(project_root: &Path) -> Result<Option<ProjectConfig>, Config
     read(&path)?.map(|t| parse(&path, &t)).transpose()
 }
 
+/// Decisiones del First-run (FLOW §4.2) que se guardan en `project.toml`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectInit<'a> {
+    pub name: &'a str,
+    pub default_branch: &'a str,
+    pub performance: PerformanceProfile,
+    pub failover: FailoverPolicy,
+}
+
 /// Crea `project.toml` si no existe y devuelve la config del proyecto.
-pub fn create_project(
-    project_root: &Path,
-    name: &str,
-    default_branch: &str,
-) -> Result<ProjectConfig, ConfigError> {
+/// Si ya existe, no la pisa.
+pub fn init_project(project_root: &Path, init: &ProjectInit) -> Result<ProjectConfig, ConfigError> {
     let path = project_config_path(project_root);
     if let Some(existing) = load_project(project_root)? {
         return Ok(existing);
     }
     let mut doc = DocumentMut::new();
-    doc["project"]["name"] = toml_edit::value(name);
-    doc["project"]["default_branch"] = toml_edit::value(default_branch);
+    doc["project"]["name"] = toml_edit::value(init.name);
+    doc["project"]["default_branch"] = toml_edit::value(init.default_branch);
+    doc["performance"]["profile"] = toml_edit::value(init.performance.as_str());
+    doc["routing"]["failover"] = toml_edit::value(init.failover.as_str());
     let text = format!("# Configuración de Symphony para este proyecto.\n{doc}");
     write_atomic(&path, &text)?;
     parse(&path, &text)
@@ -424,17 +432,30 @@ mod tests {
     fn project_config_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         assert!(load_project(dir.path()).unwrap().is_none());
-        let created = create_project(dir.path(), "arete-mobile", "main").unwrap();
+        let init = ProjectInit {
+            name: "arete-mobile",
+            default_branch: "main",
+            performance: PerformanceProfile::Eco,
+            failover: FailoverPolicy::SameProvider,
+        };
+        let created = init_project(dir.path(), &init).unwrap();
         assert_eq!(created.project.name, "arete-mobile");
         assert_eq!(created.project.default_branch, "main");
-        assert!(created.routing.is_none());
+        assert_eq!(
+            created.performance.map(|p| p.profile),
+            Some(PerformanceProfile::Eco)
+        );
+        assert_eq!(
+            created.routing.map(|r| r.failover),
+            Some(FailoverPolicy::SameProvider)
+        );
         // Crear de nuevo no pisa lo existente.
         std::fs::write(
             project_config_path(dir.path()),
             "[project]\nname = \"otro\"\ndefault_branch = \"develop\"\n\n[context]\nmode = \"RAW\"\n",
         )
         .unwrap();
-        let again = create_project(dir.path(), "arete-mobile", "main").unwrap();
+        let again = init_project(dir.path(), &init).unwrap();
         assert_eq!(again.project.name, "otro");
         assert_eq!(
             again.context,
