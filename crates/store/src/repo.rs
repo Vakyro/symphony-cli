@@ -662,7 +662,134 @@ pub fn close_run(
     Ok(())
 }
 
+/// Sesión abierta de este daemon para el proyecto, si ya hay una.
+pub fn active_session(
+    conn: &Connection,
+    project: ProjectId,
+    daemon_pid: u32,
+) -> Result<Option<SessionId>, RepoError> {
+    Ok(unclosed_sessions(conn, project)?
+        .into_iter()
+        .find(|(_, pid)| *pid == Some(daemon_pid))
+        .map(|(id, _)| id))
+}
+
+// --- selección de executor --------------------------------------------------
+
+/// Un modelo que se puede usar ya: proveedor detectado (`READY`) y habilitado, modelo habilitado.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EligibleModel {
+    pub model_id: String,
+    pub provider_id: String,
+    pub cli_model_id: String,
+}
+
+/// `Ok(model)` si el modelo exacto es elegible; `Err(motivo legible)` si no (FLOW §6).
+pub fn eligible_model(
+    conn: &Connection,
+    model_id: &str,
+) -> Result<Result<EligibleModel, String>, RepoError> {
+    let row: Option<(String, String, bool, String, bool)> = conn
+        .query_row(
+            "SELECT m.provider_id, m.cli_model_id, m.enabled = 1, p.setup_state, p.enabled = 1
+             FROM models m JOIN providers p ON p.id = m.provider_id WHERE m.id = ?1",
+            [model_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    Ok(match row {
+        None => Err(format!(
+            "el modelo `{model_id}` no existe en ningún proveedor detectado"
+        )),
+        Some((_, _, false, _, _)) => Err(format!("el modelo `{model_id}` está deshabilitado")),
+        Some((provider, _, _, _, false)) => {
+            Err(format!("el proveedor `{provider}` está deshabilitado"))
+        }
+        Some((provider, _, _, state, _)) if state != "READY" => {
+            Err(format!("el proveedor `{provider}` no está listo ({state})"))
+        }
+        Some((provider_id, cli_model_id, ..)) => Ok(EligibleModel {
+            model_id: model_id.to_string(),
+            provider_id,
+            cli_model_id,
+        }),
+    })
+}
+
+/// Proveedores listos y habilitados, en orden estable.
+pub fn ready_providers(conn: &Connection) -> Result<Vec<String>, RepoError> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM providers WHERE setup_state = 'READY' AND enabled = 1 ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+// --- checkpoints ------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewCheckpoint {
+    pub id: symphony_core::CheckpointId,
+    pub agent_id: AgentId,
+    pub run_id: Option<RunId>,
+    pub objective: String,
+    pub next_step: Option<String>,
+    pub head_commit: Option<String>,
+    pub summary_json: Option<String>,
+}
+
+/// Inserta el siguiente checkpoint del agente y devuelve su `seq`.
+pub fn insert_checkpoint(conn: &Connection, c: &NewCheckpoint, now: i64) -> Result<i64, RepoError> {
+    let seq: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM checkpoints WHERE agent_id = ?1",
+        [c.agent_id.to_string()],
+        |r| r.get(0),
+    )?;
+    conn.execute(
+        "INSERT INTO checkpoints (id, agent_id, run_id, seq, objective, next_step, head_commit, summary_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            c.id.to_string(),
+            c.agent_id.to_string(),
+            c.run_id.map(|r| r.to_string()),
+            seq,
+            c.objective,
+            c.next_step,
+            c.head_commit,
+            c.summary_json,
+            now
+        ],
+    )?;
+    Ok(seq)
+}
+
 // --- recuperación -----------------------------------------------------------
+
+/// Abre un problema en el Recovery Center (`kind` lo valida el CHECK de la tabla).
+pub fn open_recovery_item(
+    conn: &Connection,
+    project: ProjectId,
+    agent: Option<AgentId>,
+    run: Option<RunId>,
+    kind: &str,
+    detail: &str,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "INSERT INTO recovery_items (id, project_id, agent_id, run_id, kind, detail, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'OPEN', ?7)",
+        params![
+            symphony_core::RecoveryItemId::new().to_string(),
+            project.to_string(),
+            agent.map(|a| a.to_string()),
+            run.map(|r| r.to_string()),
+            kind,
+            detail,
+            now
+        ],
+    )?;
+    Ok(())
+}
 
 /// Al arrancar el daemon (con el lock de instancia tomado): toda sesión que
 /// siga `ACTIVE` es de un daemon anterior que murió sin cerrarla. Se marca

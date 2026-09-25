@@ -2,22 +2,23 @@
 
 **Actualizado:** 2026-09-24 · por claude-code/opus-5.5
 **Fase actual:** P06 · Agent runtime, checkpoints y handoff (rama `phase/p06-runtime`)
-**Paso actual:** P06.S1 · Ciclo de vida del agente
+**Paso actual:** P06.S2 · Mensajes y tool calls
 **Estado del paso:** EN CURSO
 **En curso por:** claude-code/opus-5.5 desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (133 tests)
+- `cargo xtask check`: ✅ (142 tests)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
 
 ## Progreso de la fase actual
-- [ ] P06.S1 Ciclo de vida del agente   ← aquí
+- [x] P06.S1 Ciclo de vida del agente
+- [ ] P06.S2 Mensajes y tool calls   ← aquí
 - (resto de P06 en PLAN.md)
 
 ## Próxima acción concreta
-Flujo de creación de FLOW §6: task + agente + worktree + checkpoint inicial → spawn del run con modelo exacto; rollback si falla el worktree; razón humana en esperas y bloqueos.
+Espejo de conversación en `messages` (mensajes largos al object store) y `tool_calls` desde eventos, dentro del pump de `runtime.rs`.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)
