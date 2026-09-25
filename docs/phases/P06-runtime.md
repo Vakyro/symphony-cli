@@ -101,6 +101,22 @@
   - Si el diff vivo se recorta, el puntero apunta al diff del último checkpoint, no al vivo.
   - Niveles L0–L5 de archivos y decisiones vigentes llegan con el context engine (P09).
 
+### P06.S5 · Cambio de executor — ✅
+- **Agente:** codex/gpt-5.x · **Fecha:** 2026-09-24
+- **Qué se hizo:**
+  - `executor.rs` concentra el proceso vivo, su canal de control y el reemplazo del run sin cambiar agente, task, worktree ni rama.
+  - Un error final de cuota o autenticación se registra en `provider_failures`; `ANY` prueba otro proveedor listo y `SAME_PROVIDER` otro modelo del mismo proveedor. Cada cambio queda en `executor_changes` con checkpoint y edad.
+  - `failover = NONE`, o no tener reemplazo elegible, deja al agente en `WAITING_PROVIDER` con recovery item.
+  - `Runtime::switch` hace un cambio manual a un modelo exacto, recuerda esa elección y agrega el separador `EXECUTOR_CHANGE` a la conversación. El comando CLI se expone en P06.S7.
+  - El handoff del run saliente ahora queda con outcome `CONTINUED`; un sucesor que no arranca queda `FAILED_TO_CONTINUE`.
+- **Archivos clave:** `crates/daemon/src/executor.rs`, `crates/daemon/src/runtime.rs`, `crates/store/src/repo.rs`, `crates/daemon/tests/runtime.rs`, `crates/testkit/src/fake_adapter.rs`
+- **Cómo se verificó:**
+  - `quota_exhausted_hands_the_same_agent_to_the_next_provider`.
+  - `disabled_failover_waits_for_a_provider_and_opens_recovery`.
+  - `manual_switch_replaces_only_the_executor_and_remembers_the_model`.
+  - `cargo xtask check` → 158 passed, 1 skipped (live).
+- **Pendiente / notas:** el orden básico de proveedores es estable por id; el orden configurable y el routing completo llegan en P10.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

@@ -17,6 +17,9 @@ pub struct FakeAdapter {
     pub binary: PathBuf,
     /// Guion que ejecuta cada spawn.
     pub script: PathBuf,
+    /// `providers.id` que simula (`fake` por defecto). Dos adapters con ids distintos
+    /// permiten probar el failover entre proveedores.
+    pub provider: &'static str,
 }
 
 impl FakeAdapter {
@@ -24,7 +27,14 @@ impl FakeAdapter {
         Self {
             binary: binary.into(),
             script: script.into(),
+            provider: "fake",
         }
+    }
+
+    #[must_use]
+    pub fn with_provider(mut self, provider: &'static str) -> Self {
+        self.provider = provider;
+        self
     }
 }
 
@@ -34,11 +44,15 @@ fn s(v: &Value, key: &str) -> Option<String> {
 
 impl ProviderAdapter for FakeAdapter {
     fn provider_id(&self) -> &'static str {
-        "fake"
+        self.provider
     }
 
     fn display_name(&self) -> &'static str {
-        "Fake"
+        if self.provider == "fake" {
+            "Fake"
+        } else {
+            self.provider
+        }
     }
 
     fn cli_name(&self) -> &'static str {
@@ -66,7 +80,7 @@ impl ProviderAdapter for FakeAdapter {
         ["fast", "smart"]
             .iter()
             .map(|m| ModelInfo {
-                id: format!("fake/{m}"),
+                id: format!("{}/{m}", self.provider),
                 cli_model_id: (*m).into(),
                 display_name: format!("Fake {m}"),
             })

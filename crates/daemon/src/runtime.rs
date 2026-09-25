@@ -6,20 +6,21 @@
 //! queda un agente "medio roto". Un fallo al lanzar el CLI sí deja al agente,
 //! en `FAILED` con su razón y un item en el Recovery Center (su workspace sirve).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use symphony_adapter_common::{AgentEvent, HookCommand, ProviderAdapter, SpawnRequest};
+use symphony_adapter_common::{HookCommand, ProviderAdapter};
 use symphony_core::{
     AgentId, AgentState, CheckpointId, ContextMode, ExecutionMode, FailoverPolicy, ProjectId,
-    RunEndReason, RunId, RunStatus, SessionId, TaskId, TaskStatus, WorktreeId,
+    RunId, SessionId, TaskId, TaskStatus, WorktreeId,
 };
 use symphony_git::{GitError, Repo, deps};
-use symphony_process::{ExitStatus, OutputLine};
 use symphony_store::{WriterHandle, repo};
 use tokio_util::task::TaskTracker;
 
-use crate::bus::{BusEvent, EventBus, EventSource};
+use crate::bus::EventBus;
+use crate::executor::Launch;
 
 /// Cómo se elige el executor (FLOW §6).
 #[derive(Debug, Clone, PartialEq)]
@@ -108,30 +109,33 @@ fn store_err(e: impl std::fmt::Display) -> CreateError {
     CreateError::Store(e.to_string())
 }
 
+/// Runtime de agentes. Clonarlo es barato: comparte el estado.
+#[derive(Clone)]
 pub struct Runtime {
-    home: PathBuf,
-    writer: WriterHandle,
-    reader: Mutex<rusqlite::Connection>,
-    bus: EventBus,
-    adapters: Vec<Arc<dyn ProviderAdapter>>,
+    pub(crate) inner: Arc<Inner>,
+}
+
+impl std::ops::Deref for Runtime {
+    type Target = Inner;
+    fn deref(&self) -> &Inner {
+        &self.inner
+    }
+}
+
+pub struct Inner {
+    pub(crate) home: PathBuf,
+    pub(crate) writer: WriterHandle,
+    pub(crate) reader: Mutex<rusqlite::Connection>,
+    pub(crate) bus: EventBus,
+    pub(crate) adapters: Vec<Arc<dyn ProviderAdapter>>,
     /// Comando de hook que se inyecta en cada CLI (`symphony hook emit`).
-    hook: Option<HookCommand>,
+    pub(crate) hook: Option<HookCommand>,
     /// Una creación a la vez: número de agente y ruta del worktree no chocan.
     creating: tokio::sync::Mutex<()>,
     /// Tareas que leen la salida de cada executor.
-    pumps: TaskTracker,
-}
-
-/// Lo que el runtime necesita para lanzar un executor.
-struct Launch {
-    adapter: Arc<dyn ProviderAdapter>,
-    project_id: ProjectId,
-    agent_id: AgentId,
-    task_id: TaskId,
-    run_id: RunId,
-    worktree: PathBuf,
-    cli_model: String,
-    prompt: String,
+    pub(crate) pumps: TaskTracker,
+    /// Executors vivos: canal de control de cada uno.
+    pub(crate) live: Mutex<HashMap<AgentId, crate::executor::LiveRun>>,
 }
 
 impl Runtime {
@@ -144,14 +148,17 @@ impl Runtime {
         hook: Option<HookCommand>,
     ) -> Self {
         Self {
-            home: home.to_path_buf(),
-            writer,
-            reader: Mutex::new(reader),
-            bus,
-            adapters,
-            hook,
-            creating: tokio::sync::Mutex::new(()),
-            pumps: TaskTracker::new(),
+            inner: Arc::new(Inner {
+                home: home.to_path_buf(),
+                writer,
+                reader: Mutex::new(reader),
+                bus,
+                adapters,
+                hook,
+                creating: tokio::sync::Mutex::new(()),
+                pumps: TaskTracker::new(),
+                live: Mutex::default(),
+            }),
         }
     }
 
@@ -166,7 +173,7 @@ impl Runtime {
         f(&conn).map_err(store_err)
     }
 
-    fn adapter(&self, provider_id: &str) -> Option<Arc<dyn ProviderAdapter>> {
+    pub(crate) fn adapter(&self, provider_id: &str) -> Option<Arc<dyn ProviderAdapter>> {
         self.adapters
             .iter()
             .find(|a| a.provider_id() == provider_id)
@@ -427,6 +434,8 @@ impl Runtime {
                 agent_id,
                 task_id,
                 run_id,
+                provider_id: model.provider_id.clone(),
+                model_id: model.model_id.clone(),
                 worktree: wt_path,
                 cli_model: model.cli_model_id,
                 prompt: objective,
@@ -456,82 +465,6 @@ impl Runtime {
             let _ = repo.delete_branch(&branch, true);
         })
         .await;
-    }
-
-    /// Lanza el CLI. Si no arranca: run `FAILED`, agente `FAILED` con razón y recovery item.
-    async fn launch(&self, l: Launch) -> Result<(), String> {
-        let env = vec![
-            ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
-            ("SYMPHONY_PROJECT_ID".into(), l.project_id.to_string()),
-            ("SYMPHONY_RUN_ID".into(), l.run_id.to_string()),
-            ("SYMPHONY_HOME".into(), self.home.display().to_string()),
-        ];
-        let spawn_req = SpawnRequest {
-            worktree: l.worktree.clone(),
-            model: l.cli_model.clone(),
-            prompt: l.prompt.clone(),
-            session_id: None,
-            hook: self.hook.clone(),
-            env,
-        };
-        // El prompt inicial es el primer mensaje de la conversación (P06.S2).
-        let prompt_ev = BusEvent {
-            project_id: l.project_id.to_string(),
-            agent_id: Some(l.agent_id.to_string()),
-            run_id: Some(l.run_id.to_string()),
-            source: EventSource::User,
-            event: AgentEvent::UserMessage {
-                text: l.prompt.clone(),
-            },
-            occurred_at: now_ms(),
-        };
-        if self.bus.publish(prompt_ev).await.is_err() {
-            return Err("la base de datos no acepta escrituras".into());
-        }
-        let started = async {
-            let spec = l
-                .adapter
-                .spawn_spec(&spawn_req)
-                .map_err(|e| e.to_string())?;
-            let mut proc = symphony_process::spawn(spec)
-                .await
-                .map_err(|e| e.to_string())?;
-            proc.write_stdin(&l.adapter.encode_prompt(&l.prompt))
-                .await
-                .map_err(|e| e.to_string())?;
-            if l.adapter.close_stdin_after_prompt() {
-                proc.close_stdin().await.map_err(|e| e.to_string())?;
-            }
-            Ok::<_, String>(proc)
-        }
-        .await;
-        let proc = match started {
-            Ok(p) => p,
-            Err(e) => {
-                let reason = format!("no se pudo lanzar {}: {e}", l.adapter.cli_name());
-                finish_run(
-                    &self.writer,
-                    &l,
-                    RunStatus::Failed,
-                    RunEndReason::Crash,
-                    None,
-                    Some(&reason),
-                )
-                .await;
-                self.bus.run_ended(l.run_id);
-                return Err(reason);
-            }
-        };
-        let (run_id, pid) = (l.run_id, proc.pid().unwrap_or(0));
-        let _ = self
-            .writer
-            .write(Box::new(move |t| {
-                Ok(repo::set_run_process(t, run_id, pid, None, None)?)
-            }))
-            .await;
-        self.pumps
-            .spawn(pump(self.writer.clone(), self.bus.clone(), l, proc));
-        Ok(())
     }
 }
 
@@ -596,126 +529,7 @@ impl TxData {
     }
 }
 
-/// Lee la salida del CLI hasta que termina: eventos al bus y cierre del run.
-async fn pump(
-    writer: WriterHandle,
-    bus: EventBus,
-    l: Launch,
-    mut proc: symphony_process::Supervised,
-) {
-    while let Some(line) = proc.next_output().await {
-        let OutputLine::Stdout(line) = line else {
-            continue;
-        };
-        for event in l.adapter.parse_stream_line(&line) {
-            if let AgentEvent::SessionStarted {
-                cli_session_id: Some(cli),
-                ..
-            } = &event
-            {
-                let (run, cli, pid) = (l.run_id, cli.clone(), proc.pid().unwrap_or(0));
-                let _ = writer
-                    .write(Box::new(move |t| {
-                        Ok(repo::set_run_process(t, run, pid, Some(&cli), None)?)
-                    }))
-                    .await;
-            }
-            let ev = BusEvent {
-                project_id: l.project_id.to_string(),
-                agent_id: Some(l.agent_id.to_string()),
-                run_id: Some(l.run_id.to_string()),
-                source: EventSource::JsonStream,
-                event,
-                occurred_at: now_ms(),
-            };
-            if bus.publish(ev).await.is_err() {
-                break;
-            }
-        }
-    }
-    // ponytail: exit 0 = tarea terminada; failover por cuota (P06.S5) y heartbeat (P06.S6) lo afinan.
-    match proc.wait().await {
-        ExitStatus::Exited(0) => {
-            finish_run(
-                &writer,
-                &l,
-                RunStatus::Exited,
-                RunEndReason::Completed,
-                Some(0),
-                None,
-            )
-            .await;
-        }
-        other => {
-            // Una señal que Symphony no mandó (abort, OOM killer) es un crash: `FAILED`.
-            // `KILLED` queda para stop/kill del usuario (P06.S7).
-            let cli = l.adapter.cli_name();
-            let (code, reason) = match other {
-                ExitStatus::Exited(c) => (Some(c), format!("{cli} terminó con código {c}")),
-                ExitStatus::Killed(Some(sig)) => {
-                    (None, format!("{cli} terminó por la señal {sig}"))
-                }
-                ExitStatus::Killed(None) | ExitStatus::Unknown => {
-                    (None, format!("{cli} terminó de forma inesperada"))
-                }
-            };
-            let status = RunStatus::Failed;
-            finish_run(
-                &writer,
-                &l,
-                status,
-                RunEndReason::Crash,
-                code,
-                Some(&reason),
-            )
-            .await;
-        }
-    }
-    bus.run_ended(l.run_id);
-}
-
-/// Cierra el run y deja al agente en `COMPLETED` (sin `failure`) o `FAILED` con razón + recovery item.
-async fn finish_run(
-    writer: &WriterHandle,
-    l: &Launch,
-    status: RunStatus,
-    end: RunEndReason,
-    exit: Option<i32>,
-    failure: Option<&str>,
-) {
-    let (project, agent, task, run) = (l.project_id, l.agent_id, l.task_id, l.run_id);
-    let failure = failure.map(str::to_string);
-    let result = writer
-        .write(Box::new(move |t| {
-            let now = now_ms();
-            repo::close_run(t, run, status, end, exit, now)?;
-            match &failure {
-                None => {
-                    repo::set_agent_state(t, agent, AgentState::Completed, None, now)?;
-                    repo::set_task_status(t, task, TaskStatus::Done, None, now)?;
-                }
-                Some(reason) => {
-                    repo::set_agent_state(t, agent, AgentState::Failed, Some(reason), now)?;
-                    repo::open_recovery_item(
-                        t,
-                        project,
-                        Some(agent),
-                        Some(run),
-                        "EXECUTOR_EXITED",
-                        reason,
-                        now,
-                    )?;
-                }
-            }
-            Ok(())
-        }))
-        .await;
-    if let Err(e) = result {
-        tracing::error!(agent = %agent, error = %e, "no se pudo cerrar el run");
-    }
-}
-
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))

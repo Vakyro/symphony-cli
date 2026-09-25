@@ -71,7 +71,9 @@ ulid_id!(
     MessageId,
     ToolCallId,
     ContextObjectId,
-    HandoffId
+    HandoffId,
+    ProviderFailureId,
+    ExecutorChangeId
 );
 
 #[cfg(test)]

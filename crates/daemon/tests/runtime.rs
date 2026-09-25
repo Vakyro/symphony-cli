@@ -66,6 +66,11 @@ struct Env {
 /// Home + repo con un commit + proveedor `fake` detectado con el guion dado.
 /// `binary` reemplaza al fake-agent (para simular un CLI que no arranca).
 async fn env(script: &str, binary: Option<PathBuf>) -> Env {
+    env_with(&[("fake", script)], binary).await
+}
+
+/// Como `env`, con varios proveedores fake (`provider`, guion), en ese orden.
+async fn env_with(providers_: &[(&'static str, &str)], binary: Option<PathBuf>) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let repo = dir.path().join("repo");
@@ -76,25 +81,33 @@ async fn env(script: &str, binary: Option<PathBuf>) -> Env {
     std::fs::write(repo.join("README.md"), "demo\n").unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "init"]);
-    let script_path = dir.path().join("script.toml");
-    std::fs::write(&script_path, script).unwrap();
 
     std::fs::create_dir_all(&home).unwrap();
     let db = home.join("symphony.db");
     let writer = Writer::start(&db).unwrap();
-    let real = FakeAdapter::new(fake_agent(), &script_path);
-    let detected: Vec<Box<dyn ProviderAdapter>> = vec![Box::new(real.clone())];
+    let mut detected: Vec<Box<dyn ProviderAdapter>> = Vec::new();
+    let mut used: Vec<Arc<dyn ProviderAdapter>> = Vec::new();
+    for (provider, script) in providers_ {
+        let script_path = dir.path().join(format!("{provider}.toml"));
+        std::fs::write(&script_path, script).unwrap();
+        detected.push(Box::new(
+            FakeAdapter::new(fake_agent(), &script_path).with_provider(provider),
+        ));
+        used.push(Arc::new(
+            FakeAdapter::new(binary.clone().unwrap_or_else(fake_agent), &script_path)
+                .with_provider(provider),
+        ));
+    }
     providers::save(&writer.handle(), providers::detect_all(&detected), 1)
         .await
         .unwrap();
-    let used = FakeAdapter::new(binary.unwrap_or_else(fake_agent), &script_path);
     let bus = EventBus::new(writer.handle(), 64, ObjectStore::new(home.join("objects")));
     let runtime = Runtime::new(
         &home,
         writer.handle(),
         writer.reader().unwrap(),
         bus.clone(),
-        vec![Arc::new(used)],
+        used,
         None,
     );
     Env {
@@ -1045,5 +1058,193 @@ command = ["git", "no-such-subcommand"]
     }
     assert_eq!(h.tokens_sent, symphony_context::handoff::estimate_tokens(p));
     assert!(h.tokens_raw_estimate > h.tokens_sent, "{h:?}");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quota_exhausted_hands_the_same_agent_to_the_next_provider() {
+    let first = r#"
+[[step]]
+kind = "edit"
+path = "from-alpha.txt"
+content = "kept\n"
+[[step]]
+kind = "say"
+text = "Next: continue with beta"
+[[step]]
+kind = "quota_exhausted"
+resets_at = 1790300000
+"#;
+    let second = r#"
+[[step]]
+kind = "edit"
+path = "from-beta.txt"
+content = "continued\n"
+"#;
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "continuar tras cuota",
+            Execution::Exact("alpha/fast".into()),
+        ))
+        .await
+        .unwrap();
+
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let runs: Vec<(String, String, String, Option<String>)> = conn
+        .prepare("SELECT provider_id, model_id, status, end_reason FROM agent_runs ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        runs,
+        vec![
+            (
+                "alpha".into(),
+                "alpha/fast".into(),
+                "HANDED_OFF".into(),
+                Some("QUOTA_EXHAUSTED".into()),
+            ),
+            (
+                "beta".into(),
+                "beta/fast".into(),
+                "EXITED".into(),
+                Some("COMPLETED".into()),
+            ),
+        ]
+    );
+    assert_eq!(count(&e, "agents"), 1);
+    assert_eq!(count(&e, "tasks"), 1);
+    assert_eq!(count(&e, "worktrees"), 1);
+    assert_eq!(count(&e, "provider_failures"), 1);
+    assert_eq!(count(&e, "executor_changes"), 1);
+    assert_eq!(count(&e, "handoffs"), 2);
+    assert_eq!(
+        one::<i64>(
+            &e,
+            "SELECT COUNT(*) FROM handoffs WHERE outcome = 'CONTINUED'"
+        ),
+        2
+    );
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "COMPLETED");
+    assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "DONE");
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "FAILOVER"
+    );
+    let separator: String = one(
+        &e,
+        "SELECT content FROM messages WHERE role = 'EXECUTOR_CHANGE'",
+    );
+    assert!(separator.contains("alpha / alpha/fast → beta / beta/fast"));
+    assert!(separator.contains("Agent #1, task and workspace unchanged"));
+    assert!(created.worktree.join("from-alpha.txt").is_file());
+    assert!(created.worktree.join("from-beta.txt").is_file());
+    assert_eq!(
+        git(&created.worktree, &["branch", "--show-current"]),
+        created.branch
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disabled_failover_waits_for_a_provider_and_opens_recovery() {
+    let script = "[[step]]\nkind = \"quota_exhausted\"\n";
+    let e = env(script, None).await;
+    let mut request = req(
+        &e,
+        "esperar tras cuota",
+        Execution::Exact("fake/fast".into()),
+    );
+    request.failover = FailoverPolicy::None;
+    e.runtime.create_agent(request).await.unwrap();
+
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(count(&e, "agent_runs"), 1);
+    assert_eq!(count(&e, "provider_failures"), 1);
+    assert_eq!(count(&e, "executor_changes"), 1);
+    assert_eq!(count(&e, "recovery_items"), 1);
+    assert_eq!(
+        one::<String>(&e, "SELECT state FROM agents"),
+        "WAITING_PROVIDER"
+    );
+    assert_eq!(
+        one::<String>(&e, "SELECT kind FROM recovery_items"),
+        "RATE_LIMITED"
+    );
+    assert_eq!(
+        one::<i64>(
+            &e,
+            "SELECT COUNT(*) FROM executor_changes WHERE to_run_id IS NULL"
+        ),
+        1
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_switch_replaces_only_the_executor_and_remembers_the_model() {
+    let first = "[[step]]\nkind = \"hang\"\n";
+    let second = "[[step]]\nkind = \"edit\"\npath = \"switched.txt\"\ncontent = \"ok\\n\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "cambio manual",
+            Execution::Exact("alpha/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let new_run = e
+        .runtime
+        .switch(created.agent_id, "beta/smart")
+        .await
+        .unwrap();
+
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(count(&e, "agents"), 1);
+    assert_eq!(count(&e, "tasks"), 1);
+    assert_eq!(count(&e, "worktrees"), 1);
+    assert_eq!(count(&e, "agent_runs"), 2);
+    assert_eq!(count(&e, "executor_changes"), 1);
+    assert_eq!(
+        one::<i64>(
+            &e,
+            "SELECT COUNT(*) FROM handoffs WHERE outcome = 'CONTINUED'"
+        ),
+        2
+    );
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let changed: (String, String, String) = conn
+        .query_row(
+            "SELECT reason, from_run_id, to_run_id FROM executor_changes",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(changed.0, "USER_SWITCH");
+    assert_eq!(changed.2, new_run.to_string());
+    assert_ne!(changed.1, changed.2);
+    assert_eq!(
+        one::<String>(&e, "SELECT requested_model_id FROM agents"),
+        "beta/smart"
+    );
+    assert!(created.worktree.join("switched.txt").is_file());
+    assert_eq!(
+        git(&created.worktree, &["branch", "--show-current"]),
+        created.branch
+    );
     e.writer.shutdown();
 }

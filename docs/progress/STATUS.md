@@ -1,13 +1,13 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-09-24 · por claude-code/opus-5.5
+**Actualizado:** 2026-09-24 · por codex/gpt-5.x
 **Fase actual:** P06 · Agent runtime, checkpoints y handoff (rama `phase/p06-runtime`)
-**Paso actual:** P06.S5 · Cambio de executor
+**Paso actual:** P06.S6 · Heartbeat y reclaim
 **Estado del paso:** PENDIENTE
-**En curso por:** —
+**En curso por:** codex/gpt-5.x desde 2026-09-24
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (155 tests)
+- `cargo xtask check`: ✅ (158 tests; 1 live omitido)
 - `cargo deny check`: ✅
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny)
 - Tests conocidos en rojo: ninguno
@@ -17,11 +17,12 @@
 - [x] P06.S2 Mensajes y tool calls
 - [x] P06.S3 Checkpoints incrementales
 - [x] P06.S4 Handoff v1
-- [ ] P06.S5 Cambio de executor   ← aquí
+- [x] P06.S5 Cambio de executor
+- [ ] P06.S6 Heartbeat y reclaim   ← aquí
 - (resto de P06 en PLAN.md)
 
 ## Próxima acción concreta
-`switch` manual y failover básico: si el adapter clasifica `QUOTA_EXHAUSTED` o `AUTH` y la `failover_policy` lo permite, siguiente proveedor habilitado; `executor_changes` + separador en la conversación; con `failover = NONE` → `WAITING_PROVIDER` + recovery item. Usar `Runtime::prepare_handoff` + `repo::insert_handoff`. E2E con fake-agent.
+Agregar heartbeat en memoria con persistencia periódica; detectar proceso muerto o inactividad, cerrar el run como `FAILED`, conservar worktree/checkpoint y abrir recovery. Implementar las acciones restart, failover, pause y stop de FLOW §16 con fake-agent `crash` y `hang`.
 
 ## Handoff para el siguiente agente
 (llenar si la sesión se cortó a media tarea — ver PLAN §4.4)

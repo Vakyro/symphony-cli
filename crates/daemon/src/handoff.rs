@@ -19,6 +19,9 @@ const NEW_FILE_MAX_BYTES: u64 = 1024 * 1024;
 pub struct PreparedHandoff {
     pub prompt: String,
     pub checkpoint_id: Option<CheckpointId>,
+    /// `seq` y fecha del checkpoint usado (para el separador y `checkpoint_age_ms`).
+    pub checkpoint_seq: i64,
+    pub checkpoint_created_at: i64,
     pub mode: ContextMode,
     pub tokens_sent: i64,
     pub tokens_raw_estimate: i64,
@@ -124,6 +127,7 @@ pub async fn prepare(
         })
         .unwrap_or_default();
 
+    let (checkpoint_seq, checkpoint_created_at) = (checkpoint.seq, checkpoint.created_at);
     let input = HandoffInput {
         objective: checkpoint.objective,
         reason: reason.to_string(),
@@ -144,6 +148,8 @@ pub async fn prepare(
     Ok(PreparedHandoff {
         prompt: built.prompt,
         checkpoint_id: Some(checkpoint.id),
+        checkpoint_seq,
+        checkpoint_created_at,
         mode: a.context_mode,
         tokens_sent: built.tokens_sent,
         tokens_raw_estimate: raw,

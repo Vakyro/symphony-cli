@@ -891,6 +891,7 @@ pub fn prune_checkpoints(
 pub struct LatestCheckpoint {
     pub id: symphony_core::CheckpointId,
     pub seq: i64,
+    pub created_at: i64,
     pub objective: String,
     pub plan_tail: Option<String>,
     pub current_step: Option<String>,
@@ -906,7 +907,7 @@ pub fn latest_checkpoint(
 ) -> Result<Option<LatestCheckpoint>, RepoError> {
     Ok(conn
         .query_row(
-            "SELECT c.id, c.seq, c.objective, c.plan_tail, c.current_step, c.next_step, c.summary_json, o.uri
+            "SELECT c.id, c.seq, c.objective, c.plan_tail, c.current_step, c.next_step, c.summary_json, o.uri, c.created_at
              FROM checkpoints c LEFT JOIN context_objects o ON o.id = c.diff_object_id
              WHERE c.agent_id = ?1 AND c.is_valid = 1 ORDER BY c.seq DESC LIMIT 1",
             [agent.to_string()],
@@ -920,6 +921,7 @@ pub fn latest_checkpoint(
                     next_step: r.get(5)?,
                     summary_json: r.get(6)?,
                     diff_uri: r.get(7)?,
+                    created_at: r.get(8)?,
                 })
             },
         )
@@ -983,6 +985,154 @@ pub fn set_handoff_outcome(
         params![to_run.to_string(), outcome],
     )?;
     Ok(())
+}
+
+// --- cambio de executor (P06.S5) --------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewProviderFailure {
+    pub id: symphony_core::ProviderFailureId,
+    pub provider_id: String,
+    pub model_id: Option<String>,
+    pub run_id: Option<RunId>,
+    pub failure_type: symphony_core::FailureType,
+    pub raw_code: Option<String>,
+    /// Ya redactado.
+    pub message: String,
+    pub reset_at: Option<i64>,
+}
+
+pub fn insert_provider_failure(
+    conn: &Connection,
+    f: &NewProviderFailure,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "INSERT INTO provider_failures (id, provider_id, model_id, run_id, failure_type, raw_code, message, reset_at, confidence, occurred_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1.0, ?9)",
+        params![
+            f.id.to_string(),
+            f.provider_id,
+            f.model_id,
+            f.run_id.map(|r| r.to_string()),
+            f.failure_type.as_str(),
+            f.raw_code,
+            f.message,
+            f.reset_at,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewExecutorChange {
+    pub id: symphony_core::ExecutorChangeId,
+    pub agent_id: AgentId,
+    pub from_run_id: RunId,
+    /// `None` si no hubo reemplazo (el agente quedó `WAITING_PROVIDER`).
+    pub to_run_id: Option<RunId>,
+    /// `FAILOVER` · `USER_SWITCH` · `SUGGESTION_ACCEPTED` · `RESTART` · `RECLAIM` (CHECK).
+    pub reason: &'static str,
+    pub failure_id: Option<symphony_core::ProviderFailureId>,
+    pub checkpoint_id: Option<symphony_core::CheckpointId>,
+    pub checkpoint_age_ms: Option<i64>,
+}
+
+pub fn insert_executor_change(
+    conn: &Connection,
+    c: &NewExecutorChange,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "INSERT INTO executor_changes (id, agent_id, from_run_id, to_run_id, reason, failure_id, checkpoint_id, checkpoint_age_ms, occurred_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            c.id.to_string(),
+            c.agent_id.to_string(),
+            c.from_run_id.to_string(),
+            c.to_run_id.map(|r| r.to_string()),
+            c.reason,
+            c.failure_id.map(|f| f.to_string()),
+            c.checkpoint_id.map(|x| x.to_string()),
+            c.checkpoint_age_ms,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+/// Un cambio manual de modelo es una elección exacta del usuario (IDEA §5.7): se recuerda.
+pub fn set_agent_exact_model(
+    conn: &Connection,
+    agent: AgentId,
+    model_id: &str,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE agents SET execution_mode = 'EXACT', requested_model_id = ?2, requested_profile_id = NULL, updated_at = ?3 WHERE id = ?1",
+        params![agent.to_string(), model_id, now],
+    )?;
+    Ok(())
+}
+
+/// Siguiente executor para un failover básico (P06.S5; el routing completo llega en P10).
+///
+/// Nunca vuelve a un modelo (ni, con `ANY`, a un proveedor) que este agente ya agotó o
+/// que rechazó el login. Con `ANY` prueba primero otros proveedores listos (orden estable
+/// por id) y después otros modelos del mismo; con `SAME_PROVIDER`, solo lo segundo. Con
+/// un fallo de login, el mismo proveedor no sirve.
+#[allow(clippy::too_many_arguments)]
+pub fn next_executor(
+    conn: &Connection,
+    agent: AgentId,
+    policy: FailoverPolicy,
+    current_provider: &str,
+    current_model: &str,
+    auth_failure: bool,
+    has_adapter: &dyn Fn(&str) -> bool,
+) -> Result<Option<EligibleModel>, RepoError> {
+    if policy == FailoverPolicy::None {
+        return Ok(None);
+    }
+    let failed: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT provider_id, model_id FROM agent_runs
+             WHERE agent_id = ?1 AND end_reason IN ('QUOTA_EXHAUSTED','AUTH_ERROR')",
+        )?
+        .query_map([agent.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let failed_provider = |p: &str| p == current_provider || failed.iter().any(|(fp, _)| fp == p);
+    let failed_model = |m: &str| m == current_model || failed.iter().any(|(_, fm)| fm == m);
+    let first_model =
+        |provider: &str, skip: &dyn Fn(&str) -> bool| -> Result<Option<EligibleModel>, RepoError> {
+            Ok(models_of(conn, provider)?
+                .into_iter()
+                .find(|m| !skip(&m.id))
+                .map(|m| EligibleModel {
+                    model_id: m.id,
+                    provider_id: m.provider_id,
+                    cli_model_id: m.cli_model_id,
+                }))
+        };
+    let ready = ready_providers(conn)?;
+    if policy == FailoverPolicy::Any {
+        for p in ready
+            .iter()
+            .filter(|p| !failed_provider(p) && has_adapter(p))
+        {
+            if let Some(m) = first_model(p, &|_| false)? {
+                return Ok(Some(m));
+            }
+        }
+    }
+    if auth_failure
+        || !ready.iter().any(|p| p == current_provider)
+        || !has_adapter(current_provider)
+    {
+        return Ok(None);
+    }
+    first_model(current_provider, &failed_model)
 }
 
 // --- conversación y tool calls ----------------------------------------------
