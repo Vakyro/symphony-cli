@@ -600,10 +600,17 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
         .as_str()
         .map_or_else(|| state_phrase(&state).to_string(), str::to_string);
     let run = &ins["current_run"];
-    let executor = run["model_id"].as_str().map_or_else(
-        || "sin executor".to_string(),
-        |m| format!("{m} (run #{})", run["seq"]),
-    );
+    let last = ins["runs"].as_array().and_then(|r| r.last());
+    let executor = match (run["model_id"].as_str(), last) {
+        (Some(m), _) => format!("{m} (run #{})", num(&run["seq"])),
+        // Sin run abierto: el último executor que tuvo, si tuvo alguno.
+        (None, Some(r)) => format!(
+            "{} (run #{} terminado)",
+            text(&r["model_id"]),
+            num(&r["seq"])
+        ),
+        (None, None) => "sin executor".to_string(),
+    };
     let checkpoint = ins["latest_checkpoint"]["created_at"].as_i64().map_or_else(
         || "—".to_string(),
         |at| format!("hace {}", ago(app.now_ms, at)),
@@ -634,7 +641,8 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
         Constraint::Min(1),
     ])
     .areas(area);
-    paragraph(f, top, "Agente", head);
+    // Sin wrap: una tarea larga se recorta en vez de empujar fuera las otras líneas.
+    f.render_widget(Paragraph::new(head).block(boxed("Agente")), top);
     f.render_widget(
         Tabs::new(
             Tab::ALL
@@ -658,12 +666,21 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
 fn overview(app: &App, f: &mut Frame, area: Rect) {
     let Some(a) = &app.agent else { return };
     let cp = &a.inspect["latest_checkpoint"];
-    let mut lines = vec![
+    let mut lines = Vec::new();
+    // «Decidir después»: el agente espera a que le asignes un executor.
+    if a.state() == "READY" && a.inspect["runs_count"].as_i64() == Some(0) {
+        lines.push(Line::from(colored(
+            "Este agente todavía no tiene executor: pulsa s para elegir un modelo y arrancarlo.",
+            Color::Yellow,
+        )));
+        lines.push(Line::raw(""));
+    }
+    lines.extend([
         section("AHORA"),
         Line::raw(format!("  {}", cp["current_step"].as_str().unwrap_or("—"))),
         section("SIGUIENTE"),
         Line::raw(format!("  {}", cp["next_step"].as_str().unwrap_or("—"))),
-    ];
+    ]);
     if let Some(plan) = cp["plan_tail"].as_str().filter(|p| !p.trim().is_empty()) {
         lines.push(section("ÚLTIMO PLAN"));
         let tail: Vec<&str> = plan.lines().rev().take(6).collect();

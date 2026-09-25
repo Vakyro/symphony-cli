@@ -283,6 +283,33 @@ fn view_06_agent_overview() {
 }
 
 #[test]
+fn view_06_agent_waiting_for_an_executor() {
+    let mut app = agent_app(Tab::Overview);
+    let mut ready = inspect();
+    ready["agent"]["state"] = json!("READY");
+    ready["current_run"] = Value::Null;
+    ready["runs_count"] = json!(0);
+    ready["runs"] = json!([]);
+    ok(&mut app, Req::Inspect, ready);
+    let screen = draw(&app);
+    assert!(screen.contains("pulsa s para elegir un modelo"), "{screen}");
+    assert!(screen.contains("sin executor"), "{screen}");
+
+    // Terminado: muestra el último executor que tuvo.
+    let mut done = inspect();
+    done["agent"]["state"] = json!("COMPLETED");
+    done["current_run"] = Value::Null;
+    done["runs"] = json!([{ "seq": 1, "model_id": "claude/haiku", "status": "EXITED" }]);
+    ok(&mut app, Req::Inspect, done);
+    let screen = draw(&app);
+    assert!(
+        screen.contains("claude/haiku (run #1 terminado)"),
+        "{screen}"
+    );
+    assert!(!screen.contains("pulsa s para elegir"), "{screen}");
+}
+
+#[test]
 fn view_07_agent_conversation_with_executor_change() {
     let mut app = agent_app(Tab::Conversation);
     press(&mut app, KeyCode::Char('m'));
