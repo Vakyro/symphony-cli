@@ -1,11 +1,13 @@
-# Symphony
+# Symphony CLI
 
 > Un solo terminal para dirigir a todos tus agentes de código.
 
 [![CI](https://github.com/Vakyro/symphony-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/Vakyro/symphony-cli/actions/workflows/ci.yml)
-![Estado: en construcción](https://img.shields.io/badge/estado-en%20construcci%C3%B3n-orange)
+![Estado: v0.1.0 (usable)](https://img.shields.io/badge/estado-v0.1.0%20usable-brightgreen)
 ![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-blue)
 ![Licencia MIT](https://img.shields.io/badge/licencia-MIT-green)
+
+**v0.1.0 disponible.** MVP funcional con Claude Code + Codex, TUI, worktrees, handoff y recovery.
 
 Symphony es un runtime local, escrito en Rust, que coordina los CLIs oficiales de IA para código (**Claude Code, Codex, Antigravity, Kimi Code y Copilot**) desde una sola terminal.
 
@@ -20,8 +22,8 @@ MODELO  = quien lo ejecuta ahora mismo            → se puede cambiar
 
 Si Claude se queda sin cuota a media tarea, Symphony le pasa el mismo agente a Codex con un checkpoint que se fue construyendo mientras trabajaba. Codex continúa desde ahí sin que le vuelvas a explicar nada.
 
-> [!WARNING]
-> **Todavía no hay nada usable.** El repositorio tiene el esqueleto del workspace y la especificación completa. El avance está en [`docs/progress/STATUS.md`](docs/progress/STATUS.md).
+> [!NOTE]
+> **v0.1.0 está listo.** Descarga o compila, abre `symphony` y crea un agente. El roadmap está en [`docs/progress/STATUS.md`](docs/progress/STATUS.md) y el detalle completo en [`PLAN.md`](PLAN.md).
 
 ---
 
@@ -71,10 +73,11 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
 
 | Etapa | Qué trae | Estado |
 |---|---|---|
-| P00 · Arranque | Repo, workspace, CI, reglas de calidad | ✅ |
-| P01 · Spike | Evidencia de hooks, handoff y consumo con Claude Code + Codex | 🟡 en curso |
-| P02–P07 · Core → **v0.1** | Daemon, SQLite, worktrees, adapters, checkpoints, handoff, TUI | ⏳ |
-| P08 · Multiagente | Scheduler de recursos, DAG, validación | ⏳ |
+| P00 · Arranque | Repo, workspace, CI, reglas de calidad | ✅ p00-done |
+| P01 · Spike | Evidencia de hooks, handoff y consumo con Claude Code + Codex | ✅ p01-done |
+| P02–P07 · Core → **v0.1** | Daemon, SQLite, worktrees, adapters, checkpoints, handoff, TUI | ✅ **v0.1.0** |
+| P07.S10 | Uso real 2+ semanas, replanificación de P08–P16 con evidencia | 🟡 en curso |
+| P08 · Multiagente | Scheduler de recursos, DAG, validación | ⏳ (diferido a P07.S10) |
 | P09 · Context engine | Handoff comprimido, MCP de contexto | ⏳ |
 | P10 · Failover → **v0.5** | Salud de proveedores, failover automático, profiles | ⏳ |
 | P11 · Más proveedores | Antigravity, Kimi, Copilot | ⏳ |
