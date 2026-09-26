@@ -86,6 +86,20 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
 
 El detalle, paso por paso, está en [`PLAN.md`](PLAN.md).
 
+## Cómo usar
+
+**Guía completa paso a paso:** [`QUICKSTART.md`](QUICKSTART.md) — desde compilar hasta trabajar en proyectos reales.
+
+TL;DR:
+```bash
+git clone https://github.com/Vakyro/symphony-cli.git
+cd symphony-cli
+cargo build -p symphony-cli -p symphony-daemon --release
+
+cd /tu/proyecto
+./target/release/symphony
+```
+
 ## Compilar
 
 Requisitos: Rust estable (MSRV 1.95) y Git. En Windows también hace falta el workload **"Desarrollo para el escritorio con C++"** de Visual Studio (linker MSVC).
@@ -93,9 +107,14 @@ Requisitos: Rust estable (MSRV 1.95) y Git. En Windows también hace falta el wo
 ```bash
 git clone https://github.com/Vakyro/symphony-cli.git
 cd symphony-cli
+
+# Build release (recomendado para usar)
+cargo build -p symphony-cli -p symphony-daemon --release
+
+# O ejecuta directo desde el repo
 cargo run -p symphony-cli -- --version
 
-# verificación completa (fmt + clippy + tests)
+# Verificación completa (fmt + clippy + tests)
 cargo install --locked cargo-nextest
 cargo xtask check
 ```
