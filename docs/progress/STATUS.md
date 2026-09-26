@@ -2,7 +2,7 @@
 
 **Actualizado:** 2026-09-25 · por claude-code/opus-5.5
 **Fase actual:** P07 · TUI y release v0.1 (rama `phase/p07-tui`)
-**Paso actual:** P07.S9 · Cierre (health + revisión) y P07.S10 · Replanificación (uso real ≥ 2 semanas)
+**Paso actual:** P07.S10 · Replanificación (gate diferido: uso real ≥ 2 semanas). P07 cerrada por decisión de Leo (2026-09-26); P08 no empieza sin el ADR de S10
 **Estado del paso:** v0.1.0 publicado en la rama; Leo empieza el uso real
 **En curso por:** —
 
@@ -53,5 +53,5 @@
 | P04 | ✅ | p04-done |
 | P05 | ✅ | p05-done |
 | P06 | ✅ | p06-done |
-| P07 | 🟡 en curso (S1–S7 ✅) | |
+| P07 | ✅ (S10 pendiente, diferido por Leo) | p07-done, v0.1.0 |
 | P08–P16 | ⏳ (P08–P16 provisionales hasta P07.S10) | |
