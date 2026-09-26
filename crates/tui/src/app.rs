@@ -817,7 +817,9 @@ impl App {
         match cmd {
             "spawn" if !rest.is_empty() => {
                 let (model, task) = match rest.split_once(' ') {
-                    Some((m, t)) if m.contains('/') && !t.trim().is_empty() => (Some(m), t.trim()),
+                    Some((m, t)) if looks_like_model(m) && !t.trim().is_empty() => {
+                        (Some(m), t.trim())
+                    }
                     _ => (None, rest),
                 };
                 self.new_agent.task = task.to_string();
@@ -1094,6 +1096,17 @@ impl App {
             _ => Vec::new(),
         }
     }
+}
+
+/// `proveedor/modelo` y no una ruta como `src/main.rs` (extensión alfabética).
+fn looks_like_model(word: &str) -> bool {
+    let Some((_, m)) = word.split_once('/') else {
+        return false;
+    };
+    let ext_like = m
+        .rsplit_once('.')
+        .is_some_and(|(_, e)| !e.is_empty() && e.chars().all(|c| c.is_ascii_alphabetic()));
+    !m.is_empty() && !m.contains('/') && !ext_like
 }
 
 fn is_finished(a: &Value) -> bool {

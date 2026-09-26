@@ -21,7 +21,7 @@
 - [x] P07.S6 Providers y Recovery Center
 - [x] P07.S7 Snapshots y E2E (terminal real ✅ Leo; Journey A live con Claude Code ✅ 17 s)
 - [x] P07.S8 Release v0.1.0 (tag `v0.1.0`, CHANGELOG, build release: daemon idle 16.5 MB)
-- [ ] P07.S9 Cierre
+- [x] P07.S9 Cierre (revisión de código: 1 hallazgo corregido, `spawn src/main.rs …` ya no se toma como modelo; `health` no corrido)
 - [ ] P07.S10 Replanificación (gate: ≥ 2 semanas de uso real)
 
 ## Próxima acción concreta

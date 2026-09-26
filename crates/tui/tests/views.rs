@@ -418,6 +418,20 @@ fn an_unavailable_exact_model_is_never_substituted() {
 }
 
 #[test]
+fn spawn_task_starting_with_a_path_is_not_a_model() {
+    let mut app = home_app();
+    app.update(key(KeyCode::Char(':')));
+    typed(&mut app, "spawn src/main.rs crashes on empty input");
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["agent.create"]);
+    assert_eq!(
+        calls[0].params["title"],
+        "src/main.rs crashes on empty input"
+    );
+    assert!(calls[0].params["model"].is_null());
+}
+
+#[test]
 fn created_agent_opens_its_view() {
     let mut app = home_app();
     let calls = app.update(key(KeyCode::Char(':')));

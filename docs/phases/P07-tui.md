@@ -158,3 +158,8 @@
 - **Snapshots:** `INSTA_UPDATE=always cargo nextest run -p symphony-tui` los regenera. Revísalos en `crates/tui/tests/snapshots/` antes de commitear.
 - **El `Display` de un `serde_json::Value` ignora el ancho de `format!`** (`{:<3}` no rellena). Usa `num()`/`text()` de `ui.rs`.
 - **Los ids de proveedor son `anthropic` y `openai`**, no `claude`/`codex`. Los modelos sí son `claude/sonnet` y `codex/…`.
+
+### P07.S9 · Cierre (revisión)
+- code-review sobre `main...HEAD`: 1 hallazgo (`:spawn src/main.rs ...` tomaba la ruta como modelo). Corregido con `looks_like_model` en `crates/tui/src/app.rs` + test `spawn_task_starting_with_a_path_is_not_a_model`.
+- Verificado: `cargo xtask check` 199 tests OK antes del fix; `cargo nextest run -p symphony-tui` 31 OK después.
+- Pendiente: skill `health`, merge a `main` y tag `p07-done` esperan al gate P07.S10.
