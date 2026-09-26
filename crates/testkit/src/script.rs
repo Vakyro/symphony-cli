@@ -31,6 +31,9 @@ pub struct Script {
     /// Si se omite, el fake-agent genera uno.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Espera antes de la primera línea (un CLI lento en arrancar, como un shim de npm).
+    #[serde(default)]
+    pub startup_delay_ms: u64,
     #[serde(default, rename = "step")]
     pub steps: Vec<Step>,
 }

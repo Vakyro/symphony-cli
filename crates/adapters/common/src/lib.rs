@@ -206,6 +206,14 @@ pub trait ProviderAdapter: Send + Sync {
     fn spawn_spec(&self, req: &SpawnRequest) -> Result<ProcessSpec, AdapterError>;
     /// Comando para continuar una sesión existente (`resume`).
     fn resume_spec(&self, req: &ResumeRequest) -> Result<ProcessSpec, AdapterError>;
+    /// La sesión del agente en el CLI oficial, **interactivo**, para que Leo la
+    /// abra en su propia terminal (attach, ADR-0005). `model` es el del CLI.
+    fn attach_spec(
+        &self,
+        cli_session_id: &str,
+        model: &str,
+        worktree: &std::path::Path,
+    ) -> Result<ProcessSpec, AdapterError>;
     /// Bytes a escribir en stdin para el prompt inicial.
     fn encode_prompt(&self, prompt: &str) -> Vec<u8>;
     /// `true` si el CLI lee el prompt hasta EOF (Codex `exec -`): el runtime cierra stdin

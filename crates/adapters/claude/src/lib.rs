@@ -219,6 +219,18 @@ impl ProviderAdapter for ClaudeAdapter {
         user_message(prompt)
     }
 
+    fn attach_spec(
+        &self,
+        cli_session_id: &str,
+        model: &str,
+        worktree: &Path,
+    ) -> Result<ProcessSpec, AdapterError> {
+        Ok(ProcessSpec::new(self.binary()?)
+            .args(["--resume", cli_session_id, "--model", model])
+            .args(["--permission-mode", &self.permission_mode])
+            .cwd(worktree))
+    }
+
     fn close_stdin_after_prompt(&self) -> bool {
         false
     }
@@ -293,6 +305,11 @@ impl ProviderAdapter for ClaudeAdapter {
                     .map(|e| vec![AgentEvent::ProviderError(e)])
                     .unwrap_or_default()
             }
+            // Fin del turno: con `--input-format stream-json` el CLI no sale solo;
+            // el runtime cierra stdin al ver este evento (ADR-0005, adenda P07).
+            (Some("result"), _) => vec![AgentEvent::TurnFinished {
+                last_message: s(&v, "result"),
+            }],
             _ => Vec::new(),
         }
     }

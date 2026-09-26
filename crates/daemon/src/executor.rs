@@ -180,6 +180,9 @@ impl Runtime {
             }))
             .await;
         let (control, rx) = mpsc::unbounded_channel();
+        // La inactividad se mide desde el arranque: sin esto, el watchdog mataba
+        // como NO_HEARTBEAT a un CLI que tardaba un tick en imprimir su primera línea.
+        self.beat(run_id);
         if let Ok(mut live) = self.live.lock() {
             live.insert(
                 l.agent_id,
@@ -207,8 +210,12 @@ impl Runtime {
                     None => break None,
                     Some(OutputLine::Stdout(line)) => {
                         self.beat(l.run_id);
-                        if !self.handle_line(&l, &proc, &line, &mut fatal).await {
+                        let mut end_turn = false;
+                        if !self.handle_line(&l, &proc, &line, &mut fatal, &mut end_turn).await {
                             break None;
+                        }
+                        if end_turn {
+                            let _ = proc.close_stdin().await;
                         }
                     }
                     Some(OutputLine::Stderr(_)) => self.beat(l.run_id),
@@ -309,6 +316,7 @@ impl Runtime {
         proc: &Supervised,
         line: &str,
         fatal: &mut Option<ProviderError>,
+        end_turn: &mut bool,
     ) -> bool {
         for event in l.adapter.parse_stream_line(line) {
             match &event {
@@ -324,7 +332,15 @@ impl Runtime {
                         }))
                         .await;
                 }
-                AgentEvent::ProviderError(e) if needs_failover(e) => *fatal = Some(e.clone()),
+                AgentEvent::ProviderError(e) if needs_failover(e) => {
+                    *fatal = Some(e.clone());
+                    *end_turn = true;
+                }
+                // Un CLI que deja stdin abierto (Claude) espera otro mensaje al terminar
+                // el turno y nunca sale: cerrar stdin lo termina con su exit code real.
+                AgentEvent::TurnFinished { .. } if !l.adapter.close_stdin_after_prompt() => {
+                    *end_turn = true;
+                }
                 _ => {}
             }
             let ev = BusEvent {
@@ -821,6 +837,92 @@ impl Runtime {
             None,
         )
         .await
+    }
+
+    /// La sesión del agente para abrirla en el CLI oficial (attach, ADR-0005).
+    /// Nunca con el executor vivo: serían dos procesos sobre la misma sesión.
+    /// Devuelve el spec y el nombre del CLI.
+    pub fn attach_spec(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<(symphony_process::ProcessSpec, &'static str), AgentOpError> {
+        let (agent, worktree, run, cli_model) = self.read_op(|c| {
+            use rusqlite::OptionalExtension;
+            let agent = repo::get_agent(c, agent_id)?;
+            let worktree = agent
+                .worktree_id
+                .map(|w| repo::get_worktree(c, w))
+                .transpose()?;
+            let run = repo::runs_of(c, agent_id)?
+                .into_iter()
+                .rev()
+                .find(|r| r.cli_session_id.is_some());
+            let cli_model = match &run {
+                Some(r) => c
+                    .query_row(
+                        "SELECT cli_model_id FROM models WHERE id = ?1",
+                        [&r.model_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?,
+                None => None,
+            };
+            Ok((agent, worktree, run, cli_model))
+        })?;
+        let n = agent.number;
+        if self.is_live(agent_id) {
+            return Err(AgentOpError(format!(
+                "el agente #{n} está trabajando: espera a que termine su turno o detenlo antes de abrirlo en el CLI"
+            )));
+        }
+        let Some(run) = run else {
+            return Err(AgentOpError(format!(
+                "el agente #{n} todavía no tiene una sesión en un CLI: asígnale un modelo primero"
+            )));
+        };
+        let worktree =
+            worktree.ok_or_else(|| AgentOpError(format!("el agente #{n} no tiene workspace")))?;
+        let adapter = self.adapter(&run.provider_id).ok_or_else(|| {
+            AgentOpError(format!(
+                "esta versión no tiene adapter para `{}`",
+                run.provider_id
+            ))
+        })?;
+        let model = cli_model.unwrap_or_else(|| {
+            run.model_id
+                .split_once('/')
+                .map_or(run.model_id.clone(), |(_, m)| m.to_string())
+        });
+        let session = run.cli_session_id.unwrap_or_default();
+        let spec = adapter
+            .attach_spec(&session, &model, std::path::Path::new(&worktree.path))
+            .map_err(|e| AgentOpError(e.to_string()))?;
+        Ok((spec, adapter.display_name()))
+    }
+
+    /// Deja constancia en la conversación de que Leo abrió la sesión en el CLI.
+    pub async fn note_attached(&self, agent_id: AgentId, cli: &str) -> Result<(), AgentOpError> {
+        let content = format!(
+            "Sesión abierta en {cli} por el usuario. Lo que se haga ahí queda en el workspace del agente."
+        );
+        self.writer
+            .write(Box::new(move |t| {
+                repo::insert_message(
+                    t,
+                    &repo::NewMessage {
+                        id: symphony_core::MessageId::new(),
+                        agent_id,
+                        run_id: None,
+                        role: repo::MessageRole::System,
+                        content: Some(content),
+                        content_object_id: None,
+                    },
+                    now_ms(),
+                )?;
+                Ok(())
+            }))
+            .await
+            .map_err(op_err)
     }
 
     /// Mensaje del usuario al executor vivo (ADR-0005). Claude lo recibe a media tarea

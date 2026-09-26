@@ -1366,6 +1366,102 @@ async fn crashed_executor_can_restart_from_its_checkpoint() {
     e.writer.shutdown();
 }
 
+/// «Abrir en el CLI» (ADR-0005): nunca con el executor vivo ni sin sesión;
+/// terminado el turno, la sesión del último run en su worktree.
+#[tokio::test(flavor = "multi_thread")]
+async fn attach_opens_the_last_cli_session_only_when_idle() {
+    let script = r#"
+[[step]]
+kind = "say"
+text = "trabajando"
+[[step]]
+kind = "sleep"
+ms = 1500
+"#;
+    let e = env(script, None).await;
+    let waiting = e
+        .runtime
+        .create_agent(req(&e, "sin modelo", Execution::DecideLater))
+        .await
+        .unwrap();
+    let err = e.runtime.attach_spec(waiting.agent_id).unwrap_err().0;
+    assert!(err.contains("todavía no tiene una sesión"), "{err}");
+
+    let created = e
+        .runtime
+        .create_agent(req(&e, "con modelo", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let err = e.runtime.attach_spec(created.agent_id).unwrap_err().0;
+    assert!(err.contains("está trabajando"), "{err}");
+
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let session: String = one(
+        &e,
+        &format!(
+            "SELECT cli_session_id FROM agent_runs WHERE agent_id = '{}'",
+            created.agent_id
+        ),
+    );
+    let (spec, cli) = e.runtime.attach_spec(created.agent_id).unwrap();
+    assert_eq!(spec.program, fake_agent());
+    assert_eq!(spec.args[0], "attach");
+    assert_eq!(spec.args[1].to_string_lossy(), session);
+    assert_eq!(spec.cwd.as_deref(), Some(created.worktree.as_path()));
+    assert!(!cli.is_empty());
+
+    e.runtime
+        .note_attached(created.agent_id, cli)
+        .await
+        .unwrap();
+    e.writer.handle().flush().await.unwrap();
+    let note: String = one(&e, "SELECT content FROM messages WHERE role = 'SYSTEM'");
+    assert!(note.contains("Sesión abierta en"), "{note}");
+    e.writer.shutdown();
+}
+
+/// Un CLI lento en imprimir su primera línea no es un cuelgue: la inactividad
+/// se mide desde el arranque (antes moría como NO_HEARTBEAT en el primer tick).
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_starting_executor_is_not_taken_for_hung() {
+    let script = r#"
+startup_delay_ms = 600
+[[step]]
+kind = "edit"
+path = "slow.txt"
+content = "ok\n"
+[[step]]
+kind = "say"
+text = "listo"
+"#;
+    let e = env_with_watchdog(
+        &[("fake", script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "arranque lento",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "COMPLETED"
+    );
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "COMPLETED");
+    assert!(created.worktree.join("slow.txt").is_file());
+    e.writer.shutdown();
+}
+
 /// P06.S8: Prueba de aceptación forced kill (IDEA §8, Test D).
 /// fake-agent A trabaja y se cuelga/muere sin cleanup;
 /// fake-agent B continúa solo con el handoff estructurado;

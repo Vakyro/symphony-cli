@@ -101,6 +101,8 @@ impl ProviderAdapter for FakeAdapter {
             .arg("--script")
             .arg(&self.script)
             .args(["--model", &req.model])
+            // Como Claude: stdin abierto para mensajes; sale cuando se lo cierran.
+            .args(["--stdin", "stream"])
             .cwd(&req.worktree)
             .with_stdin();
         if let Some(id) = &req.session_id {
@@ -126,6 +128,17 @@ impl ProviderAdapter for FakeAdapter {
 
     fn encode_prompt(&self, prompt: &str) -> Vec<u8> {
         format!("{prompt}\n").into_bytes()
+    }
+
+    fn attach_spec(
+        &self,
+        cli_session_id: &str,
+        model: &str,
+        worktree: &std::path::Path,
+    ) -> Result<ProcessSpec, AdapterError> {
+        Ok(ProcessSpec::new(&self.binary)
+            .args(["attach", cli_session_id, "--model", model])
+            .cwd(worktree))
     }
 
     fn close_stdin_after_prompt(&self) -> bool {

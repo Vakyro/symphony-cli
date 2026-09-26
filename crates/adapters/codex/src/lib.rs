@@ -204,6 +204,19 @@ impl ProviderAdapter for CodexAdapter {
             .arg("-"))
     }
 
+    fn attach_spec(
+        &self,
+        cli_session_id: &str,
+        model: &str,
+        worktree: &Path,
+    ) -> Result<ProcessSpec, AdapterError> {
+        Ok(ProcessSpec::new(self.binary()?)
+            .args(["resume", cli_session_id, "-m", model])
+            .arg("-c")
+            .arg(format!("sandbox_mode=\"{}\"", self.sandbox))
+            .cwd(worktree))
+    }
+
     fn encode_prompt(&self, prompt: &str) -> Vec<u8> {
         prompt.as_bytes().to_vec()
     }

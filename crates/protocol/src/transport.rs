@@ -44,6 +44,39 @@ pub fn daemon_lock_held(home: &Path) -> bool {
     matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
 }
 
+/// Forma absoluta y, en Windows, **larga** de una ruta: expande nombres 8.3
+/// (`C:\Users\LATITU~1\…`) sin dejar el prefijo `\\?\`. Claude Code niega
+/// incluso lecturas si su cwd es una ruta corta (LEARNINGS P07), y la misma
+/// carpeta escrita de dos formas daría dos pipes distintos. Resuelve el
+/// ancestro más cercano que exista, así sirve para directorios por crear.
+pub fn long_path(path: &Path) -> PathBuf {
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    if !cfg!(windows) {
+        return abs;
+    }
+    let mut existing = abs.as_path();
+    let mut missing = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            let text = real.to_string_lossy();
+            // `\\?\C:\…` → `C:\…`; `\\?\UNC\…` se deja como está.
+            let mut out = match text.strip_prefix(r"\\?\") {
+                Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+                _ => real.clone(),
+            };
+            out.extend(missing.iter().rev());
+            return out;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return abs,
+        }
+    }
+}
+
 /// FNV-1a de 64 bits: hash estable entre versiones de Rust (no como `DefaultHasher`).
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
@@ -76,7 +109,7 @@ fn endpoint(home: &Path) -> io::Result<Name<'static>> {
 fn endpoint(home: &Path) -> io::Result<Name<'static>> {
     use interprocess::local_socket::{GenericNamespaced, ToNsName};
     // Las rutas de Windows no distinguen mayúsculas.
-    let key = home.to_string_lossy().to_lowercase();
+    let key = long_path(home).to_string_lossy().to_lowercase();
     format!("symphonyd-{:016x}", fnv1a(key.as_bytes())).to_ns_name::<GenericNamespaced>()
 }
 
@@ -190,6 +223,23 @@ pub fn cleanup(home: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_path_is_absolute_idempotent_and_keeps_missing_parts() {
+        #![allow(clippy::unwrap_used)]
+        let dir = std::env::temp_dir();
+        let wanted = dir.join("symphony-nueva").join("sub dir");
+        let long = long_path(&wanted);
+        assert!(long.is_absolute());
+        assert!(long.ends_with(Path::new("symphony-nueva").join("sub dir")));
+        assert_eq!(long_path(&long), long);
+        let text = long.to_string_lossy();
+        assert!(!text.starts_with(r"\\?\"), "{text}");
+        if cfg!(windows) {
+            // Ninguna parte con forma 8.3 (`LATITU~1`), aunque %TEMP% venga corto.
+            assert!(!text.contains('~'), "{text}");
+        }
+    }
 
     #[test]
     fn fnv1a_is_stable() {

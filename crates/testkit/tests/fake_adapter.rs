@@ -83,7 +83,15 @@ async fn fake_adapter_end_to_end_stream_and_hooks() {
         .unwrap()
     {
         if let OutputLine::Stdout(l) = line {
-            stream.extend(adapter.parse_stream_line(&l));
+            let events = adapter.parse_stream_line(&l);
+            // Como Claude, el CLI espera otro mensaje hasta que le cierren stdin.
+            if events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::TurnFinished { .. }))
+            {
+                proc.close_stdin().await.unwrap();
+            }
+            stream.extend(events);
         }
     }
     assert!(proc.wait().await.success());
