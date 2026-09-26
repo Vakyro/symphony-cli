@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::symphonyd;
+use common::{fake_agent, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -23,12 +23,26 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// El CI no tiene CLIs reales: un `claude` falso (`<home>/../bin`) delante del PATH
+/// deja un proveedor elegible.
+fn path_with_fake_claude(home: &Path) -> std::ffi::OsString {
+    let bin = home.parent().unwrap().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join(format!("claude{}", std::env::consts::EXE_SUFFIX));
+    if !claude.exists() {
+        std::fs::copy(fake_agent(), &claude).unwrap();
+    }
+    let rest = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&rest))).unwrap()
+}
+
 fn symphony(home: &Path, cwd: &Path, args: &[&str]) -> (bool, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_symphony"))
         .current_dir(cwd)
         .args(args)
         .env("SYMPHONY_HOME", home)
         .env("SYMPHONYD", symphonyd())
+        .env("PATH", path_with_fake_claude(home))
         .output()
         .unwrap();
     (
