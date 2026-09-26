@@ -1,9 +1,9 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-09-25 · por claude-code/opus-5.5
+**Actualizado:** 2026-09-26 · por claude-code/haiku-4.5
 **Fase actual:** P07 · TUI y release v0.1 (rama `phase/p07-tui`)
 **Paso actual:** P07.S10 · Replanificación (gate diferido: uso real ≥ 2 semanas). P07 cerrada por decisión de Leo (2026-09-26); P08 no empieza sin el ADR de S10
-**Estado del paso:** v0.1.0 publicado en la rama; Leo empieza el uso real
+**Estado del paso:** v0.1.0 ✅ en `main` con CI verde (200 tests). Leo empieza uso real 2026-09-26.
 **En curso por:** —
 
 ## Salud del repo
