@@ -1,8 +1,8 @@
 # ADR-0006 · Chat general con failover entre proveedores y replanificación parcial
 
-- **Estado:** PROPUESTO (decisiones de producto tomadas por Leo en conversación, 2026-09-28; quedan 2 puntos por confirmar, ver «Pendiente de Leo»)
+- **Estado:** ACEPTADO
 - **Fecha:** 2026-09-28
-- **Autor:** claude-code/sonnet-5.5 · **Aprobado por:** — (pendiente)
+- **Autor:** claude-code/sonnet-5.5 · **Aprobado por:** Leo (2026-09-28)
 - **Fase/paso:** P07.S10 (replanificación adelantada, solo para el chat)
 
 ## Contexto
@@ -51,8 +51,6 @@ Ver `docs/research/spike-p08-decisiones.md` §7 (pruebas del 2026-09-28):
 - **Sigue abierto para P08 (§2.1 del spike):** cuándo se fusiona la rama del chat hacia un agente, y serializar la integración entre turnos del chat.
 - **Riesgos:** el coste en tokens de cada cambio de proveedor y qué información se pierde en el handoff conversacional; se miden en el gate de P07.5.
 
-## Pendiente de Leo
-1. **Confirmar que P08 se difiere hasta cerrar P07.5** (y que P08–P16 se reevalúan con el gate de uso original).
-2. **Confirmar que el failover por umbral de tokens** entra como política opcional (apagada por defecto) y que el disparo por «contexto lleno» no se promete.
-
-Mientras no estén confirmados, el estado del ADR es PROPUESTO y P07.5 no debe empezar más allá de S1–S2 (que no dependen de estas dos decisiones).
+## Confirmaciones de Leo (2026-09-28)
+1. **P08 se difiere hasta cerrar P07.5**; P08–P16 se reevalúan con el gate de uso original (≥ 2 semanas).
+2. **El failover por umbral de tokens** entra como política opcional (apagada por defecto); el disparo por «contexto lleno» no se promete.

@@ -11,7 +11,7 @@
 | 2026-09-24 | Nuevo **P00.S0 · Prevalidación**: probar herramientas existentes (Claude Squad y similares) y hacer el Test D a mano, antes de escribir código | IDEA §10 pedía probar lo existente y el PLAN no tenía paso para eso. Test D es el supuesto que decide el producto (IDEA §7 fila 4) y se puede probar en horas sin Rust |
 | 2026-09-24 | P01.S2 investiga el **modo de interacción** (headless o PTY) y P01.S8 produce **ADR-0005** | Ningún documento decidía cómo ve e interviene Leo en la sesión de cada CLI. Headless pierde la TUI del CLI; PTY dentro de ratatui obliga a emular una terminal. Cambia P04, P05 y P07 |
 | 2026-09-24 | **P08–P16 son provisionales.** Nuevo gate **P07.S10 · Replanificación** tras v0.1: uso real ≥ 2 semanas con 2 proveedores, y luego revisión de P08–P16 con ADR | El detalle de P08–P16 se escribió sin evidencia de uso; el spike y el uso diario lo van a cambiar. Evita construir 5 adapters y una GUI sobre supuestos |
-| 2026-09-28 | Nueva fase **P07.5 · Chat general** antes de P08 (ADR-0006, propuesto): chat agéntico en la vista inicial, con worktree propio pre-main y cambio de proveedor sin perder contexto. P08–P10 quedan diferidas y pendientes de rediseño | El uso real de v0.1 mostró que el valor está en un chat simple con continuidad entre proveedores, no en orquestar varios agentes. El chat reutiliza casi todo P05–P07 |
+| 2026-09-28 | Nueva fase **P07.5 · Chat general** antes de P08 (ADR-0006, aceptado): chat agéntico en la vista inicial, con worktree propio pre-main y cambio de proveedor sin perder contexto. P08–P10 quedan diferidas y pendientes de rediseño | El uso real de v0.1 mostró que el valor está en un chat simple con continuidad entre proveedores, no en orquestar varios agentes. El chat reutiliza casi todo P05–P07 |
 
 ---
 
@@ -422,7 +422,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 | P15 ⚠️ | GUI de escritorio | Tauri + SolidJS sobre la misma API | `p15-done` |
 | P16 ⚠️ | Validación final | Todas las vistas y journeys probados, benchmark principal, v1.0 | `p16-done`, `v1.0.0` |
 
-⚠️ **Provisional.** P07.5 se añadió por ADR-0006 (pendiente de que Leo confirme dos puntos). P08–P16 describen la dirección, no un contrato. Se revisan en P07.S10 con evidencia de uso real, y cualquier cambio queda en un ADR. Hasta entonces, un agente no invierte trabajo en esas fases (ni crea sus crates, tablas o vistas) y el MVP se queda en 2 proveedores: Claude Code y Codex.
+⚠️ **Provisional.** P07.5 se añadió por ADR-0006 (aceptado). P08–P16 describen la dirección, no un contrato. Se revisan en P07.S10 con evidencia de uso real, y cualquier cambio queda en un ADR. Hasta entonces, un agente no invierte trabajo en esas fases (ni crea sus crates, tablas o vistas) y el MVP se queda en 2 proveedores: Claude Code y Codex.
 
 ---
 
@@ -870,7 +870,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 ## P07.5 · Chat general
 
 **Objetivo:** un chat agéntico en la vista inicial, con el cambio de proveedor/modelo sin perder contexto como diferenciador.
-**Prerrequisito:** P07 cerrada (v0.1.0). ADR-0006. Los pasos S1 y S2 no dependen de los dos puntos pendientes de Leo; S3 en adelante esperan su confirmación.
+**Prerrequisito:** P07 cerrada (v0.1.0). ADR-0006 (aceptado por Leo el 2026-09-28).
 **Docs:** ADR-0006, ADR-0004, ADR-0005 (y su adenda); `docs/research/spike-p08-decisiones.md`, `docs/research/uso-v0.1.md`; DB §3.C, §3.D; FLOW §6, §7, §13; IDEA §5.7.
 **Tecnologías:** las de P05–P07 (sin dependencias nuevas).
 **Skills:** `test-driven-development`, `eval-harness`, `ponytail-review`.
