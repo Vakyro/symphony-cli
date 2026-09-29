@@ -117,7 +117,7 @@ fn hints(app: &App) -> &'static str {
         }
         Screen::Providers => "↑↓ elegir · r volver a detectar · d activar/desactivar · Esc volver",
         Screen::Chat => {
-            "Enter enviar · Tab modelo · ↑↓ PgUp/PgDn o rueda: desplazar · Esc agentes y tareas · Ctrl+C salir"
+            "Enter enviar · Tab modelo · ↑↓/rueda · Ctrl+Y copiar · F2 selección · Esc tareas · Ctrl+C salir"
         }
         Screen::Home => {
             "↑↓ elegir · Enter abrir · n nuevo · p proveedores · r recovery · : comando · Esc chat · q salir"

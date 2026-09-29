@@ -112,6 +112,8 @@ pub enum Msg {
     /// Reloj (ms desde epoch): refresco y edades relativas.
     Tick(i64),
     Resize,
+    /// Texto pegado en la terminal (pegado entre corchetes: los saltos de línea no son Enter).
+    Paste(String),
     /// Rueda del ratón: positivo = hacia atrás en el historial.
     Scroll(i16),
     Disconnected(String),
@@ -241,6 +243,10 @@ pub struct App {
     pub chat_scroll: u16,
     /// Fotograma de las animaciones (lo avanza el loop mientras algo trabaja).
     pub frame: u32,
+    /// Texto que el loop debe copiar al portapapeles (lo toma con `take`).
+    pub copy: Option<String>,
+    /// Captura del ratón (rueda). Apagada, la terminal deja seleccionar y copiar con el ratón.
+    pub mouse: bool,
     /// Tope de `chat_scroll` con el tamaño actual (lo fija el render; `ui::chat`).
     pub chat_max: std::cell::Cell<u16>,
     /// Barra de comandos abierta (`:`), con lo escrito.
@@ -294,6 +300,8 @@ impl App {
             chat_model: None,
             chat_scroll: 0,
             frame: 0,
+            copy: None,
+            mouse: true,
             chat_max: std::cell::Cell::new(u16::MAX),
             command: None,
             notice: None,
@@ -540,11 +548,11 @@ impl App {
         self.go(Screen::Agent)
     }
 
-    fn info(&mut self, text: impl Into<String>) {
+    pub fn info(&mut self, text: impl Into<String>) {
         self.notice = Some(Notice::Info(text.into()));
     }
 
-    fn error(&mut self, text: impl Into<String>) {
+    pub fn error(&mut self, text: impl Into<String>) {
         self.notice = Some(Notice::Error(text.into()));
     }
 
@@ -569,6 +577,13 @@ impl App {
                 Vec::new()
             }
             Msg::Resize => Vec::new(),
+            Msg::Paste(text) => {
+                if self.screen == Screen::Chat {
+                    self.chat_input
+                        .push_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
+                }
+                Vec::new()
+            }
             Msg::Scroll(n) => {
                 if self.screen == Screen::Chat {
                     self.scroll_chat(i32::from(n));
@@ -756,6 +771,10 @@ impl App {
     // --- teclado -------------------------------------------------------------
 
     fn key(&mut self, key: KeyEvent) -> Vec<Call> {
+        // Salto de línea de un pegado (`spawn_input`): solo el chat lo escribe; en el resto es Enter.
+        if key.code == KeyCode::Char('\n') && self.screen != Screen::Chat {
+            return self.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return Vec::new();
@@ -895,11 +914,37 @@ impl App {
         self.chat_scroll = to.clamp(0, i32::from(self.chat_max.get())) as u16;
     }
 
+    /// Lo último que dijo el agente en el chat (para copiarlo).
+    fn last_reply(&self) -> Option<String> {
+        self.chat
+            .as_ref()?
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m["role"] == "ASSISTANT")
+            .and_then(|m| m["content"].as_str())
+            .map(str::to_string)
+    }
+
     fn chat_key(&mut self, key: KeyEvent) -> Vec<Call> {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.code == KeyCode::Char('y') {
+                match self.last_reply() {
+                    Some(t) => self.copy = Some(t),
+                    None => self.error("Todavía no hay una respuesta del agente que copiar."),
+                }
+            }
             return Vec::new();
         }
         match key.code {
+            KeyCode::F(2) => {
+                self.mouse = !self.mouse;
+                self.info(if self.mouse {
+                    "Rueda del ratón activada."
+                } else {
+                    "Modo selección: selecciona y copia con el ratón; la rueda no desplaza (F2 para volver)."
+                });
+            }
             KeyCode::Esc => return self.go(Screen::Home),
             KeyCode::Enter => return self.chat_send(),
             KeyCode::Tab | KeyCode::BackTab => {

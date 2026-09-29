@@ -718,3 +718,58 @@ fn chat_at_rest_does_not_animate() {
     app.chat.as_mut().unwrap().inspect = json!({ "agent": { "state": "READY" } });
     assert!(!app.animating());
 }
+
+#[test]
+fn pasting_multiple_lines_fills_the_input_without_sending() {
+    let mut app = chat_app();
+    let calls = app.update(Msg::Paste("uno\r\ndos\ntres".into()));
+    assert!(calls.is_empty());
+    assert_eq!(app.chat_input, "uno\ndos\ntres");
+}
+
+fn ctrl(app: &mut App, c: char) -> Vec<Call> {
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char(c),
+        KeyModifiers::CONTROL,
+    )))
+}
+
+#[test]
+fn ctrl_y_copies_the_last_agent_reply_and_says_so_when_there_is_none() {
+    let mut app = chat_app();
+    ctrl(&mut app, 'y');
+    assert!(app.copy.is_none());
+    assert!(matches!(app.notice, Some(Notice::Error(_))));
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    app.chat.as_mut().unwrap().messages = serde_json::from_value(json!([
+        { "role": "ASSISTANT", "content": "primera" },
+        { "role": "USER", "content": "y luego" },
+        { "role": "ASSISTANT", "content": "la ultima" },
+    ]))
+    .unwrap();
+    ctrl(&mut app, 'y');
+    assert_eq!(app.copy.as_deref(), Some("la ultima"));
+}
+
+#[test]
+fn f2_toggles_the_mouse_capture_for_selecting_text() {
+    let mut app = chat_app();
+    assert!(app.mouse);
+    press(&mut app, KeyCode::F(2));
+    assert!(!app.mouse);
+    press(&mut app, KeyCode::F(2));
+    assert!(app.mouse);
+}
+
+#[test]
+fn a_pasted_newline_is_text_in_the_chat_and_enter_elsewhere() {
+    let mut app = chat_app();
+    for c in ['a', symphony_tui::NEWLINE, 'b'] {
+        press(&mut app, KeyCode::Char(c));
+    }
+    assert_eq!(app.chat_input, "a\nb");
+    // Fuera del chat no hay texto multilínea: cuenta como Enter (aquí, entrar a agentes vacío).
+    let mut home = home_app();
+    let calls = press(&mut home, KeyCode::Char(symphony_tui::NEWLINE));
+    assert_eq!(calls, press(&mut home_app(), KeyCode::Enter));
+}
