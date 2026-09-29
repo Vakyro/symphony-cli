@@ -39,7 +39,7 @@
 1. P07.5.S8: skills en el chat (ver PLAN). Antes, Leo prueba S7 (ya reinstalado en `~/.cargo/bin` con los dos binarios) y sus opiniones ya están documentadas (Día 2 de `uso-v0.1.md`: proceso en vivo, copiar, scroll, textos cortados, exportar `.md`, UX). Decidir con Leo qué entra antes de S8.
 2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
 pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin S3).
-3. ADR-0007 (aceptado): el gate de ≥ 2 semanas pasa a criterio de contenido. Antes de S8 se atienden las observaciones del Día 2 (`uso-v0.1.md`): 1) ~~textos cortados (bug)~~ ✅ corregido, 2) ~~proceso del agente en vivo~~ ✅ primera versión (herramientas intercaladas + «pensando… N s»); falta medir `resume` sin cambio de proveedor y el texto en construcción (deltas de Claude), 3) ~~copiar y pegar~~ ✅ (Ctrl+Y, pegado multilínea, F2 selección), scroll de respuesta y exportar a `.md`. Leo sigue anotando en `uso-v0.1.md`.
+3. ADR-0007 (aceptado): el gate de ≥ 2 semanas pasa a criterio de contenido. Antes de S8 se atienden las observaciones del Día 2 (`uso-v0.1.md`): 1) ~~textos cortados (bug)~~ ✅ corregido, 2) ~~proceso del agente en vivo~~ ✅ primera versión (herramientas intercaladas + «pensando… N s»); falta medir `resume` sin cambio de proveedor y el texto en construcción (deltas de Claude), 3) ~~copiar y pegar~~ ✅ (Ctrl+Y, pegado multilínea, F2 selección), ~~scroll de respuesta~~ ✅ (bug de ↑/↓ invertidos en la vista de agente), y exportar a `.md`. Leo sigue anotando en `uso-v0.1.md`.
 
 ## Propuesta clave para S10: Chat agentico con failover entre proveedores
 

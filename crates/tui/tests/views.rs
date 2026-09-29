@@ -773,3 +773,32 @@ fn a_pasted_newline_is_text_in_the_chat_and_enter_elsewhere() {
     let calls = press(&mut home, KeyCode::Char(symphony_tui::NEWLINE));
     assert_eq!(calls, press(&mut home_app(), KeyCode::Enter));
 }
+
+#[test]
+fn agent_conversation_scrolls_back_with_up_and_the_wheel_within_its_limits() {
+    let mut app = agent_app(Tab::Conversation);
+    let long: Vec<Value> = (0..40)
+        .map(|i| json!({ "role": "ASSISTANT", "content": format!("mensaje {i}") }))
+        .collect();
+    app.agent.as_mut().unwrap().messages = long;
+    let top_after = |app: &App| draw(app);
+    assert!(top_after(&app).contains("mensaje 39"));
+    // Up va hacia lo más viejo; la rueda hacia atrás también; ↓ vuelve a lo nuevo.
+    press(&mut app, KeyCode::PageUp);
+    assert!(!top_after(&app).contains("mensaje 39"));
+    app.update(Msg::Scroll(3));
+    let up = app.agent.as_ref().unwrap().scroll;
+    assert!(up >= 13);
+    // Con el tope que fijó el render, pasarse no acumula pulsaciones muertas.
+    for _ in 0..50 {
+        press(&mut app, KeyCode::PageUp);
+    }
+    let max = app.agent.as_ref().unwrap().scroll_max.get();
+    assert_eq!(app.agent.as_ref().unwrap().scroll, max);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.agent.as_ref().unwrap().scroll, max - 1);
+    for _ in 0..200 {
+        press(&mut app, KeyCode::Down);
+    }
+    assert!(draw(&app).contains("mensaje 39"));
+}

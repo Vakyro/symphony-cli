@@ -975,6 +975,9 @@ fn conversation(app: &App, f: &mut Frame, area: Rect) {
     } else {
         area
     };
+    let inner = usize::from(area.height.saturating_sub(2));
+    a.scroll_max
+        .set(u16::try_from(lines.len().saturating_sub(inner)).unwrap_or(u16::MAX));
     let offset = from_bottom(lines.len(), area.height, a.scroll);
     f.render_widget(
         Paragraph::new(lines)

@@ -175,11 +175,25 @@ pub struct AgentView {
     pub diff: String,
     pub history: Value,
     pub scroll: u16,
+    /// Tope de `scroll` en Conversación (lo fija el render): ahí `scroll` cuenta desde el final.
+    pub scroll_max: std::cell::Cell<u16>,
     /// Escribiendo un mensaje para el executor.
     pub typing: bool,
     pub input: String,
     /// Se pulsó `x` una vez: la segunda confirma el stop.
     pub confirm_stop: bool,
+}
+
+/// Desplaza la vista de agente; positivo = hacia lo más nuevo / hacia abajo. En Conversación
+/// `scroll` cuenta desde el final (con tope); en el resto, desde el principio.
+fn scroll_view(a: &mut AgentView, toward_newer: i32) {
+    let now = i32::from(a.scroll);
+    let to = if a.tab == Tab::Conversation {
+        (now - toward_newer).clamp(0, i32::from(a.scroll_max.get()))
+    } else {
+        (now + toward_newer).max(0)
+    };
+    a.scroll = u16::try_from(to).unwrap_or(u16::MAX);
 }
 
 impl AgentView {
@@ -193,6 +207,7 @@ impl AgentView {
             diff: String::new(),
             history: Value::Null,
             scroll: 0,
+            scroll_max: std::cell::Cell::new(u16::MAX),
             typing: false,
             input: String::new(),
             confirm_stop: false,
@@ -587,6 +602,9 @@ impl App {
             Msg::Scroll(n) => {
                 if self.screen == Screen::Chat {
                     self.scroll_chat(i32::from(n));
+                }
+                if let (Screen::Agent, Some(a)) = (self.screen, self.agent.as_mut()) {
+                    scroll_view(a, -i32::from(n));
                 }
                 Vec::new()
             }
@@ -1279,19 +1297,19 @@ impl App {
             }
             KeyCode::Char('d') => switch_tab(a, Tab::Changes),
             KeyCode::Up | KeyCode::Char('k') => {
-                a.scroll = a.scroll.saturating_sub(1);
+                scroll_view(a, -1);
                 return Vec::new();
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                a.scroll = a.scroll.saturating_add(1);
+                scroll_view(a, 1);
                 return Vec::new();
             }
             KeyCode::PageUp => {
-                a.scroll = a.scroll.saturating_sub(10);
+                scroll_view(a, -10);
                 return Vec::new();
             }
             KeyCode::PageDown => {
-                a.scroll = a.scroll.saturating_add(10);
+                scroll_view(a, 10);
                 return Vec::new();
             }
             KeyCode::Char('m') => {
