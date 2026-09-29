@@ -42,6 +42,23 @@ Propuesta: insertar una fase corta **antes** de P08 (nombre provisional "P07.5 �
 
 **Gate de la fase:** un chat real que empieza en Claude, cambia a Codex a mitad y sigue la conversación sin reexplicar (mismo criterio que ADR-0004, pero conversacional).
 
+### 2.1 Jerarquía de ramas (decisión de Leo)
+
+```
+main  ←  symphony/chat (pre-main)  ←  ramas de los agentes de tareas
+```
+
+- Symphony nunca escribe en `main` directamente; la rama del chat se fusiona a `main` solo con acción explícita del usuario (coherente con la regla de P08.S7: "nunca merge a main sin política explícita").
+- Los agentes de tareas nacen de la rama del chat (su `base_ref` es esa rama, no `main`) y se integran de vuelta a ella.
+- Lo que ya sirve: `create_agent` recibe `base` y lo guarda en `worktrees.base_ref`; el diff vivo, el checkpoint y el handoff ya usan `base_ref` (`executor.rs` ~1155, `handoff.rs` ~100, `checkpoint.rs` ~284). Cambiar la base no exige tocar esos caminos.
+- Cambio de alcance en P08.S7: el destino de la cola de integración pasa a ser la rama del chat; el paso chat → `main` es un merge aparte con revisión.
+
+**Puntos delicados a resolver (no bloquean la fase de chat, sí P08):**
+1. **Git no permite la misma rama en dos worktrees.** Integrar un agente en `symphony/chat` debe hacerse dentro del worktree del chat. Si el chat tiene cambios sin commitear en ese momento, el merge se complica o falla. Opciones: integrar solo cuando el chat esté inactivo; o que el chat haga commits automáticos al terminar cada turno (el checkpoint ya captura el estado, así que es coherente).
+2. **La base se mueve.** Mientras el chat avanza, los agentes de tareas parten de un punto que queda atrás. Decidir si se fusiona la rama del chat hacia el agente antes de integrar (más limpio, más conflictos tempranos) o solo al final (más simple).
+3. **Qué pasa con el chat mientras integra.** El chat es un agente con executor; si un agente de tareas se integra mientras el chat responde, el worktree cambia bajo el CLI. Conviene serializar: integrar solo entre turnos del chat.
+4. **Qué revisa el review agent:** cada integración agente → chat, o solo el chat → `main`. Recomiendo lo segundo por defecto (menos fricción) y lo primero como política opcional.
+
 ## 3. Modelo de estado: `phase + conditions` ahora o después
 
 **Recomendación: no migrar todavía.** Las conditions rinden cuando hay varias esperas simultáneas (recurso + dependencia + proveedor), que es P08. El chat es un agente con un executor a la vez.
@@ -122,7 +139,7 @@ Pruebas en un directorio temporal, con prompts mínimos (Claude Code 2.1.284 con
 2. ¿Aceptas que el failover automático de contexto/cuota salga **después** del cambio manual de modelo si el mini-spike 1 no encuentra una señal fiable?
 3. ¿Se difiere P08 (multiagente) hasta terminar el chat, o se mantiene en paralelo como opción avanzada?
 4. ¿Quieres que la vista inicial sea el chat y los agentes/tareas queden como segunda pantalla?
-5. Si el chat es la rama pre-main, ¿las ramas de los agentes de tareas (P08+) salen de la rama del chat y se integran de vuelta a ella, y solo la rama del chat se fusiona a `main`? Es una jerarquía `main ← chat ← agentes` que cambia la base (`base_ref`) de los worktrees y el flujo de merge de P08.S7. Para P07.5 basta con que el chat salga de `main`; esto se decide antes de P08.
+5. ~~¿Jerarquía `main ← chat ← agentes`?~~ **Resuelta por Leo:** sí. Las ramas de los agentes salen de la rama del chat, se integran de vuelta a ella, y la rama del chat es la que se fusiona a `main`. Ver §2.1.
 
 ## 9. Qué cambiaría en el PLAN si se aprueba
 
