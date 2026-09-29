@@ -97,3 +97,16 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **El daemon sigue vivo al salir de la TUI** (a propósito). Después de una prueba manual queda un `symphonyd.exe` que bloquea `target/debug/symphonyd.exe` al recompilar: `symphony daemon stop` con el mismo `SYMPHONY_HOME`.
 - **Para ubicar un cuelgue dentro del daemon:** los logs `info` no alcanzan; agrega `tracing::info!("DBG …")` temporales por paso en el runtime y lee `<home>/logs/symphonyd.*.log`. Así se encontraron los 9.7 s de git.
 - **Un «flake» por timing puede ser un bug:** el de `forced_kill_test_d_acceptance_test` era el watchdog, que contaba como silencioso a un run sin su primera línea todavía. Antes de subir un umbral en un test, confirma que la aserción que falla sea compatible con ese umbral (aquí el test duraba menos que el umbral nuevo y seguía fallando).
+
+## P07.5
+
+- **`codex exec resume` no acepta `-s`:** el sandbox va con `-c sandbox_mode="…"` (el adapter ya lo hace). `codex exec` sí acepta `-s`.
+- **Un prompt de prueba «Recuerda el código 7431» con Claude Code no sirve:** lo interpreta como guardar en su memoria persistente y se niega. Para probar que `--resume` conserva contexto usa un juego: «el código del juego es 7431, repítelo» y luego «dentro del juego, ¿cuál era?».
+- **Los CLIs compactan solos** (`claude --help` muestra `--autocompact`; ambos documentan hooks `PreCompact`/`PostCompact`): «contexto lleno» no llega como error. El cambio de proveedor por contexto es una política de Symphony sobre el uso de tokens (`turn.completed.usage` en Codex, `result` en Claude). Inferido de la ayuda, no probado con un contexto real.
+- **El prompt de un handoff queda guardado como mensaje `USER`** (el primero de cada run que arrancó desde un checkpoint). Al armar una conversación hay que descartarlo o los handoffs se anidan. `repo::handoff_run_ids` da esos runs.
+- **`Completed` y `Done` eran terminales sin salida:** un mensaje tras el turno necesitó `Completed → Ready` y `Done → Ready`. `Running → Ready` sigue sin existir (S4). `switch` rechaza hoy a un agente `COMPLETED` (S6).
+- **En Git Bash de Windows, un `PATH="C:/…:$PATH"` se rompe** (los dos puntos de la unidad parten la ruta) y `which symphony` muestra otro ejecutable. Para PATH usa PowerShell (`$env:PATH = "C:\ruta\bin;$env:PATH"`) o rutas `/c/…`, y comprueba con `Get-Command symphony -All`.
+- **Copias viejas de `symphony.exe`/`symphonyd.exe` en `%APPDATA%\npm` (antes que `~/.cargo/bin` en el PATH)** taparían un `cargo install` nuevo. Ya se borraron; si reaparecen, `Get-Command symphony -All` las muestra. `symphony` busca `symphonyd` junto a su ejecutable, así que deben venir de la misma carpeta.
+- **`cargo nextest run <filtro>` filtra por nombre de test, no de archivo:** `live_resume` no encontró nada; el filtro correcto fue `remembers_after_a_message`.
+- **Para editar con scripts largos desde el shell,** escribe el `.js` a un archivo y ejecútalo con `node`; un heredoc con comillas y backticks rompió el parser del shell.
+- **Un `grep -r` desde la raíz del repo recorre `target/` y tarda minutos.** Acota a `crates/` o usa la herramienta de búsqueda.
