@@ -669,3 +669,14 @@ fn chat_long_input_keeps_the_tail_visible() {
     app.chat_input = format!("{}FINAL", "palabra ".repeat(40));
     assert!(draw(&app).contains("FINAL▏"));
 }
+
+#[test]
+fn agent_conversation_wraps_long_messages_instead_of_cutting_them() {
+    let mut app = agent_app(Tab::Conversation);
+    let long = format!("{}FIN-DEL-TEXTO", "palabra ".repeat(40));
+    app.agent.as_mut().unwrap().messages = serde_json::from_value(json!([
+        { "role": "ASSISTANT", "content": long },
+    ]))
+    .unwrap();
+    assert!(draw(&app).contains("FIN-DEL-TEXTO"));
+}

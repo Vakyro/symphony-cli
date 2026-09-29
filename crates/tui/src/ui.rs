@@ -452,11 +452,11 @@ fn chat_lines(messages: &[Value], width: usize) -> Vec<Line<'static>> {
                 }
             }
             "USER" if content.starts_with(HANDOFF_PROMPT) => continue,
-            role @ ("USER" | "ASSISTANT") => {
-                let (who, color) = if role == "USER" {
-                    ("tú", ACCENT)
-                } else {
-                    ("agente", Color::Green)
+            role => {
+                let (who, color) = match role {
+                    "USER" => ("tú", ACCENT),
+                    "ASSISTANT" => ("agente", Color::Green),
+                    _ => ("sistema", Color::DarkGray),
                 };
                 for (i, l) in wrap(content, width.saturating_sub(9))
                     .into_iter()
@@ -470,7 +470,6 @@ fn chat_lines(messages: &[Value], width: usize) -> Vec<Line<'static>> {
                     lines.push(Line::from(vec![colored(prefix, color), Span::raw(l)]));
                 }
             }
-            _ => continue,
         }
         lines.push(Line::raw(""));
     }
@@ -892,38 +891,8 @@ fn from_bottom(total: usize, height: u16, scroll: u16) -> u16 {
 
 fn conversation(app: &App, f: &mut Frame, area: Rect) {
     let Some(a) = &app.agent else { return };
-    let mut lines = Vec::new();
-    for m in &a.messages {
-        let content = m["content"].as_str().unwrap_or("");
-        match m["role"].as_str().unwrap_or("") {
-            // FLOW §13.4: separador visible del cambio de executor.
-            "EXECUTOR_CHANGE" => {
-                for l in content.lines() {
-                    lines.push(Line::from(colored(l.to_string(), Color::Magenta)));
-                }
-            }
-            role => {
-                let (who, color) = match role {
-                    "USER" => ("tú", ACCENT),
-                    "ASSISTANT" => ("agente", Color::Green),
-                    _ => ("sistema", Color::DarkGray),
-                };
-                let mut first = true;
-                for l in content.lines() {
-                    let prefix = if first {
-                        format!("{who:>7} │ ")
-                    } else {
-                        "        │ ".into()
-                    };
-                    first = false;
-                    lines.push(Line::from(vec![
-                        colored(prefix, color),
-                        Span::raw(l.to_string()),
-                    ]));
-                }
-            }
-        }
-    }
+    // Con ajuste de línea: un texto largo del agente no se corta en el borde.
+    let mut lines = chat_lines(&a.messages, usize::from(area.width.saturating_sub(2)));
     if lines.is_empty() {
         lines.push(Line::from(dim("Sin mensajes todavía.")));
     }
