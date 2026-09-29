@@ -3,7 +3,7 @@
 **Actualizado:** 2026-09-29 · por claude-code/sonnet-5.5
 **Fase actual:** P07.5 · Chat general (rama `phase/p075-chat`, ADR-0006 aceptado)
 **Paso actual:** P07.5.S8 · Skills en el chat (S1–S7 hechos). P08–P16 siguen provisionales
-**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; esperando opinión de Leo). Bitácora: `docs/phases/P07.5-chat.md`.
+**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
 
 ## Salud del repo
@@ -36,7 +36,7 @@
 - [ ] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
-1. P07.5.S8: skills en el chat (ver PLAN). Antes, Leo prueba S7 (ya reinstalado en `~/.cargo/bin` con los dos binarios) y sus opiniones se documentan en la bitácora; luego S8.
+1. P07.5.S8: skills en el chat (ver PLAN). Antes, Leo prueba S7 (ya reinstalado en `~/.cargo/bin` con los dos binarios) y sus opiniones ya están documentadas (Día 2 de `uso-v0.1.md`: proceso en vivo, copiar, scroll, textos cortados, exportar `.md`, UX). Decidir con Leo qué entra antes de S8.
 2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
 pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin S3).
 3. Leo sigue usando v0.1 y anotando en `docs/research/uso-v0.1.md`; el gate de ≥ 2 semanas aplica a la revisión de P08–P16 tras cerrar P07.5.

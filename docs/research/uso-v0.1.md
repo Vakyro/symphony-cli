@@ -83,6 +83,36 @@ El atractivo principal de Symphony debería ser un **chat agentico simple** — 
 - **Implementación (P08+):** entidad de chat persistent, selector de proveedor, política de failover con contexto, vista terminal y posiblemente GUI.
 - **Validar antes:** que ambos proveedores (Claude Code + Codex) mantengan consistencia al retomar sesiones.
 
+## Día 2 · 2026-09-29 · Uso del chat (P07.5.S7)
+
+Leo probó la vista Chat en su terminal (Claude `haiku` y Codex `gpt-5.6-luna`, con cambio de proveedor a mitad).
+
+### Lo que funcionó
+- Ambos proveedores trabajaron bien; el cambio Codex → Claude con mensaje conservó el contexto («vuelve a decirme en qué quedamos» respondió con lo hablado antes). Claude fue rápido, Codex algo más lento pero no malo.
+
+### Observaciones
+1. **El agente parece lento porque no se ve el proceso.** El agente piensa y decide qué hacer; hoy el chat solo muestra respuesta por respuesta. Quiere ver el proceso como Claude Code: «pensando…», «voy a hacer X», «ahora esto», y que la respuesta se vea construyéndose aunque sea lenta. **Si aun con eso hay lentitud real, medir el rendimiento** (puede ser también su internet): tiempo hasta el primer evento visible y por turno, Claude vs Codex.
+2. **Copiar y pegar mensajes.** Hoy la captura de ratón (rueda) hace que seleccionar texto pida Shift; hay que dar una forma cómoda de copiar (p. ej. copiar el último mensaje/seleccionar uno).
+3. **Scroll en la respuesta del agente.** Falta poder desplazarse dentro de una respuesta larga.
+4. **Textos cortados.** En la conversación de los agentes (vista de agente, no solo el chat) los textos individuales del agente no se muestran completos, se cortan. En la captura de Leo faltaban «varias líneas intermedias» de una respuesta.
+5. **Experiencia de uso:** más cómoda y más bonita; animaciones; quizá una mascota.
+6. **Exportar conversaciones completas a `.md`.**
+
+### Diagnóstico
+- (1) Los eventos de proceso (mensajes intermedios del agente, herramientas, `TurnUsage`) ya llegan por el bus y se persisten; el chat solo pinta `messages` (USER/ASSISTANT). Falta una vista de «actividad en vivo» del turno en curso (mensajes parciales, tool calls) y un indicador de trabajo (spinner). Depende de qué emitan los adaptadores en vivo (Claude stream-json sí; Codex por hooks/exec: verificar).
+- (4) Probable relación con `agent.logs` `limit: 200` y con el recorte de líneas por vista; verificar en la vista de agente antes de asumir causa.
+- (2) y (3) son de TUI (captura de ratón, foco de scroll por mensaje).
+- (5) y (6) son mejoras nuevas; (6) es barato: los mensajes ya están en la base.
+
+### Priorización provisional (para decidir con Leo)
+| # | Tema | Propuesta |
+|---|---|---|
+| 4 | Textos cortados | Bug: corregir ya, antes de S8 |
+| 1 | Proceso en vivo + medir rendimiento | Alta; probable paso propio en P07.5 |
+| 2, 3 | Copiar y scroll de respuesta | Media; pulido de la vista Chat |
+| 6 | Exportar a `.md` | Media, barata |
+| 5 | Animaciones / mascota | Baja; después de lo funcional (posible GUI P14) |
+
 ## Referencias externas
 
 Conversaciones con ChatGPT y Claude sobre Herdr, AX y la evaluación del repo: [referencias-herdr-ax.md](referencias-herdr-ax.md). Sus puntos sobre `phase + conditions`, event bus, suspend/resume y `Workspace` entran al ADR de P07.S10.
