@@ -38,7 +38,8 @@ Propuesta: insertar una fase corta **antes** de P08 (nombre provisional "P07.5 �
 4. Cambio de modelo/proveedor por mensaje reutilizando `switch()` + handoff con historial de conversación.
 5. Failover reactivo por cuota/contexto agotado (empezando por lo que se pueda detectar de verdad; parsers parciales de P10.S2).
 6. Instalación global (`cargo install` o binario en PATH) verificada desde otro directorio.
-7. Skills: probar que las skills nativas de cada CLI funcionan en el chat (los CLIs las cargan del cwd/home; puede no requerir código de Symphony) **(verificar)**.
+7. Commit automático por turno en el worktree del chat (al recibir `TurnFinished`; sin commit si no hay cambios).
+8. Skills: probar que las skills nativas de cada CLI funcionan en el chat (los CLIs las cargan del cwd/home; puede no requerir código de Symphony) **(verificar)**.
 
 **Gate de la fase:** un chat real que empieza en Claude, cambia a Codex a mitad y sigue la conversación sin reexplicar (mismo criterio que ADR-0004, pero conversacional).
 
@@ -53,11 +54,13 @@ main  ←  symphony/chat (pre-main)  ←  ramas de los agentes de tareas
 - Lo que ya sirve: `create_agent` recibe `base` y lo guarda en `worktrees.base_ref`; el diff vivo, el checkpoint y el handoff ya usan `base_ref` (`executor.rs` ~1155, `handoff.rs` ~100, `checkpoint.rs` ~284). Cambiar la base no exige tocar esos caminos.
 - Cambio de alcance en P08.S7: el destino de la cola de integración pasa a ser la rama del chat; el paso chat → `main` es un merge aparte con revisión.
 
-**Puntos delicados a resolver (no bloquean la fase de chat, sí P08):**
-1. **Git no permite la misma rama en dos worktrees.** Integrar un agente en `symphony/chat` debe hacerse dentro del worktree del chat. Si el chat tiene cambios sin commitear en ese momento, el merge se complica o falla. Opciones: integrar solo cuando el chat esté inactivo; o que el chat haga commits automáticos al terminar cada turno (el checkpoint ya captura el estado, así que es coherente).
+**Decisiones de Leo sobre los puntos 1 y 4:** commit automático al terminar cada turno del chat, y revisión (review agent) solo en chat → `main`. Los puntos 2 y 3 siguen abiertos.
+
+**Puntos delicados (no bloquean la fase de chat, sí P08):**
+1. **Git no permite la misma rama en dos worktrees.** Integrar un agente en `symphony/chat` debe hacerse dentro del worktree del chat. Si el chat tiene cambios sin commitear en ese momento, el merge se complica o falla. **Decidido:** commit automático al terminar cada turno, para que el worktree del chat quede limpio entre turnos (el checkpoint ya captura el estado, así que es coherente). Falta definir el mensaje de commit (p. ej. `chat: turno N` con el modelo usado) y si se omite el commit cuando el turno no cambió archivos.
 2. **La base se mueve.** Mientras el chat avanza, los agentes de tareas parten de un punto que queda atrás. Decidir si se fusiona la rama del chat hacia el agente antes de integrar (más limpio, más conflictos tempranos) o solo al final (más simple).
 3. **Qué pasa con el chat mientras integra.** El chat es un agente con executor; si un agente de tareas se integra mientras el chat responde, el worktree cambia bajo el CLI. Conviene serializar: integrar solo entre turnos del chat.
-4. **Qué revisa el review agent:** cada integración agente → chat, o solo el chat → `main`. Recomiendo lo segundo por defecto (menos fricción) y lo primero como política opcional.
+4. **Qué revisa el review agent:** cada integración agente → chat, o solo el chat → `main`. **Decidido:** revisión solo en chat → `main`; la integración agente → chat no pasa por review por defecto (queda como política opcional futura).
 
 ## 3. Modelo de estado: `phase + conditions` ahora o después
 
