@@ -1310,29 +1310,17 @@ impl Runtime {
         let objects = symphony_object_store::ObjectStore::new(
             symphony_core::SymphonyHome::at(&self.home).objects_dir(),
         );
-        let mut views = Vec::new();
-        for m in records {
-            let content = if let Some(c) = m.content {
-                c
-            } else if let Some(obj_id) = m.content_object_id {
-                let hash = self.read_op(|c| {
-                    c.query_row(
-                        "SELECT blob_hash FROM context_objects WHERE id = ?1",
-                        [obj_id.to_string()],
-                        |r| r.get::<_, String>(0),
-                    )
-                    .map_err(repo::RepoError::from)
-                })?;
-                objects
-                    .get(&hash)
-                    .map(|b| String::from_utf8_lossy(&b).into_owned())
-                    .unwrap_or_else(|_| "(objeto no disponible)".into())
-            } else {
-                String::new()
-            };
-            views.push((m.role, content));
-        }
-        Ok(views)
+        let conn = self
+            .reader
+            .lock()
+            .map_err(|_| AgentOpError("lector de la base no disponible".into()))?;
+        Ok(records
+            .into_iter()
+            .map(|m| {
+                let content = crate::handoff::message_text(&conn, &objects, &m);
+                (m.role, content)
+            })
+            .collect())
     }
 
     /// Información detallada del agente para inspección (FLOW §7, Overview / History).

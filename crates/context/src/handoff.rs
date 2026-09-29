@@ -20,6 +20,20 @@ pub struct NewFile {
     pub content: Option<String>,
 }
 
+/// Quién dijo un mensaje de la conversación.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Speaker {
+    User,
+    Assistant,
+}
+
+/// Un mensaje de texto de la conversación (sin herramientas ni separadores).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatMessage {
+    pub speaker: Speaker,
+    pub text: String,
+}
+
 /// Todo lo que entra al handoff, ya redactado.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HandoffInput {
@@ -39,6 +53,8 @@ pub struct HandoffInput {
     /// Dónde queda el diff completo si se recorta (`ctx://…`).
     pub diff_uri: Option<String>,
     pub new_files: Vec<NewFile>,
+    /// Lo dicho hasta ahora, en orden cronológico. Vacío = sin sección de conversación.
+    pub conversation: Vec<ChatMessage>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +77,49 @@ fn limits(mode: ContextMode) -> Option<(usize, usize, usize)> {
         ContextMode::Balanced => Some((60_000, 20_000, 80_000)),
         ContextMode::Aggressive => Some((20_000, 5_000, 25_000)),
     }
+}
+
+/// Límites de la conversación por modo: (caracteres en total, caracteres por mensaje).
+/// Se conserva lo más reciente; `RAW` no omite nada.
+fn conversation_limits(mode: ContextMode) -> Option<(usize, usize)> {
+    match mode {
+        ContextMode::Raw => None,
+        ContextMode::Safe => Some((120_000, 12_000)),
+        ContextMode::Balanced => Some((40_000, 4_000)),
+        ContextMode::Aggressive => Some((10_000, 1_500)),
+    }
+}
+
+/// La conversación como texto: los mensajes más recientes que caben en el presupuesto
+/// (siempre al menos el último), con aviso de cuántos anteriores se omitieron.
+fn render_conversation(messages: &[ChatMessage], mode: ContextMode) -> String {
+    let (total, each) = match conversation_limits(mode) {
+        Some((t, e)) => (Some(t), Some(e)),
+        None => (None, None),
+    };
+    let mut kept: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for m in messages.iter().rev() {
+        let who = match m.speaker {
+            Speaker::User => "Usuario",
+            Speaker::Assistant => "Asistente",
+        };
+        let line = format!("**{who}:** {}", clip(m.text.trim(), each, None));
+        let len = line.chars().count();
+        if total.is_some_and(|t| !kept.is_empty() && used + len > t) {
+            break;
+        }
+        used += len;
+        kept.push(line);
+    }
+    let omitted = messages.len() - kept.len();
+    kept.reverse();
+    let mut out = String::new();
+    if omitted > 0 {
+        out.push_str(&format!("[… {omitted} mensajes anteriores omitidos]\n\n"));
+    }
+    out.push_str(&kept.join("\n\n"));
+    out
 }
 
 /// Recorta a `max` caracteres y avisa cuánto se omitió y dónde está el original.
@@ -143,6 +202,19 @@ pub fn assemble(input: &HandoffInput, mode: ContextMode) -> Handoff {
         })
         .collect();
 
+    let conversation = if input.conversation.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "## Conversación hasta ahora (lo más reciente al final)
+{}
+El último mensaje del usuario puede estar sin responder o a medias: revisa el worktree y continúa desde ahí.
+
+",
+            render_conversation(&input.conversation, mode)
+        )
+    };
+
     let prompt = format!(
         "Retomas una tarea de código que otro executor dejó a medias. {reason}
 Ya estás en su worktree, con su rama y sus cambios. No empieces de cero: revisa lo que ya existe y continúa desde donde quedó.
@@ -150,7 +222,7 @@ Ya estás en su worktree, con su rama y sus cambios. No empieces de cero: revisa
 ## Objetivo
 {objective}
 
-## Último plan del executor anterior
+{conversation}## Último plan del executor anterior
 {plan}
 
 ## En qué estaba
@@ -181,6 +253,7 @@ Continúa hasta terminar el objetivo. Si algo del estado de arriba contradice lo
 ",
         reason = input.reason.trim(),
         objective = input.objective.trim(),
+        conversation = conversation,
         plan = opt(input.plan_tail.as_deref()),
         current = opt(input.current_step.as_deref()),
         next = opt(input.next_step.as_deref()),
@@ -238,6 +311,7 @@ mod tests {
                     content: None,
                 },
             ],
+            conversation: Vec::new(),
         }
     }
 
@@ -287,6 +361,79 @@ mod tests {
         let p = assemble(&input, ContextMode::Aggressive).prompt;
         assert_eq!(p.matches("[… 5000 caracteres omitidos]").count(), 5, "{p}");
         assert_eq!(p.matches("[… 10000 caracteres omitidos]").count(), 5);
+    }
+
+    fn chat(n: usize, text_len: usize) -> Vec<ChatMessage> {
+        (0..n)
+            .map(|i| ChatMessage {
+                speaker: if i % 2 == 0 {
+                    Speaker::User
+                } else {
+                    Speaker::Assistant
+                },
+                text: format!("m{i} {}", "z".repeat(text_len)),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn conversation_section_only_appears_with_messages() {
+        let p = assemble(&fixed(), ContextMode::Balanced).prompt;
+        assert!(!p.contains("Conversación hasta ahora"));
+        let mut input = fixed();
+        input.conversation = chat(2, 5);
+        let p = assemble(&input, ContextMode::Balanced).prompt;
+        assert!(p.contains("## Conversación hasta ahora"));
+        assert!(p.contains("**Usuario:** m0 zzzzz"));
+        assert!(p.contains("**Asistente:** m1 zzzzz"));
+        assert!(!p.contains("anteriores omitidos"));
+    }
+
+    #[test]
+    fn conversation_keeps_the_most_recent_messages_within_the_budget() {
+        let mut input = fixed();
+        // 30 mensajes de 1.000 caracteres: 30.000 en total.
+        input.conversation = chat(30, 1_000);
+        let aggressive = assemble(&input, ContextMode::Aggressive).prompt;
+        // AGGRESSIVE: 10.000 caracteres → los últimos ~9 mensajes; el más reciente siempre está.
+        assert!(aggressive.contains("m29 "), "{aggressive}");
+        assert!(!aggressive.contains("m0 "), "{aggressive}");
+        assert!(aggressive.contains("mensajes anteriores omitidos]"));
+        let balanced = assemble(&input, ContextMode::Balanced).prompt;
+        assert!(
+            balanced.contains("m0 "),
+            "30.000 caben en BALANCED (40.000)"
+        );
+        assert!(!balanced.contains("anteriores omitidos"));
+    }
+
+    #[test]
+    fn a_huge_last_message_is_clipped_but_never_dropped() {
+        let mut input = fixed();
+        input.conversation = chat(3, 50_000);
+        let p = assemble(&input, ContextMode::Aggressive).prompt;
+        assert!(p.contains("m2 "), "el último mensaje siempre entra");
+        assert!(p.contains("caracteres omitidos]"), "y se recorta a 1.500");
+    }
+
+    #[test]
+    fn conversation_tokens_never_grow_from_raw_to_aggressive() {
+        let mut input = fixed();
+        input.conversation = chat(80, 2_000);
+        let t = |m| assemble(&input, m).tokens_sent;
+        let (raw, safe, balanced, aggressive) = (
+            t(ContextMode::Raw),
+            t(ContextMode::Safe),
+            t(ContextMode::Balanced),
+            t(ContextMode::Aggressive),
+        );
+        assert!(raw >= safe && safe >= balanced && balanced >= aggressive);
+        assert!(raw > aggressive);
+        let raw_prompt = assemble(&input, ContextMode::Raw).prompt;
+        for i in 0..80 {
+            assert!(raw_prompt.contains(&format!("m{i} ")), "RAW omitió m{i}");
+        }
+        assert!(!raw_prompt.contains("omitidos"));
     }
 
     #[test]

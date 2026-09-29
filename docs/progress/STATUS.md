@@ -2,8 +2,8 @@
 
 **Actualizado:** 2026-09-28 · por claude-code/sonnet-5.5
 **Fase actual:** P07.5 · Chat general (rama `phase/p075-chat`, ADR-0006 aceptado)
-**Paso actual:** P07.5.S3 · Handoff conversacional (S1 y S2 hechos). P08–P16 siguen provisionales
-**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada). Bitácora: `docs/phases/P07.5-chat.md`.
+**Paso actual:** P07.5.S4 · Agente «chat general» (S1–S3 hechos). P08–P16 siguen provisionales
+**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
 
 ## Salud del repo
@@ -27,7 +27,7 @@
 ## Progreso de P07.5
 - [x] P07.5.S1 Continuar la sesión después del turno (`continue_session`)
 - [x] P07.5.S2 Instalación global mínima
-- [ ] P07.5.S3 Handoff conversacional
+- [x] P07.5.S3 Handoff conversacional
 - [ ] P07.5.S4 Agente «chat general» (worktree `symphony/chat`, `Running → Ready`)
 - [ ] P07.5.S5 Commit por turno y estado en el bus
 - [ ] P07.5.S6 Cambio de modelo/proveedor
@@ -36,8 +36,9 @@
 - [ ] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
-1. **Leo:** en tu máquina hay copias viejas de `symphony.exe`/`symphonyd.exe` (v0.1.0, sin S1) en `%APPDATA%\npm`, antes que `~/.cargo/bin` en el PATH. Para usar S1 hay que reemplazarlas o borrarlas y correr los dos `cargo install` de QUICKSTART §1 (con `symphony daemon stop` antes).
-2. P07.5.S3: `HandoffInput` gana la conversación (transcript recortado por modo).
+1. P07.5.S4: agente «chat general» (worktree y rama `symphony/chat` basada en `main`, uno por proyecto, idempotente) y transición `Running → Ready` con «esperando mensaje».
+2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
+pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin S3).
 3. Leo sigue usando v0.1 y anotando en `docs/research/uso-v0.1.md`; el gate de ≥ 2 semanas aplica a la revisión de P08–P16 tras cerrar P07.5.
 
 ## Propuesta clave para S10: Chat agentico con failover entre proveedores

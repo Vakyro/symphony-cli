@@ -928,17 +928,13 @@ pub fn latest_checkpoint(
         .optional()?)
 }
 
-/// Caracteres de toda la conversación del agente (cortos + largos en el object store):
-/// lo que costaría reenviar el historial sin optimizar.
-pub fn conversation_chars(conn: &Connection, agent: AgentId) -> Result<i64, RepoError> {
-    Ok(conn.query_row(
-        "SELECT COALESCE((SELECT SUM(LENGTH(content)) FROM messages WHERE agent_id = ?1), 0)
-              + COALESCE((SELECT SUM(b.size_bytes) FROM messages m
-                          JOIN context_objects o ON o.id = m.content_object_id
-                          JOIN blobs b ON b.hash = o.blob_hash WHERE m.agent_id = ?1), 0)",
-        [agent.to_string()],
-        |r| r.get(0),
-    )?)
+/// Runs que arrancaron desde un checkpoint (handoff real, no el primer spawn).
+pub fn handoff_run_ids(conn: &Connection, agent: AgentId) -> Result<Vec<RunId>, RepoError> {
+    let mut stmt = conn.prepare(
+        "SELECT to_run_id FROM handoffs WHERE agent_id = ?1 AND checkpoint_id IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([agent.to_string()], |r| col(r, 0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 #[derive(Debug, Clone, PartialEq)]

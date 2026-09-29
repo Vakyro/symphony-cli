@@ -290,7 +290,10 @@ impl Runtime {
         agent: AgentId,
         reason: &str,
     ) -> Result<crate::handoff::PreparedHandoff, String> {
-        crate::handoff::prepare(&self.reader, agent, reason).await
+        let objects = symphony_object_store::ObjectStore::new(
+            symphony_core::SymphonyHome::at(&self.home).objects_dir(),
+        );
+        crate::handoff::prepare(&self.reader, &objects, agent, reason).await
     }
 
     /// Espera a que terminen los executors lanzados y sus checkpoints (apagado y tests).

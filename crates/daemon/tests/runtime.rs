@@ -1073,11 +1073,122 @@ command = ["git", "no-such-subcommand"]
         "+arreglado",
         "--- src/nuevo.txt (archivo nuevo)\ncontenido nuevo",
         "--- tardio.txt (archivo nuevo)\nescrito tarde",
+        "## Conversación hasta ahora",
+        "**Usuario:** Arreglar auth",
+        "**Asistente:** Voy por partes.",
     ] {
         assert!(p.contains(want), "falta {want:?} en:\n{p}");
     }
     assert_eq!(h.tokens_sent, symphony_context::handoff::estimate_tokens(p));
-    assert!(h.tokens_raw_estimate > h.tokens_sent, "{h:?}");
+    // Nada se recortó: lo que costaría en RAW es lo que se envió.
+    assert!(h.tokens_raw_estimate >= h.tokens_sent, "{h:?}");
+    e.writer.shutdown();
+}
+
+/// P07.5.S3 (criterio de PLAN): con una conversación de 10 turnos, el handoff en modo
+/// `raw` lleva todos, en orden, sin omitir nada.
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_of_a_ten_turn_conversation_keeps_every_turn_in_raw() {
+    let script = "[[step]]\nkind = \"say\"\ntext = \"ok\"\n";
+    let e = env(script, None).await;
+    let mut r = req(&e, "Charla larga", Execution::Exact("fake/fast".into()));
+    r.context_mode = ContextMode::Raw;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    for i in 1..10 {
+        e.writer.handle().flush().await.unwrap();
+        e.runtime
+            .continue_session(created.agent_id, &format!("mensaje {i}"))
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+    }
+    e.writer.handle().flush().await.unwrap();
+
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "cambio")
+        .await
+        .unwrap();
+    let p = &h.prompt;
+    assert_eq!(h.mode, ContextMode::Raw);
+    assert!(p.contains("**Usuario:** Charla larga"), "{p}");
+    let mut at = 0;
+    for i in 1..10 {
+        let want = format!("**Usuario:** mensaje {i}");
+        let found = p[at..]
+            .find(&want)
+            .unwrap_or_else(|| panic!("falta {want:?} o está fuera de orden en:\n{p}"));
+        at += found + want.len();
+    }
+    assert_eq!(p.matches("**Usuario:**").count(), 10);
+    assert_eq!(p.matches("**Asistente:** ok").count(), 10);
+    assert!(!p.contains("omitidos"));
+    e.writer.shutdown();
+}
+
+/// P07.5.S3: el handoff lleva la conversación (usuario y asistente) y no anida el
+/// prompt de un handoff anterior, que ya trae esa misma conversación.
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_carries_the_conversation_without_nesting_earlier_handoffs() {
+    let first = "[[step]]\nkind = \"say\"\ntext = \"primero\"\n[[step]]\nkind = \"hang\"\n";
+    let second = "[[step]]\nkind = \"say\"\ntext = \"segundo\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Arreglar auth",
+            Execution::Exact("alpha/fast".into()),
+        ))
+        .await
+        .unwrap();
+    // Esperar a que el primer executor haya dicho algo antes de cambiarlo.
+    let started = std::time::Instant::now();
+    loop {
+        e.writer.handle().flush().await.unwrap();
+        if count(&e, "messages WHERE role = 'ASSISTANT'") > 0 {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(15), "sin respuesta");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    e.runtime
+        .switch(created.agent_id, "beta/smart")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "otro cambio")
+        .await
+        .unwrap();
+    let p = &h.prompt;
+    let order: Vec<usize> = [
+        "**Usuario:** Arreglar auth",
+        "**Asistente:** primero",
+        // Sin nada del usuario entre medias, las dos respuestas quedan juntas.
+        "
+
+segundo",
+    ]
+    .iter()
+    .map(|want| {
+        p.find(want)
+            .unwrap_or_else(|| panic!("falta {want:?} en:\n{p}"))
+    })
+    .collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "fuera de orden:\n{p}"
+    );
+    assert_eq!(
+        p.matches("Retomas una tarea de código").count(),
+        1,
+        "el prompt del handoff anterior no debe entrar a la conversación:\n{p}"
+    );
     e.writer.shutdown();
 }
 
