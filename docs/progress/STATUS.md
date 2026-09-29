@@ -3,7 +3,7 @@
 **Actualizado:** 2026-09-26 · por claude-code/haiku-4.5
 **Fase actual:** P07 · TUI y release v0.1 (rama `phase/p07-tui`)
 **Paso actual:** P07.S10 · Replanificación (gate diferido: uso real ≥ 2 semanas). P07 cerrada por decisión de Leo (2026-09-26); P08 no empieza sin el ADR de S10
-**Estado del paso:** v0.1.0 ✅ en `main` con CI verde (200 tests). Leo empieza uso real 2026-09-26.
+**Estado del paso:** v0.1.0 ✅ en `main` con CI verde (200 tests). Uso real iniciado 2026-09-26; primeras observaciones en `docs/research/uso-v0.1.md`.
 **En curso por:** —
 
 ## Salud del repo
@@ -25,9 +25,23 @@
 - [ ] P07.S10 Replanificación (gate: ≥ 2 semanas de uso real)
 
 ## Próxima acción concreta
-1. Leo usa v0.1 en trabajo real (P07.S10) y anota en `docs/research/uso-v0.1.md` qué usó, qué le faltó, qué falló, cuántos handoffs hubo y si la máquina se trabó.
+1. Leo continúa usando v0.1 con Claude Code y Codex durante al menos 2 semanas; registra tareas, handoffs, fallas y rendimiento en `docs/research/uso-v0.1.md`.
 2. P07.S9: skill `health` + revisión de código del diff de la fase; corregir hallazgos.
-3. Al terminar el uso: ADR de replanificación de P08–P16 con `the-council`, merge a `main` y tag `p07-done`.
+3. Al terminar el uso: ADR de replanificación de P08–P16 con `the-council`, incluyendo las propuestas del día 1, merge a `main` y tag `p07-done`.
+
+## Propuesta clave para S10: Chat agentico con failover entre proveedores
+
+**Descubierto en pruebas de Leo.** El atractivo principal de Symphony no es orquestar múltiples agentes autónomos complejos, sino ofrecer un **chat simple y agentico (como Claude Code o Codex) que cambia automáticamente entre proveedores cuando uno agota su contexto, sin perder historial**.
+
+| Aspecto | Descripción |
+|---|---|
+| **Experiencia** | Chat familiar: escribe tareas, obtén respuestas con tools/skills. Selecciona proveedores disponibles (ej: Claude Code + Codex). |
+| **Killer feature** | Cuando un proveedor agota tokens/contexto, pasa automáticamente al siguiente con el historial intacto. El usuario puede cambiar manualmente también. |
+| **Contexto en failover** | Historial local en `.symphony/`; al cambiar, resume la sesión con lo acumulado: "aquí está todo hasta ahora, continuemos con...". Cada proveedor adapta a sus límites. |
+| **Skills** | Hereda las skills del proyecto (build, test, review, etc.); se invocan según el proveedor activo. |
+| **Ubicación en plan** | Decisión en S10; implementación en P08 si se aprueba. Recicla event bus, adapters y runtime de P05–P07. |
+
+Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y validaciones pendientes.
 
 ## Handoff para el siguiente agente
 - La TUI está en `crates/tui`: `app.rs` tiene el estado y la lógica pura, `ui.rs` el render, `io.rs` el IPC y `lib.rs` el loop de terminal. Lee «Decisiones tomadas» en la bitácora P07.
