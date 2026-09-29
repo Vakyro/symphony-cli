@@ -527,8 +527,23 @@ async fn agent_send(req: Request, state: &State) -> Response {
         Some(t) => t,
         None => return Response::error(req.id, "invalid_params", "falta `text` o `message`"),
     };
-    match state.runtime.send_message(agent_id, text).await {
-        Ok(()) => Response::ok(req.id, json!({ "ok": true })),
+    // Con el executor vivo el mensaje entra por stdin; si el turno ya terminó, se
+    // retoma la sesión del CLI (P07.5.S1).
+    let sent = if state.runtime.is_live(agent_id) {
+        state
+            .runtime
+            .send_message(agent_id, text)
+            .await
+            .map(|()| json!({ "ok": true }))
+    } else {
+        state
+            .runtime
+            .continue_session(agent_id, text)
+            .await
+            .map(|run| json!({ "ok": true, "resumed": true, "run_id": run.to_string() }))
+    };
+    match sent {
+        Ok(v) => Response::ok(req.id, v),
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }
 }

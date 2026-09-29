@@ -543,6 +543,7 @@ impl Runtime {
                 worktree: wt_path,
                 cli_model: model.cli_model_id,
                 prompt: objective,
+                resume_session: None,
             };
             if let Err(reason) = self.launch(launch).await {
                 created.state = AgentState::Failed;

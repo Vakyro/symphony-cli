@@ -1421,6 +1421,93 @@ ms = 1500
     e.writer.shutdown();
 }
 
+/// P07.5.S1: un mensaje después del turno retoma la sesión del CLI (mismo modelo y
+/// mismo session id, sin handoff) y reabre al agente `COMPLETED`.
+#[tokio::test(flavor = "multi_thread")]
+async fn message_after_the_turn_resumes_the_cli_session() {
+    let script = "[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+    let e = env(script, None).await;
+    let waiting = e
+        .runtime
+        .create_agent(req(&e, "sin modelo", Execution::DecideLater))
+        .await
+        .unwrap();
+    let err = e
+        .runtime
+        .continue_session(waiting.agent_id, "hola")
+        .await
+        .unwrap_err()
+        .0;
+    assert!(err.contains("todavía no tiene una sesión"), "{err}");
+
+    let created = e
+        .runtime
+        .create_agent(req(&e, "con modelo", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id;
+    let state =
+        |e: &Env| one::<String>(e, &format!("SELECT state FROM agents WHERE id = '{agent}'"));
+    assert_eq!(state(&e), "COMPLETED");
+    let first: String = one(
+        &e,
+        &format!("SELECT cli_session_id FROM agent_runs WHERE agent_id = '{agent}'"),
+    );
+
+    let run = e.runtime.continue_session(agent, "sigue").await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(
+        one::<i64>(
+            &e,
+            &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id = '{agent}'")
+        ),
+        2
+    );
+    let second: String = one(
+        &e,
+        &format!("SELECT cli_session_id FROM agent_runs WHERE id = '{run}'"),
+    );
+    assert_eq!(second, first, "el run nuevo debe continuar la misma sesión");
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT model_id FROM agent_runs WHERE id = '{run}'")
+        ),
+        "fake/fast"
+    );
+    assert_eq!(state(&e), "COMPLETED");
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT status FROM tasks WHERE id = (SELECT task_id FROM agents WHERE id = '{agent}')"
+            )
+        ),
+        "DONE"
+    );
+    // Sin handoff ni cambio de executor: la conversación sigue en el CLI.
+    assert_eq!(count(&e, "executor_changes"), 0);
+    assert_eq!(
+        one::<i64>(
+            &e,
+            &format!("SELECT COUNT(*) FROM handoffs WHERE to_run_id = '{run}'")
+        ),
+        0
+    );
+    let said: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM messages WHERE agent_id = '{agent}' AND role = 'USER' AND content = 'sigue'"
+        ),
+    );
+    assert_eq!(said, 1);
+    e.writer.shutdown();
+}
+
 /// Un CLI lento en imprimir su primera línea no es un cuelgue: la inactividad
 /// se mide desde el arranque (antes moría como NO_HEARTBEAT en el primer tick).
 #[tokio::test(flavor = "multi_thread")]

@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use symphony_adapter_common::{AgentEvent, ProviderAdapter, ProviderError, SpawnRequest};
+use symphony_adapter_common::{
+    AgentEvent, ProviderAdapter, ProviderError, ResumeRequest, SpawnRequest,
+};
 use symphony_core::{
     AgentId, AgentState, ExecutorChangeId, FailoverPolicy, FailureType, HandoffId, MessageId,
     ProjectId, ProviderFailureId, RunEndReason, RunId, RunStatus, TaskId, TaskStatus,
@@ -34,6 +36,8 @@ pub(crate) struct Launch {
     pub worktree: PathBuf,
     pub cli_model: String,
     pub prompt: String,
+    /// Sesión del CLI a continuar (`resume_spec`) en vez de abrir una nueva.
+    pub resume_session: Option<String>,
 }
 
 /// Órdenes para el executor vivo de un agente.
@@ -146,10 +150,14 @@ impl Runtime {
             return Err("la base de datos no acepta escrituras".into());
         }
         let started = async {
-            let spec = l
-                .adapter
-                .spawn_spec(&spawn_req)
-                .map_err(|e| e.to_string())?;
+            let spec = match &l.resume_session {
+                Some(id) => l.adapter.resume_spec(&ResumeRequest {
+                    spawn: spawn_req.clone(),
+                    cli_session_id: id.clone(),
+                }),
+                None => l.adapter.spawn_spec(&spawn_req),
+            }
+            .map_err(|e| e.to_string())?;
             let mut proc = symphony_process::spawn(spec)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -173,10 +181,17 @@ impl Runtime {
             }
         };
         let (run_id, pid) = (l.run_id, proc.pid().unwrap_or(0));
+        let session = l.resume_session.clone();
         let _ = self
             .writer
             .write(Box::new(move |t| {
-                Ok(repo::set_run_process(t, run_id, pid, None, None)?)
+                Ok(repo::set_run_process(
+                    t,
+                    run_id,
+                    pid,
+                    session.as_deref(),
+                    None,
+                )?)
             }))
             .await;
         let (control, rx) = mpsc::unbounded_channel();
@@ -712,6 +727,7 @@ impl Runtime {
             worktree: PathBuf::from(worktree),
             cli_model: model.cli_model_id,
             prompt,
+            resume_session: None,
         };
         // Si no arranca, `launch` ya dejó al agente `FAILED` con razón y recovery item.
         let _ = self.launch(launch).await;
@@ -950,6 +966,110 @@ impl Runtime {
             occurred_at: now_ms(),
         };
         self.bus.publish(ev).await.map_err(op_err)
+    }
+
+    /// Mensaje después de terminado el turno (ADR-0005, adenda; P07.5.S1): retoma la
+    /// sesión del CLI con `resume_spec`, con el mismo modelo y sin handoff, porque la
+    /// conversación sigue en el CLI. Un agente `COMPLETED` se reabre.
+    pub async fn continue_session(
+        &self,
+        agent_id: AgentId,
+        text: &str,
+    ) -> Result<RunId, AgentOpError> {
+        if self.is_live(agent_id) {
+            return Err(AgentOpError(
+                "el agente está trabajando: su executor recibe el mensaje directamente".into(),
+            ));
+        }
+        let (agent, last) = self.read_op(|c| {
+            let agent = repo::get_agent(c, agent_id)?;
+            let last = repo::runs_of(c, agent_id)?
+                .into_iter()
+                .rev()
+                .find(|r| r.cli_session_id.is_some());
+            Ok((agent, last))
+        })?;
+        if !matches!(agent.state, AgentState::Ready | AgentState::Completed) {
+            let hint = match agent.state {
+                AgentState::Failed => "; recupéralo con restart o reclaim",
+                AgentState::Paused => "; reanúdalo primero",
+                _ => "",
+            };
+            return Err(AgentOpError(format!(
+                "el agente #{} está {} y no puede recibir mensajes ahora{hint}",
+                agent.number,
+                agent.state.as_str()
+            )));
+        }
+        let (last, session) = last
+            .and_then(|r| {
+                let session = r.cli_session_id.clone()?;
+                Some((r, session))
+            })
+            .ok_or_else(|| {
+                AgentOpError(format!(
+                    "el agente #{} todavía no tiene una sesión que continuar: asígnale un modelo primero",
+                    agent.number
+                ))
+            })?;
+        let model = self
+            .read_op(|c| repo::eligible_model(c, &last.model_id))?
+            .map_err(|why| {
+                AgentOpError(format!(
+                    "no se puede continuar con el modelo anterior: {why}"
+                ))
+            })?;
+        let adapter = self
+            .adapter(&model.provider_id)
+            .ok_or_else(|| AgentOpError(format!("no hay adapter para `{}`", model.provider_id)))?;
+        let worktree = self
+            .read_op(|c| {
+                let wt = agent.worktree_id.ok_or_else(|| repo::RepoError::NotFound {
+                    entity: "worktree",
+                    id: agent.id.to_string(),
+                })?;
+                repo::get_worktree(c, wt)
+            })?
+            .path;
+
+        let run = RunId::new();
+        let (task_id, state) = (agent.task_id, agent.state);
+        let (provider, model_id) = (model.provider_id.clone(), model.model_id.clone());
+        self.writer
+            .write(Box::new(move |t| {
+                let now = now_ms();
+                if state == AgentState::Completed {
+                    repo::set_agent_state(t, agent_id, AgentState::Ready, None, now)?;
+                }
+                repo::set_agent_state(t, agent_id, AgentState::Running, None, now)?;
+                let task = repo::get_task(t, task_id)?.status;
+                if task == TaskStatus::Done {
+                    repo::set_task_status(t, task_id, TaskStatus::Ready, None, now)?;
+                }
+                if task != TaskStatus::Running {
+                    repo::set_task_status(t, task_id, TaskStatus::Running, None, now)?;
+                }
+                repo::open_run(t, run, agent_id, &provider, &model_id, now)?;
+                Ok(())
+            }))
+            .await
+            .map_err(op_err)?;
+        let launch = Launch {
+            adapter,
+            project_id: agent.project_id,
+            agent_id,
+            task_id,
+            run_id: run,
+            provider_id: model.provider_id,
+            model_id: model.model_id,
+            worktree: PathBuf::from(worktree),
+            cli_model: model.cli_model_id,
+            prompt: text.to_string(),
+            resume_session: Some(session),
+        };
+        // Si no arranca, `launch` ya dejó al agente `FAILED` con razón y recovery item.
+        self.launch(launch).await.map_err(AgentOpError)?;
+        Ok(run)
     }
 
     /// Reabre un agente `FAILED` con un run nuevo desde su último checkpoint,
