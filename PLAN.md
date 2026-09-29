@@ -422,7 +422,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 | P15 ⚠️ | GUI de escritorio | Tauri + SolidJS sobre la misma API | `p15-done` |
 | P16 ⚠️ | Validación final | Todas las vistas y journeys probados, benchmark principal, v1.0 | `p16-done`, `v1.0.0` |
 
-⚠️ **Provisional.** P07.5 se añadió por ADR-0006 (aceptado). P08–P16 describen la dirección, no un contrato. Se revisan en P07.S10 con evidencia de uso real, y cualquier cambio queda en un ADR. Hasta entonces, un agente no invierte trabajo en esas fases (ni crea sus crates, tablas o vistas) y el MVP se queda en 2 proveedores: Claude Code y Codex.
+⚠️ **Provisional.** P07.5 se añadió por ADR-0006 (aceptado). P08–P16 describen la dirección, no un contrato. Se revisan en P07.S10 con evidencia de uso real (criterio de contenido, ADR-0007), tras cerrar P07.5, y cualquier cambio queda en un ADR. Hasta entonces, un agente no invierte trabajo en esas fases (ni crea sus crates, tablas o vistas) y el MVP se queda en 2 proveedores: Claude Code y Codex.
 
 ---
 
@@ -854,7 +854,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - `health`, protocolo §4.6. Tags `p07-done` y `v0.1.0`.
 
 ### P07.S10 · Replanificación (gate)
-- **Qué:** Leo usa v0.1 en trabajo real al menos 2 semanas, solo con Claude Code y Codex. Después se revisan P08–P16 con esa evidencia.
+- **Qué:** Leo usa v0.1 en trabajo real, solo con Claude Code y Codex. Después se revisan P08–P16 con esa evidencia. **ADR-0007 (2026-09-29):** el gate se cumple por criterio de contenido (uso con los dos proveedores, con un cambio de proveedor, y lo que duele anotado), no por 14 días; la revisión se hace tras cerrar P07.5, y el tiempo solo se exige para lo que dependa de uso prolongado (p. ej. P08).
 - **Por qué:** P08–P16 se escribieron antes de tener producto. El uso diario dice qué duele de verdad (¿recursos?, ¿handoff?, ¿merge?) y qué sobra.
 - **Cómo:**
   1. Durante el uso, Leo (o el agente, con su permiso) anota en `docs/research/uso-v0.1.md`: qué usó, qué le faltó, qué falló, cuántos handoffs hubo y si funcionaron, y si la máquina se trabó.

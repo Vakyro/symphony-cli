@@ -22,7 +22,7 @@
 - [x] P07.S7 Snapshots y E2E (terminal real ✅ Leo; Journey A live con Claude Code ✅ 17 s)
 - [x] P07.S8 Release v0.1.0 (tag `v0.1.0`, CHANGELOG, build release: daemon idle 16.5 MB)
 - [x] P07.S9 Cierre (revisión de código: 1 hallazgo corregido, `spawn src/main.rs …` ya no se toma como modelo; `health` no corrido)
-- [ ] P07.S10 Replanificación (gate: ≥ 2 semanas de uso real; adelantada solo para el chat por ADR-0006)
+- [ ] P07.S10 Replanificación (gate por criterio de contenido, ADR-0007: cumplido para el chat; la revisión de P08–P16 va tras cerrar P07.5)
 
 ## Progreso de P07.5
 - [x] P07.5.S1 Continuar la sesión después del turno (`continue_session`)
@@ -39,7 +39,7 @@
 1. P07.5.S8: skills en el chat (ver PLAN). Antes, Leo prueba S7 (ya reinstalado en `~/.cargo/bin` con los dos binarios) y sus opiniones ya están documentadas (Día 2 de `uso-v0.1.md`: proceso en vivo, copiar, scroll, textos cortados, exportar `.md`, UX). Decidir con Leo qué entra antes de S8.
 2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
 pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin S3).
-3. Leo sigue usando v0.1 y anotando en `docs/research/uso-v0.1.md`; el gate de ≥ 2 semanas aplica a la revisión de P08–P16 tras cerrar P07.5.
+3. ADR-0007 (aceptado): el gate de ≥ 2 semanas pasa a criterio de contenido. Antes de S8 se atienden las observaciones del Día 2 (`uso-v0.1.md`): 1) textos cortados (bug), 2) proceso del agente en vivo + medir rendimiento, 3) copiar/scroll de respuesta y exportar a `.md`. Leo sigue anotando en `uso-v0.1.md`.
 
 ## Propuesta clave para S10: Chat agentico con failover entre proveedores
 
