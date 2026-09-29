@@ -391,8 +391,19 @@ impl Runtime {
                         now,
                     )?;
                     repo::set_handoff_outcome(t, run, "CONTINUED")?;
-                    repo::set_agent_state(t, agent, AgentState::Completed, None, now)?;
-                    repo::set_task_status(t, task, TaskStatus::Done, None, now)?;
+                    if repo::get_task(t, task)?.code == repo::CHAT_TASK_CODE {
+                        repo::set_agent_state(
+                            t,
+                            agent,
+                            AgentState::Ready,
+                            Some("esperando mensaje"),
+                            now,
+                        )?;
+                        repo::set_task_status(t, task, TaskStatus::Ready, None, now)?;
+                    } else {
+                        repo::set_agent_state(t, agent, AgentState::Completed, None, now)?;
+                        repo::set_task_status(t, task, TaskStatus::Done, None, now)?;
+                    }
                     Ok(())
                 }))
                 .await;

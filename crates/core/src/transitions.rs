@@ -27,7 +27,9 @@ impl AgentState {
                 Paused,
                 Cancelled,
             ],
+            // `Ready` = el chat terminó su turno y espera otro mensaje (P07.5.S4).
             Running => &[
+                Ready,
                 WaitingProvider,
                 WaitingResource,
                 Testing,
@@ -148,6 +150,7 @@ mod tests {
         (
             "RUNNING",
             &[
+                "READY",
                 "WAITING_PROVIDER",
                 "WAITING_RESOURCE",
                 "TESTING",

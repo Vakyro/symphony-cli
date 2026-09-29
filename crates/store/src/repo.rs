@@ -209,6 +209,23 @@ pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> Result<(), RepoErro
     Ok(())
 }
 
+/// Código de la task del chat general: identifica al agente sin migración (P07.5.S4).
+pub const CHAT_TASK_CODE: &str = "CHAT";
+
+/// El agente del chat del proyecto, en cualquier estado.
+pub fn chat_agent(conn: &Connection, project: ProjectId) -> Result<Option<Agent>, RepoError> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {AGENT_COLS} FROM agents WHERE archived_at IS NULL AND task_id IN
+                 (SELECT id FROM tasks WHERE project_id = ?1 AND code = ?2)"
+            ),
+            params![project.to_string(), CHAT_TASK_CODE],
+            agent_row,
+        )
+        .optional()?)
+}
+
 pub fn get_task(conn: &Connection, id: TaskId) -> Result<Task, RepoError> {
     conn.query_row(
         "SELECT id, project_id, code, title, description, status, status_reason, priority FROM tasks WHERE id = ?1",

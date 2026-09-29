@@ -93,6 +93,9 @@ pub enum MergePreflight {
 }
 
 /// Nombre de rama de un agente (IDEA §5.9): `symphony/<sesión>/agent-003`.
+/// Rama fija del chat general: una por proyecto, basada en la rama principal (ADR-0006).
+pub const CHAT_BRANCH: &str = "symphony/chat";
+
 pub fn agent_branch(session: &str, agent_number: u32) -> String {
     format!("symphony/{session}/agent-{agent_number:03}")
 }

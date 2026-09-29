@@ -399,6 +399,7 @@ async fn agent_create(req: Request, state: &State) -> Response {
         failover,
         context_mode,
         priority,
+        chat: p.get("chat").and_then(Value::as_bool).unwrap_or(false),
     };
 
     // En su propia tarea: si el request vence (REQUEST_TIMEOUT), la creación

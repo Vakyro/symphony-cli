@@ -150,6 +150,7 @@ fn req(e: &Env, title: &str, execution: Execution) -> CreateAgent {
         failover: FailoverPolicy::Any,
         context_mode: ContextMode::Balanced,
         priority: 0,
+        chat: false,
     }
 }
 
@@ -293,6 +294,46 @@ async fn decide_later_creates_a_ready_agent_without_executor() {
     assert!(created.worktree.join("README.md").is_file());
     assert_eq!(count(&e, "agent_runs"), 0);
     assert_eq!(count(&e, "checkpoints"), 1);
+    assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "READY");
+    e.writer.shutdown();
+}
+
+/// P07.5.S4: crear el chat dos veces devuelve el mismo agente, en `symphony/chat`.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_is_created_once_per_project_on_its_own_branch() {
+    let e = env(WORK, None).await;
+    let mut r = req(&e, "Chat", Execution::DecideLater);
+    r.chat = true;
+    let first = e.runtime.create_agent(r.clone()).await.unwrap();
+    let again = e.runtime.create_agent(r).await.unwrap();
+    assert_eq!(again.agent_id, first.agent_id);
+    assert_eq!(again.worktree, first.worktree);
+    assert_eq!(first.branch, "symphony/chat");
+    assert_eq!(first.task_code, "CHAT");
+    assert_eq!(count(&e, "agents"), 1);
+    assert_eq!(count(&e, "worktrees"), 1);
+    assert_eq!(count(&e, "tasks"), 1);
+    assert_eq!(
+        git(&e.repo, &["rev-parse", "symphony/chat"]),
+        git(&e.repo, &["rev-parse", "HEAD"])
+    );
+    e.writer.shutdown();
+}
+
+/// P07.5.S4: el turno del chat termina en `READY` («esperando mensaje»), no en `COMPLETED`.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_waits_for_a_message_after_its_turn() {
+    let e = env(WORK, None).await;
+    let mut r = req(&e, "Hola", Execution::Exact("fake/fast".into()));
+    r.chat = true;
+    e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+    assert_eq!(
+        one::<String>(&e, "SELECT state_reason FROM agents"),
+        "esperando mensaje"
+    );
     assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "READY");
     e.writer.shutdown();
 }

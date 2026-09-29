@@ -42,6 +42,8 @@ pub struct CreateAgent {
     pub failover: FailoverPolicy,
     pub context_mode: ContextMode,
     pub priority: i64,
+    /// Chat general del proyecto: idempotente, rama `symphony/chat` sobre la principal.
+    pub chat: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -366,7 +368,7 @@ impl Runtime {
         let now = now_ms();
 
         // 3. Identidad del agente.
-        let (project, session, number, task_code) = self.read(|c| {
+        let (project, session, number, task_code, existing) = self.read(|c| {
             let project = repo::project_by_root(c, &root_text)?;
             let (session, number, code) = match &project {
                 Some(p) => (
@@ -376,34 +378,83 @@ impl Runtime {
                 ),
                 None => (None, 1, "T-1".to_string()),
             };
-            Ok((project, session, number, code))
+            let existing = match &project {
+                Some(p) if req.chat => repo::chat_agent(c, p.id)?,
+                _ => None,
+            };
+            Ok((project, session, number, code, existing))
         })?;
+        if let Some(agent) = existing {
+            let (wt, task_code) = self.read(|c| {
+                let wt = agent.worktree_id.ok_or_else(|| repo::RepoError::NotFound {
+                    entity: "worktree",
+                    id: agent.id.to_string(),
+                })?;
+                Ok((
+                    repo::get_worktree(c, wt)?,
+                    repo::get_task(c, agent.task_id)?.code,
+                ))
+            })?;
+            return Ok(Created {
+                agent_id: agent.id,
+                task_id: agent.task_id,
+                number: agent.number,
+                task_code,
+                worktree: PathBuf::from(wt.path),
+                branch: wt.branch,
+                state: agent.state,
+                state_reason: agent.state_reason,
+                run: None,
+            });
+        }
+        let task_code = if req.chat {
+            repo::CHAT_TASK_CODE.to_string()
+        } else {
+            task_code
+        };
         let project_id = project.as_ref().map_or_else(ProjectId::new, |p| p.id);
         let session_id = session.unwrap_or_default();
         let agent_id = AgentId::new();
         let task_id = TaskId::new();
         let worktree_id = WorktreeId::new();
         let short_session = session_id.to_string().to_lowercase();
-        let branch = symphony_git::agent_branch(
-            &short_session[short_session.len().saturating_sub(8)..],
-            u32::try_from(number).unwrap_or(u32::MAX),
-        );
+        let (branch, dir, wt_base) = if req.chat {
+            let main = project
+                .as_ref()
+                .map(|p| p.default_branch.clone())
+                .or_else(|| branch_name.clone())
+                .unwrap_or_else(|| "main".into());
+            (
+                symphony_git::CHAT_BRANCH.to_string(),
+                "chat".to_string(),
+                main,
+            )
+        } else {
+            (
+                symphony_git::agent_branch(
+                    &short_session[short_session.len().saturating_sub(8)..],
+                    u32::try_from(number).unwrap_or(u32::MAX),
+                ),
+                format!("agent-{number:03}"),
+                base.clone(),
+            )
+        };
         let wt_path = self
             .home
             .join("worktrees")
             .join(project_id.to_string())
-            .join(format!("agent-{number:03}"));
+            .join(dir);
 
         // 4. Worktree. Si falla, no se creó nada en la base.
         let plan = {
-            let (repo_root, wt_path, branch, base) = (
+            let (repo_root, wt_path, branch, wt_base) = (
                 repo_root.clone(),
                 wt_path.clone(),
                 branch.clone(),
-                base.clone(),
+                wt_base.clone(),
             );
             tokio::task::spawn_blocking(move || {
-                prepare_worktree(&repo_root, &wt_path, &branch, &base)
+                prepare_worktree(&repo_root, &wt_path, &branch, &wt_base)
             })
             .await
             .map_err(store_err)?
@@ -461,7 +512,7 @@ impl Runtime {
                 project_id,
                 path: wt_path.display().to_string(),
                 branch: branch.clone(),
-                base_ref: base.clone(),
+                base_ref: wt_base,
                 deps_strategy: plan.strategy.as_str().into(),
                 status: "READY".into(),
             },
