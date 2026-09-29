@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -145,6 +146,8 @@ pub struct Inner {
     pub(crate) stale_after: Duration,
     /// Última actividad (línea de salida) de cada run vivo, en memoria.
     pub(crate) activity: Mutex<HashMap<RunId, Instant>>,
+    /// Umbral de tokens para rotar el proveedor del chat (P07.5.S6). 0 = apagado.
+    pub(crate) chat_switch_tokens: AtomicU64,
 }
 
 /// Persistencia del latido por defecto (producción).
@@ -212,12 +215,19 @@ impl Runtime {
                 heartbeat_every: watchdog.heartbeat_every,
                 stale_after: watchdog.stale_after,
                 activity: Mutex::default(),
+                chat_switch_tokens: AtomicU64::new(0),
             }),
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(rt.clone().watchdog());
         }
         rt
+    }
+
+    /// Activa (`Some`) o apaga (`None`) el cambio de proveedor del chat por uso de contexto.
+    pub fn set_chat_switch_tokens(&self, tokens: Option<u64>) {
+        self.chat_switch_tokens
+            .store(tokens.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Marca actividad de un run vivo (lo llama el pump por cada línea).

@@ -212,6 +212,20 @@ pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> Result<(), RepoErro
 /// Código de la task del chat general: identifica al agente sin migración (P07.5.S4).
 pub const CHAT_TASK_CODE: &str = "CHAT";
 
+/// Tokens de contexto del último turno que reportó uso en ese run (0 si ninguno).
+pub fn last_turn_tokens(conn: &Connection, run: RunId) -> Result<u64, RepoError> {
+    let n: Option<i64> = conn
+        .query_row(
+            "SELECT json_extract(payload_json, '$.context_tokens') FROM events
+             WHERE run_id = ?1 AND type = 'TurnUsage' ORDER BY id DESC LIMIT 1",
+            [run.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(n.and_then(|n| u64::try_from(n).ok()).unwrap_or(0))
+}
+
 /// Turnos terminados del agente (eventos `TurnFinished` ya escritos).
 pub fn turns_finished(conn: &Connection, agent: AgentId) -> Result<i64, RepoError> {
     Ok(conn.query_row(

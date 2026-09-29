@@ -176,6 +176,13 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         hook_cmd,
     );
 
+    match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
+        Ok(config) => runtime.set_chat_switch_tokens(config.chat.switch_at_tokens),
+        Err(e) => {
+            tracing::warn!(error = %e, "config.toml no se pudo leer; el chat no cambia por umbral")
+        }
+    }
+
     let state = Arc::new(State {
         started: Instant::now(),
         home: home.to_path_buf(),
@@ -602,7 +609,12 @@ async fn agent_switch(req: Request, state: &State) -> Response {
         Some(m) => m,
         None => return Response::error(req.id, "invalid_params", "falta `model`"),
     };
-    match state.runtime.switch(agent_id, model).await {
+    let message = req.params.get("message").and_then(Value::as_str);
+    match state
+        .runtime
+        .switch_with_message(agent_id, model, message)
+        .await
+    {
         Ok(run_id) => Response::ok(
             req.id,
             json!({ "ok": true, "run_id": run_id.to_string(), "model": model }),

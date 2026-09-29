@@ -2,8 +2,8 @@
 
 **Actualizado:** 2026-09-29 · por claude-code/sonnet-5.5
 **Fase actual:** P07.5 · Chat general (rama `phase/p075-chat`, ADR-0006 aceptado)
-**Paso actual:** P07.5.S6 · Cambio de modelo/proveedor (S1–S5 hechos). P08–P16 siguen provisionales
-**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live). Bitácora: `docs/phases/P07.5-chat.md`.
+**Paso actual:** P07.5.S7 · Vista Chat como inicio (S1–S6 hechos). P08–P16 siguen provisionales
+**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
 
 ## Salud del repo
@@ -30,13 +30,13 @@
 - [x] P07.5.S3 Handoff conversacional
 - [x] P07.5.S4 Agente «chat general» (worktree `symphony/chat`, `Running → Ready`)
 - [x] P07.5.S5 Commit por turno y estado en el bus
-- [ ] P07.5.S6 Cambio de modelo/proveedor
+- [x] P07.5.S6 Cambio de modelo/proveedor
 - [ ] P07.5.S7 Vista Chat como inicio
 - [ ] P07.5.S8 Skills en el chat
 - [ ] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
-1. P07.5.S6: cambio de modelo/proveedor del chat (`switch` desde `READY`; el mensaje nuevo se guarda como `USER` aparte).
+1. P07.5.S7: vista Chat como inicio en la TUI (selector de modelo por mensaje, scroll, señal de posición) y FLOW con la vista y el Journey F. La TUI hoy no tiene vista de chat: usa `agent.create` con `chat: true`, `agent.send` y `agent.switch` con `message`.
 2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
 pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin S3).
 3. Leo sigue usando v0.1 y anotando en `docs/research/uso-v0.1.md`; el gate de ≥ 2 semanas aplica a la revisión de P08–P16 tras cerrar P07.5.
@@ -56,7 +56,7 @@ pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin
 Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y validaciones pendientes.
 
 ## Handoff para el siguiente agente
-- **Dónde retomar (2026-09-29):** rama `phase/p075-chat` (S1–S5 hechos, sin fusionar hasta cerrar la fase). `main` = ADR-0006 aceptado + PLAN con P07.5. Empieza por **P07.5.S6**; al terminar, agrégalo a la bitácora `docs/phases/P07.5-chat.md`. Corre `cargo xtask check` antes de tocar código.
+- **Dónde retomar (2026-09-29):** rama `phase/p075-chat` (S1–S6 hechos, sin fusionar hasta cerrar la fase). `main` = ADR-0006 aceptado + PLAN con P07.5. Empieza por **P07.5.S7**; al terminar, agrégalo a la bitácora `docs/phases/P07.5-chat.md`. Corre `cargo xtask check` antes de tocar código.
 - **Contexto de esta sesión:** `docs/research/spike-p08-decisiones.md` y `docs/adr/0006-chat-general-y-replanificacion.md` tienen las decisiones y su evidencia; `docs/progress/SESSIONS.md` y `LEARNINGS.md` (sección P07.5) resumen lo hecho y aprendido.
 - **Pistas para S4 (agente «chat general»)** — verificar en el código antes de fiarse:
   - `runtime.rs` `create_agent` crea task + worktree + branch + checkpoint + run; la rama sale de `symphony_git::agent_branch(...)`. El chat necesita rama fija `symphony/chat` basada en `main` y ser idempotente (uno por proyecto): decidir cómo se identifica (¿`tasks.kind`? revisar los CHECK de DB §3.B y `docs/spec/symphony_database.md`).

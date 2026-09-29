@@ -200,6 +200,7 @@ impl Agent {
                 Step::QuotaExhausted { resets_at } => {
                     return self.fail("quota_exhausted", json!({"resets_at": resets_at}));
                 }
+                Step::Usage { tokens } => emit(&json!({"type": "usage", "tokens": tokens})),
                 Step::AuthError => return self.fail("authentication_failed", json!({})),
                 Step::Crash => std::process::abort(),
                 Step::Hang => loop {

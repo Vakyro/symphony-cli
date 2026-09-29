@@ -307,9 +307,29 @@ impl ProviderAdapter for ClaudeAdapter {
             }
             // Fin del turno: con `--input-format stream-json` el CLI no sale solo;
             // el runtime cierra stdin al ver este evento (ADR-0005, adenda P07).
-            (Some("result"), _) => vec![AgentEvent::TurnFinished {
-                last_message: s(&v, "result"),
-            }],
+            (Some("result"), _) => {
+                // ponytail: `usage` suma todas las llamadas del turno; sobreestima el contexto
+                // real. Suficiente para un umbral grueso; afinar si el gate de S9 lo pide.
+                let u = &v["usage"];
+                let tokens: u64 = [
+                    "input_tokens",
+                    "cache_read_input_tokens",
+                    "cache_creation_input_tokens",
+                ]
+                .iter()
+                .filter_map(|k| u[*k].as_u64())
+                .sum();
+                let mut events = Vec::new();
+                if tokens > 0 {
+                    events.push(AgentEvent::TurnUsage {
+                        context_tokens: tokens,
+                    });
+                }
+                events.push(AgentEvent::TurnFinished {
+                    last_message: s(&v, "result"),
+                });
+                events
+            }
             _ => Vec::new(),
         }
     }

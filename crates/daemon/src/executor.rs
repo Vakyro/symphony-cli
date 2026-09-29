@@ -613,6 +613,7 @@ impl Runtime {
                 "FAILOVER",
                 why_en,
                 Some(failure_id),
+                None,
             )
             .await
         {
@@ -633,6 +634,7 @@ impl Runtime {
         change: &'static str,
         reason_en: &str,
         failure_id: Option<ProviderFailureId>,
+        message: Option<&str>,
     ) -> Result<RunId, AgentOpError> {
         let adapter = self
             .adapter(&model.provider_id)
@@ -680,6 +682,16 @@ impl Runtime {
                     None,
                 )
             }
+        };
+        // El mensaje nuevo del usuario (cambio manual) va al final, para que lo responda primero.
+        let prompt = match message {
+            Some(m) => format!(
+                "{prompt}
+
+## Mensaje nuevo del usuario (respóndelo primero)
+{m}"
+            ),
+            None => prompt,
         };
         let run = RunId::new();
         let (agent_id, task_id, state) = (agent.id, agent.task_id, agent.state);
@@ -771,7 +783,23 @@ impl Runtime {
             resume_session: None,
         };
         // Si no arranca, `launch` ya dejó al agente `FAILED` con razón y recovery item.
-        let _ = self.launch(launch).await;
+        let (project, agent_id) = (agent.project_id, agent.id);
+        let launched = self.launch(launch).await;
+        // El mensaje se guarda aparte como `USER`: el primer `USER` del run es el prompt del
+        // handoff y se descarta al armar la conversación (P07.5.S3).
+        if let (Some(text), Ok(())) = (message, launched) {
+            let ev = BusEvent {
+                project_id: project.to_string(),
+                agent_id: Some(agent_id.to_string()),
+                run_id: Some(run.to_string()),
+                source: EventSource::User,
+                event: AgentEvent::UserMessage {
+                    text: text.to_string(),
+                },
+                occurred_at: now_ms(),
+            };
+            self.bus.publish(ev).await.map_err(op_err)?;
+        }
         Ok(run)
     }
 
@@ -802,6 +830,17 @@ impl Runtime {
     /// Cambio manual de modelo (P06.S5): `symphony switch <agente> --model <provider/model>`.
     /// Es una elección exacta del usuario: queda como el modelo pedido del agente.
     pub async fn switch(&self, agent_id: AgentId, model_id: &str) -> Result<RunId, AgentOpError> {
+        self.switch_with_message(agent_id, model_id, None).await
+    }
+
+    /// Como `switch`, y además entrega `message` al modelo nuevo: el chat cambia de
+    /// proveedor a mitad de conversación sin que el usuario repita nada (P07.5.S6).
+    pub async fn switch_with_message(
+        &self,
+        agent_id: AgentId,
+        model_id: &str,
+        message: Option<&str>,
+    ) -> Result<RunId, AgentOpError> {
         let model = self
             .read_op(|c| repo::eligible_model(c, model_id))?
             .map_err(|reason| {
@@ -892,6 +931,7 @@ impl Runtime {
             "USER_SWITCH",
             "user switch",
             None,
+            message,
         )
         .await
     }
@@ -1009,6 +1049,39 @@ impl Runtime {
         self.bus.publish(ev).await.map_err(op_err)
     }
 
+    /// Política por umbral (P07.5.S6, apagada por defecto): si el último turno del chat
+    /// usó tanto contexto como el umbral y hay otro executor elegible, el próximo mensaje
+    /// va a ese otro con handoff en vez de reanudar la sesión del CLI.
+    fn rotation_target(
+        &self,
+        agent: &repo::Agent,
+        last: &repo::AgentRun,
+    ) -> Result<Option<repo::EligibleModel>, AgentOpError> {
+        let limit = self
+            .chat_switch_tokens
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(None);
+        }
+        let has_adapter = |p: &str| self.adapter(p).is_some();
+        self.read_op(|c| {
+            if repo::get_task(c, agent.task_id)?.code != repo::CHAT_TASK_CODE
+                || repo::last_turn_tokens(c, last.id)? < limit
+            {
+                return Ok(None);
+            }
+            repo::next_executor(
+                c,
+                agent.id,
+                agent.failover_policy,
+                &last.provider_id,
+                &last.model_id,
+                false,
+                &has_adapter,
+            )
+        })
+    }
+
     /// Mensaje después de terminado el turno (ADR-0005, adenda; P07.5.S1): retoma la
     /// sesión del CLI con `resume_spec`, con el mismo modelo y sin handoff, porque la
     /// conversación sigue en el CLI. Un agente `COMPLETED` se reabre.
@@ -1053,6 +1126,24 @@ impl Runtime {
                     agent.number
                 ))
             })?;
+        if let Some(next) = self.rotation_target(&agent, &last)? {
+            let reason = format!(
+                "El contexto de {} llegó al umbral configurado de tokens.",
+                last.model_id
+            );
+            return self
+                .start_successor(
+                    &agent,
+                    Some(last.id),
+                    next,
+                    &reason,
+                    "FAILOVER",
+                    "context threshold",
+                    None,
+                    Some(text),
+                )
+                .await;
+        }
         let model = self
             .read_op(|c| repo::eligible_model(c, &last.model_id))?
             .map_err(|why| {
@@ -1163,6 +1254,7 @@ impl Runtime {
                 reason,
                 change,
                 reason_en,
+                None,
                 None,
             )
             .await?;

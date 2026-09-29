@@ -63,6 +63,10 @@ pub enum AgentEvent {
     AgentStopped {
         reason: Option<String>,
     },
+    /// Uso de contexto que reportó el CLI al terminar un turno (tokens de entrada, con caché).
+    TurnUsage {
+        context_tokens: u64,
+    },
     /// El agente cambió de estado (la difunde el daemon; ningún CLI la emite).
     StateChanged {
         from: String,
@@ -94,6 +98,7 @@ impl AgentEvent {
             Self::ProviderError(_) => "ProviderError",
             Self::Quota(_) => "QuotaUpdated",
             Self::AgentStopped { .. } => "AgentStopped",
+            Self::TurnUsage { .. } => "TurnUsage",
             Self::StateChanged { .. } => "AgentStateChanged",
         }
     }

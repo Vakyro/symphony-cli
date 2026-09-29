@@ -1483,6 +1483,154 @@ async fn manual_switch_replaces_only_the_executor_and_remembers_the_model() {
     e.writer.shutdown();
 }
 
+/// P07.5.S6, Journey de chat: empieza en un proveedor, cambia a otro a mitad con un mensaje
+/// nuevo y el segundo recibe la conversación sin que el usuario repita nada.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_switches_provider_mid_conversation_with_a_new_message() {
+    let first = "[[step]]\nkind = \"edit\"\npath = \"alpha.txt\"\ncontent = \"a\\n\"\n";
+    let second = "[[step]]\nkind = \"edit\"\npath = \"beta.txt\"\ncontent = \"b\\n\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let mut r = req(
+        &e,
+        "Empieza el arreglo",
+        Execution::Exact("alpha/fast".into()),
+    );
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+
+    e.runtime
+        .switch_with_message(created.agent_id, "beta/fast", Some("ahora sigue tú"))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+    assert_eq!(one::<i64>(&e, "SELECT COUNT(*) FROM agents"), 1);
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "USER_SWITCH"
+    );
+    assert_eq!(
+        git(&e.repo, &["log", "--format=%s", "symphony/chat"]),
+        "chat: turno 2 (beta/fast)\nchat: turno 1 (alpha/fast)\ninit"
+    );
+    // El mensaje nuevo llegó al modelo (va en su prompt) y quedó como `USER` aparte.
+    let sent: String = one(
+        &e,
+        "SELECT content FROM messages WHERE role = 'USER' AND run_id =
+            (SELECT id FROM agent_runs WHERE provider_id = 'beta') ORDER BY id LIMIT 1",
+    );
+    assert!(sent.contains("ahora sigue tú"), "{sent}");
+    assert!(sent.contains("Empieza el arreglo"), "{sent}");
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "otro cambio")
+        .await
+        .unwrap();
+    assert!(
+        h.prompt.contains("**Usuario:** Empieza el arreglo"),
+        "{}",
+        h.prompt
+    );
+    assert!(
+        h.prompt.contains("**Usuario:** ahora sigue tú"),
+        "{}",
+        h.prompt
+    );
+    assert_eq!(h.prompt.matches("**Usuario:**").count(), 2, "{}", h.prompt);
+    e.writer.shutdown();
+}
+
+/// P07.5.S6: política por umbral. Apagada, el chat sigue en su proveedor; encendida y con el
+/// último turno por encima del umbral, el siguiente mensaje pasa al otro proveedor.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_rotates_provider_only_when_the_token_threshold_is_on_and_reached() {
+    let first = "[[step]]\nkind = \"usage\"\ntokens = 5000\n";
+    let second = "[[step]]\nkind = \"edit\"\npath = \"beta.txt\"\ncontent = \"b\\n\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let mut r = req(&e, "Hola", Execution::Exact("alpha/fast".into()));
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let providers = |e: &Env| -> String {
+        one(
+            e,
+            "SELECT GROUP_CONCAT(provider_id, ',') FROM (SELECT provider_id FROM agent_runs ORDER BY seq)",
+        )
+    };
+
+    // Apagada (por defecto): se reanuda la sesión de alpha.
+    e.runtime
+        .continue_session(created.agent_id, "sigue")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(providers(&e), "alpha,alpha");
+
+    // Encendida: el último turno de alpha usó 5000 ≥ 1000, el mensaje va a beta.
+    e.runtime.set_chat_switch_tokens(Some(1000));
+    e.runtime
+        .continue_session(created.agent_id, "y ahora")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(providers(&e), "alpha,alpha,beta");
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "FAILOVER"
+    );
+    assert_eq!(one::<i64>(&e, "SELECT COUNT(*) FROM provider_failures"), 0);
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+
+    // Beta no reportó uso: el siguiente mensaje se queda en beta (no rebota).
+    e.runtime
+        .continue_session(created.agent_id, "otra más")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(providers(&e), "alpha,alpha,beta,beta");
+    e.writer.shutdown();
+}
+
+/// P07.5.S6: cuota agotada en el chat → failover con los parsers existentes y, al terminar,
+/// el chat sigue abierto (`READY`) y con su turno commiteado.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_fails_over_on_quota_and_keeps_waiting_for_messages() {
+    let first = "[[step]]\nkind = \"say\"\ntext = \"voy\"\n[[step]]\nkind = \"quota_exhausted\"\nresets_at = 1790300000\n";
+    let second = "[[step]]\nkind = \"edit\"\npath = \"beta.txt\"\ncontent = \"b\\n\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let mut r = req(
+        &e,
+        "Arregla el login",
+        Execution::Exact("alpha/fast".into()),
+    );
+    r.chat = true;
+    e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+    assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "READY");
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "FAILOVER"
+    );
+    assert_eq!(one::<i64>(&e, "SELECT COUNT(*) FROM provider_failures"), 1);
+    assert_eq!(
+        git(&e.repo, &["log", "--format=%s", "-1", "symphony/chat"]),
+        "chat: turno 1 (beta/fast)"
+    );
+    e.writer.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn hung_executor_is_failed_and_reclaim_keeps_its_workspace() {
     let script = r#"
