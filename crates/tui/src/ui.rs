@@ -537,6 +537,7 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
         )));
     }
     let max = lines.len().saturating_sub(inner_h);
+    app.chat_max.set(u16::try_from(max).unwrap_or(u16::MAX));
     let scroll = usize::from(app.chat_scroll).min(max);
     let offset = max - scroll;
     let position = if max == 0 {
@@ -558,22 +559,22 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
         body,
     );
 
-    // Lo escrito se muestra por su cola: la parte que se está tecleando siempre se ve.
-    let room = usize::from(input.width.saturating_sub(2))
-        .saturating_mul(2)
-        .saturating_sub(1);
-    let typed: Vec<char> = app.chat_input.chars().collect();
-    let shown: String = typed[typed.len().saturating_sub(room)..].iter().collect();
+    // Lo escrito se muestra por su cola: las últimas líneas ya ajustadas, así lo que se está
+    // tecleando siempre se ve.
+    let rows = usize::from(input.height.saturating_sub(2)).max(1);
+    let wrapped = wrap(
+        &format!("{}▏", app.chat_input),
+        usize::from(input.width.saturating_sub(2)),
+    );
+    let shown = wrapped[wrapped.len().saturating_sub(rows)..].join(
+        "
+",
+    );
     let title = match &app.chat_model {
         Some(m) => format!("Mensaje · para {m} (Tab cambia)"),
         None => "Mensaje".to_string(),
     };
-    f.render_widget(
-        Paragraph::new(format!("{shown}▏"))
-            .block(boxed(&title))
-            .wrap(Wrap { trim: false }),
-        input,
-    );
+    f.render_widget(Paragraph::new(shown).block(boxed(&title)), input);
 }
 
 // --- 04 Home ----------------------------------------------------------------

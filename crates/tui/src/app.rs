@@ -239,6 +239,8 @@ pub struct App {
     pub chat_model: Option<String>,
     /// Líneas por encima del final que se está mirando (0 = lo más nuevo).
     pub chat_scroll: u16,
+    /// Tope de `chat_scroll` con el tamaño actual (lo fija el render; `ui::chat`).
+    pub chat_max: std::cell::Cell<u16>,
     /// Barra de comandos abierta (`:`), con lo escrito.
     pub command: Option<String>,
     pub notice: Option<Notice>,
@@ -289,6 +291,7 @@ impl App {
             chat_input: String::new(),
             chat_model: None,
             chat_scroll: 0,
+            chat_max: std::cell::Cell::new(u16::MAX),
             command: None,
             notice: None,
             now_ms: 0,
@@ -447,15 +450,17 @@ impl App {
             .collect()
     }
 
-    /// Sin elección del usuario, el próximo mensaje va al modelo del chat o al primero disponible.
+    /// Sin elección del usuario, el próximo mensaje va al modelo del chat o, si el chat no
+    /// existe, al primero disponible. Con chat existente se espera a conocer su modelo: si no,
+    /// un mensaje normal cambiaría de modelo sin que el usuario lo pida.
     fn default_chat_model(&mut self) {
-        if self.chat_model.is_none() {
-            self.chat_model = self
-                .chat
-                .as_ref()
-                .and_then(|c| c.model().map(str::to_string))
-                .or_else(|| self.available_models().into_iter().next());
+        if self.chat_model.is_some() {
+            return;
         }
+        self.chat_model = match &self.chat {
+            Some(c) => c.model().map(str::to_string),
+            None => self.available_models().into_iter().next(),
+        };
     }
 
     fn agent_call(&self, req: Req, method: &'static str) -> Option<Call> {
@@ -556,11 +561,7 @@ impl App {
             Msg::Resize => Vec::new(),
             Msg::Scroll(n) => {
                 if self.screen == Screen::Chat {
-                    self.chat_scroll = if n > 0 {
-                        self.chat_scroll.saturating_add(n.unsigned_abs())
-                    } else {
-                        self.chat_scroll.saturating_sub(n.unsigned_abs())
-                    };
+                    self.scroll_chat(i32::from(n));
                 }
                 Vec::new()
             }
@@ -630,6 +631,8 @@ impl App {
             Req::ChatGet => {
                 if let Some(id) = v["agent_id"].as_str() {
                     self.chat = Some(AgentView::new(id.to_string()));
+                    // El valor por defecto ya pudo fijarse sin chat: vale el del chat.
+                    self.chat_model = None;
                     return self.chat_calls();
                 }
             }
@@ -875,6 +878,12 @@ impl App {
         }
     }
 
+    /// Positivo = hacia atrás en el historial; nunca pasa del tope ni baja de 0.
+    fn scroll_chat(&mut self, delta: i32) {
+        let to = i32::from(self.chat_scroll).saturating_add(delta);
+        self.chat_scroll = to.clamp(0, i32::from(self.chat_max.get())) as u16;
+    }
+
     fn chat_key(&mut self, key: KeyEvent) -> Vec<Call> {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return Vec::new();
@@ -900,10 +909,10 @@ impl App {
                 self.chat_input.pop();
             }
             KeyCode::Char(c) => self.chat_input.push(c),
-            KeyCode::Up => self.chat_scroll = self.chat_scroll.saturating_add(1),
-            KeyCode::Down => self.chat_scroll = self.chat_scroll.saturating_sub(1),
-            KeyCode::PageUp => self.chat_scroll = self.chat_scroll.saturating_add(10),
-            KeyCode::PageDown => self.chat_scroll = self.chat_scroll.saturating_sub(10),
+            KeyCode::Up => self.scroll_chat(1),
+            KeyCode::Down => self.scroll_chat(-1),
+            KeyCode::PageUp => self.scroll_chat(10),
+            KeyCode::PageDown => self.scroll_chat(-10),
             _ => {}
         }
         Vec::new()

@@ -637,3 +637,35 @@ fn chat_scroll_never_goes_below_the_end() {
     app.update(Msg::Scroll(3));
     assert_eq!(app.chat_scroll, 3);
 }
+
+#[test]
+fn reopening_the_chat_keeps_its_model_so_a_plain_message_does_not_switch() {
+    // `models.list` llega antes que el `inspect` del chat existente.
+    let mut app = chat_app();
+    assert_eq!(app.chat_model.as_deref(), Some("claude/opus"));
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    assert_eq!(app.chat_model, None);
+    ok(&mut app, Req::Inspect, inspect());
+    assert_eq!(app.chat_model.as_deref(), Some("codex/gpt-5"));
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(methods(&press(&mut app, KeyCode::Enter)), ["agent.send"]);
+}
+
+#[test]
+fn chat_scroll_stops_at_the_top_the_render_reports() {
+    let mut app = chat_app();
+    app.chat_max.set(5);
+    for _ in 0..3 {
+        press(&mut app, KeyCode::PageUp);
+    }
+    assert_eq!(app.chat_scroll, 5);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.chat_scroll, 4);
+}
+
+#[test]
+fn chat_long_input_keeps_the_tail_visible() {
+    let mut app = chat_app();
+    app.chat_input = format!("{}FINAL", "palabra ".repeat(40));
+    assert!(draw(&app).contains("FINAL▏"));
+}
