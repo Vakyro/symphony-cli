@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use symphony_adapter_common::ProviderAdapter;
+use symphony_adapter_common::{AgentEvent, ProviderAdapter};
 use symphony_core::{AgentState, ContextMode, FailoverPolicy};
 use symphony_daemon::bus::EventBus;
 use symphony_daemon::providers;
@@ -335,6 +335,68 @@ async fn chat_waits_for_a_message_after_its_turn() {
         "esperando mensaje"
     );
     assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "READY");
+    e.writer.shutdown();
+}
+
+/// P07.5.S5: un turno con cambios deja un commit y el worktree limpio; uno sin cambios, ninguno.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_commits_a_turn_only_when_it_changed_files() {
+    let e = env(WORK, None).await;
+    let mut r = req(&e, "Hola", Execution::Exact("fake/fast".into()));
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let subjects = |n: &str| git(&e.repo, &["log", "--format=%s", n]);
+    assert_eq!(subjects("symphony/chat"), "chat: turno 1 (fake/fast)\ninit");
+    assert_eq!(git(&created.worktree, &["status", "--porcelain"]), "");
+    assert_eq!(
+        git(&created.worktree, &["show", "HEAD:fix.txt"]),
+        "arreglado"
+    );
+
+    // El segundo turno reescribe el mismo contenido: no hay cambios, no hay commit.
+    e.runtime
+        .continue_session(created.agent_id, "otra vez")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(subjects("symphony/chat"), "chat: turno 1 (fake/fast)\ninit");
+    assert_eq!(subjects("main"), "init");
+    e.writer.shutdown();
+}
+
+/// P07.5.S5: el bus recibe los cambios de estado desde el punto único de escritura.
+#[tokio::test(flavor = "multi_thread")]
+async fn bus_announces_agent_state_changes() {
+    let e = env(WORK, None).await;
+    let mut rx = e.bus.subscribe();
+    let mut r = req(&e, "Hola", Execution::Exact("fake/fast".into()));
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+
+    let seen = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let ev = rx.recv().await.unwrap();
+            if let AgentEvent::StateChanged { from, to, reason } = &ev.event {
+                assert_eq!(ev.agent_id, Some(created.agent_id.to_string()));
+                return (from.clone(), to.clone(), reason.clone());
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        seen,
+        (
+            "RUNNING".to_string(),
+            "READY".to_string(),
+            Some("esperando mensaje".to_string())
+        )
+    );
     e.writer.shutdown();
 }
 

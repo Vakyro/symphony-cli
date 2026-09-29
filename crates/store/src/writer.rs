@@ -4,18 +4,45 @@
 //! Sin espera artificial: con carga los lotes se llenan solos y sin carga la
 //! latencia es mínima.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 
 use rusqlite::{Connection, OpenFlags, Transaction, params};
-use tokio::sync::{mpsc, oneshot};
+use symphony_core::AgentState;
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::StoreError;
+
+/// Un agente cambió de estado. Se difunde solo después de confirmar la transacción.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentStateChange {
+    pub project_id: String,
+    pub agent_id: String,
+    pub from: AgentState,
+    pub to: AgentState,
+    pub reason: Option<String>,
+}
+
+thread_local! {
+    /// Cambios de la transacción en curso del hilo escritor.
+    static PENDING: RefCell<Vec<AgentStateChange>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Lo llama `repo::set_agent_state`, el único punto que escribe `agents.state`.
+pub(crate) fn record_state_change(change: AgentStateChange) {
+    PENDING.with(|p| p.borrow_mut().push(change));
+}
+
+fn take_state_changes() -> Vec<AgentStateChange> {
+    PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
 
 /// Máximo de eventos por transacción (DB §7: "cada 50 eventos").
 pub const BATCH_MAX: usize = 50;
 /// Capacidad del canal: con la cola llena, los productores esperan (backpressure).
 const CHANNEL_CAPACITY: usize = 4096;
+const STATE_CAPACITY: usize = 256;
 
 /// Un evento para `events` (DB §3.F).
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +78,7 @@ pub struct WriterStats {
 #[derive(Clone)]
 pub struct WriterHandle {
     tx: mpsc::Sender<Command>,
+    states: broadcast::Sender<AgentStateChange>,
 }
 
 /// Dueño del hilo escritor. Al soltarlo (o con `shutdown`) se escribe lo ya encolado
@@ -66,11 +94,13 @@ impl Writer {
     pub fn start(db_path: &Path) -> Result<Self, StoreError> {
         let conn = crate::open(db_path)?;
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (states, _) = broadcast::channel(STATE_CAPACITY);
+        let announce = states.clone();
         let thread = std::thread::Builder::new()
             .name("symphony-store-writer".into())
-            .spawn(move || run(conn, rx))?;
+            .spawn(move || run(conn, rx, &announce))?;
         Ok(Self {
-            handle: WriterHandle { tx },
+            handle: WriterHandle { tx, states },
             thread: Some(thread),
             db_path: db_path.to_path_buf(),
         })
@@ -119,6 +149,11 @@ impl From<WriterClosed> for StoreError {
 }
 
 impl WriterHandle {
+    /// Cambios de estado de agentes ya confirmados en la base.
+    pub fn state_changes(&self) -> broadcast::Receiver<AgentStateChange> {
+        self.states.subscribe()
+    }
+
     /// Encola un evento. Espera solo si la cola está llena.
     pub async fn event(&self, ev: NewEvent) -> Result<(), WriterClosed> {
         self.tx
@@ -205,7 +240,11 @@ fn write_batch(conn: &mut Connection, batch: &[NewEvent], stats: &mut WriterStat
     }
 }
 
-fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
+fn run(
+    mut conn: Connection,
+    mut rx: mpsc::Receiver<Command>,
+    states: &broadcast::Sender<AgentStateChange>,
+) {
     let mut stats = WriterStats::default();
     let mut batch: Vec<NewEvent> = Vec::with_capacity(BATCH_MAX);
     while let Some(first) = rx.blocking_recv() {
@@ -223,6 +262,7 @@ fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                 Command::Write(f, reply) => {
                     write_batch(&mut conn, &batch, &mut stats);
                     batch.clear();
+                    take_state_changes();
                     let result = conn
                         .transaction()
                         .and_then(|tx| {
@@ -230,6 +270,13 @@ fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                             tx.commit()
                         })
                         .map_err(StoreError::from);
+                    let changes = take_state_changes();
+                    if result.is_ok() {
+                        for change in changes {
+                            // Sin suscriptores, send falla: no es un error.
+                            let _ = states.send(change);
+                        }
+                    }
                     let _ = reply.send(result);
                 }
                 Command::Flush(reply) => {

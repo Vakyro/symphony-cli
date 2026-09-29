@@ -197,9 +197,9 @@ impl AgentView {
 }
 
 /// Cada cuántos ticks (1 s) se relee la vista aunque no llegue ningún evento.
-/// ponytail: los cambios de estado de agentes no pasan por el bus (se escriben
-/// en 15 sitios del runtime); si el sondeo pesa, el runtime publica `agent.changed`.
-pub const POLL_TICKS: u64 = 3;
+/// Los cambios de estado de agentes llegan por el bus (`AgentStateChanged`, P07.5.S5):
+/// esto es solo la red de seguridad para lo que no emite eventos.
+pub const POLL_TICKS: u64 = 15;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {

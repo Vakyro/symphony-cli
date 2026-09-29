@@ -18,6 +18,7 @@ Contrato de calidad y rendimiento. Cada regla dice cómo se comprueba. Una regla
 | A8 | Sin telemetría ni tráfico de red. El core no hace llamadas HTTP (STACK §50) | `cargo deny` prohíbe clientes HTTP en el core |
 | A9 | Nunca leer, copiar ni extraer credenciales o tokens OAuth de proveedores | Revisión; grep de rutas de credenciales en code review |
 | A10 | Un solo escritor en SQLite. Hooks y procesos externos nunca abren la DB | Revisión; solo `crates/store` depende de `rusqlite` |
+| A11 | **Camino barato por evento × agente.** Lo que corre por cada evento del bus o por cada agente decide con datos en memoria; el trabajo caro (git, lecturas de DB, procesos) corre solo tras filtrar por tipo de evento y por agente, y a lo sumo una vez por turno o por run | Revisión al cerrar cada fase; test del bus de estado (P07.5.S5) |
 
 ## 2. Prohibido en el core (STACK §36)
 

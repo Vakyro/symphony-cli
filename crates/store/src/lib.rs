@@ -9,7 +9,8 @@ use rusqlite_migration::{M, Migrations};
 pub mod repo;
 mod writer;
 pub use writer::{
-    BATCH_MAX, NewEvent, WriteFn, Writer, WriterClosed, WriterHandle, WriterStats, open_reader,
+    AgentStateChange, BATCH_MAX, NewEvent, WriteFn, Writer, WriterClosed, WriterHandle,
+    WriterStats, open_reader,
 };
 
 /// Migraciones versionadas con `PRAGMA user_version` (DB §6).

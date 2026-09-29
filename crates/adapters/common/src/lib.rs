@@ -63,6 +63,12 @@ pub enum AgentEvent {
     AgentStopped {
         reason: Option<String>,
     },
+    /// El agente cambió de estado (la difunde el daemon; ningún CLI la emite).
+    StateChanged {
+        from: String,
+        to: String,
+        reason: Option<String>,
+    },
 }
 
 impl AgentEvent {
@@ -88,6 +94,7 @@ impl AgentEvent {
             Self::ProviderError(_) => "ProviderError",
             Self::Quota(_) => "QuotaUpdated",
             Self::AgentStopped { .. } => "AgentStopped",
+            Self::StateChanged { .. } => "AgentStateChanged",
         }
     }
 }

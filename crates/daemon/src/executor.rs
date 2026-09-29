@@ -17,6 +17,7 @@ use symphony_core::{
     AgentId, AgentState, ExecutorChangeId, FailoverPolicy, FailureType, HandoffId, MessageId,
     ProjectId, ProviderFailureId, RunEndReason, RunId, RunStatus, TaskId, TaskStatus,
 };
+use symphony_git::Repo;
 use symphony_process::{ExitStatus, OutputLine, Supervised};
 use symphony_store::repo;
 use tokio::sync::{mpsc, oneshot};
@@ -377,6 +378,7 @@ impl Runtime {
     async fn finish_natural(&self, l: &Launch, exit: ExitStatus) {
         // ponytail: exit 0 = tarea terminada; el heartbeat (P06.S6) cubre los cuelgues.
         if exit == ExitStatus::Exited(0) {
+            self.commit_chat_turn(l).await;
             let (agent, task, run) = (l.agent_id, l.task_id, l.run_id);
             let result = self
                 .writer
@@ -424,6 +426,34 @@ impl Runtime {
         };
         self.finish_failed(l, RunStatus::Failed, code, &reason)
             .await;
+    }
+
+    /// Turno terminado del chat: commit automático de lo que dejó en su worktree (P07.5.S5).
+    /// Corre una vez por run terminado, no por evento; los demás agentes salen tras una lectura.
+    async fn commit_chat_turn(&self, l: &Launch) {
+        let (task, agent) = (l.task_id, l.agent_id);
+        let is_chat = self
+            .read_op(|c| Ok(repo::get_task(c, task)?.code == repo::CHAT_TASK_CODE))
+            .unwrap_or(false);
+        if !is_chat {
+            return;
+        }
+        // El `TurnFinished` de este turno ya está encolado: se espera a que se escriba para contarlo.
+        let _ = self.writer.flush().await;
+        let turn = self
+            .read_op(|c| repo::turns_finished(c, agent))
+            .unwrap_or(0);
+        let message = format!("chat: turno {turn} ({})", l.model_id);
+        let worktree = l.worktree.clone();
+        match tokio::task::spawn_blocking(move || Repo::at(worktree).commit_all(&message)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(agent = %agent, error = %e, "no se pudo commitear el turno del chat")
+            }
+            Err(e) => {
+                tracing::warn!(agent = %agent, error = %e, "no se pudo commitear el turno del chat")
+            }
+        }
     }
 
     /// Run `FAILED/CRASH`, agente `FAILED` con razón y recovery item `EXECUTOR_EXITED`.

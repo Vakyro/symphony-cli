@@ -110,3 +110,6 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **`cargo nextest run <filtro>` filtra por nombre de test, no de archivo:** `live_resume` no encontró nada; el filtro correcto fue `remembers_after_a_message`.
 - **Para editar con scripts largos desde el shell,** escribe el `.js` a un archivo y ejecútalo con `node`; un heredoc con comillas y backticks rompió el parser del shell.
 - **Un `grep -r` desde la raíz del repo recorre `target/` y tarda minutos.** Acota a `crates/` o usa la herramienta de búsqueda.
+- **Un `tokio::spawn` que retiene un `broadcast::Sender` cuelga a los lectores:** el reenviador de estados del bus mantenía vivo el canal y `slow_subscriber_never_blocks…` esperaba un `Closed` que nunca llegaba. Usa `Sender::downgrade()` (`WeakSender`) en tareas de fondo que solo reenvían.
+- **Un `cargo xtask check` colgado deja `cargo-nextest.exe` y el `.exe` del test vivos** y el siguiente build falla con `link.exe` 1104. Míralos con `tasklist | grep -iE "nextest|bus-|runtime-"` y ciérralos con `taskkill //F //PID`.
+- **Cambios de estado de agentes:** `repo::set_agent_state` los anota en una cola del hilo escritor y se difunden solo tras el `commit` (`WriterHandle::state_changes`). No los emitas desde el runtime: se pierde el rollback.

@@ -212,6 +212,15 @@ pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> Result<(), RepoErro
 /// Código de la task del chat general: identifica al agente sin migración (P07.5.S4).
 pub const CHAT_TASK_CODE: &str = "CHAT";
 
+/// Turnos terminados del agente (eventos `TurnFinished` ya escritos).
+pub fn turns_finished(conn: &Connection, agent: AgentId) -> Result<i64, RepoError> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM events WHERE agent_id = ?1 AND type = 'TurnFinished'",
+        [agent.to_string()],
+        |r| r.get(0),
+    )?)
+}
+
 /// El agente del chat del proyecto, en cualquier estado.
 pub fn chat_agent(conn: &Connection, project: ProjectId) -> Result<Option<Agent>, RepoError> {
     Ok(conn
@@ -384,7 +393,8 @@ pub fn set_agent_state(
     reason: Option<&str>,
     now: i64,
 ) -> Result<AgentState, RepoError> {
-    let from = get_agent(conn, id)?.state;
+    let agent = get_agent(conn, id)?;
+    let from = agent.state;
     from.transition(to)?;
     if to.requires_reason() && reason.is_none() {
         return Err(RepoError::MissingReason { state: to.as_str() });
@@ -393,6 +403,13 @@ pub fn set_agent_state(
         "UPDATE agents SET state = ?2, state_reason = ?3, updated_at = ?4 WHERE id = ?1",
         params![id.to_string(), to.as_str(), reason, now],
     )?;
+    crate::writer::record_state_change(crate::AgentStateChange {
+        project_id: agent.project_id.to_string(),
+        agent_id: id.to_string(),
+        from,
+        to,
+        reason: reason.map(str::to_string),
+    });
     Ok(from)
 }
 

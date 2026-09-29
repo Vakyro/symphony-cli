@@ -199,6 +199,16 @@ impl Repo {
         self.text(["rev-parse", "HEAD"])
     }
 
+    /// `git add -A` y commit con `message`. `None` si no había nada que guardar.
+    pub fn commit_all(&self, message: &str) -> Result<Option<String>, GitError> {
+        self.run(["add", "-A"])?;
+        if self.text(["status", "--porcelain"])?.is_empty() {
+            return Ok(None);
+        }
+        self.run(["commit", "-q", "-m", message])?;
+        self.head_commit().map(Some)
+    }
+
     /// Rama actual, o `None` en detached HEAD.
     pub fn current_branch(&self) -> Result<Option<String>, GitError> {
         let b = self.text(["branch", "--show-current"])?;
