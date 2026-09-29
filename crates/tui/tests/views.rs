@@ -119,7 +119,13 @@ fn home_app() -> App {
     ok(&mut app, Req::Agents, agents());
     ok(&mut app, Req::Recovery, json!({ "items": [] }));
     ok(&mut app, Req::Providers, providers());
+    // El inicio es el Chat (P07.5.S7); Esc lleva a agentes y tareas.
+    assert_eq!(app.screen, Screen::Chat);
+    press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen, Screen::Home);
+    ok(&mut app, Req::Agents, agents());
+    ok(&mut app, Req::Providers, providers());
+    ok(&mut app, Req::Recovery, json!({ "items": [] }));
     app
 }
 
@@ -231,7 +237,7 @@ fn view_03_provider_setup() {
     insta::assert_snapshot!(draw(&app));
     // Se puede seguir con un solo proveedor.
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.screen, Screen::Home);
+    assert_eq!(app.screen, Screen::Chat);
 }
 
 #[test]
@@ -365,9 +371,9 @@ fn open_without_setup_goes_home_without_listing_other_projects() {
     app.start();
     ok(&mut app, Req::ProjectStatus, status(false, 0));
     let calls = press(&mut app, KeyCode::Char('o'));
-    assert_eq!(app.screen, Screen::Home);
+    assert_eq!(app.screen, Screen::Chat);
     // Sin proyecto en la base, `agent.list` traería agentes de otros proyectos.
-    assert_eq!(methods(&calls), ["providers.list", "recovery.list"]);
+    assert_eq!(methods(&calls), ["chat.get", "models.list"]);
 }
 
 #[test]
@@ -581,4 +587,53 @@ fn open_in_the_cli_reports_the_terminal_or_the_command() {
         "{:?}",
         app.notice
     );
+}
+
+/// Chat de un proyecto configurado, recién abierto (sin conversación).
+fn chat_app() -> App {
+    let mut app = App::new("/work/arete-mobile");
+    app.now_ms = NOW;
+    app.start();
+    ok(&mut app, Req::Providers, providers());
+    ok(&mut app, Req::ProjectStatus, status(true, 0));
+    ok(&mut app, Req::Models, models());
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": null }));
+    app
+}
+
+#[test]
+fn view_00_chat_empty() {
+    insta::assert_snapshot!(draw(&chat_app()));
+}
+
+#[test]
+fn chat_first_message_creates_the_chat_then_sends_and_switches() {
+    let mut app = chat_app();
+    for c in "hola".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["agent.create"]);
+    assert!(app.chat_input.is_empty());
+    ok(&mut app, Req::ChatCreate, json!({ "agent_id": "01CHAT" }));
+    assert!(app.chat.is_some());
+    ok(&mut app, Req::Inspect, inspect());
+
+    // Mismo modelo → agent.send; otro modelo (Tab) → agent.switch con el mensaje.
+    let cur = app.chat.as_ref().unwrap().model().unwrap().to_string();
+    app.chat_model = Some(cur);
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(methods(&press(&mut app, KeyCode::Enter)), ["agent.send"]);
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Char('y'));
+    assert_eq!(methods(&press(&mut app, KeyCode::Enter)), ["agent.switch"]);
+}
+
+#[test]
+fn chat_scroll_never_goes_below_the_end() {
+    let mut app = chat_app();
+    app.update(Msg::Scroll(-3));
+    assert_eq!(app.chat_scroll, 0);
+    app.update(Msg::Scroll(3));
+    assert_eq!(app.chat_scroll, 3);
 }

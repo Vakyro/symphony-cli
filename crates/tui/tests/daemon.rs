@@ -101,13 +101,15 @@ async fn tui_drives_a_real_daemon_over_ipc_only() {
         d.key(KeyCode::Enter).await;
     }
     d.until("init", |a| {
-        matches!(a.screen, Screen::Home | Screen::ProviderSetup) && a.initialized()
+        matches!(a.screen, Screen::Chat | Screen::ProviderSetup) && a.initialized()
     })
     .await;
     assert!(repo.join(".symphony").join("project.toml").is_file());
     if d.app.screen == Screen::ProviderSetup {
         d.key(KeyCode::Enter).await;
     }
+    assert_eq!(d.app.screen, Screen::Chat);
+    d.key(KeyCode::Esc).await;
     assert_eq!(d.app.screen, Screen::Home);
 
     // 05 por la barra de comandos → 06 vista del agente.

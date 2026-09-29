@@ -68,6 +68,7 @@ pub fn render(app: &App, f: &mut Frame) {
 
     let title = match app.screen {
         Screen::Launch | Screen::NotARepo => "",
+        Screen::Chat => "· Chat",
         Screen::FirstRun => "· Configuración inicial",
         Screen::ProviderSetup => "· Proveedores",
         Screen::Home => "",
@@ -92,6 +93,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::NotARepo => not_a_repo(app, f, body),
         Screen::FirstRun => first_run(app, f, body),
         Screen::ProviderSetup | Screen::Providers => providers(app, f, body),
+        Screen::Chat => chat(app, f, body),
         Screen::Home => home(app, f, body),
         Screen::NewAgent => new_agent(app, f, body),
         Screen::ModelPicker => model_picker(app, f, body),
@@ -113,8 +115,11 @@ fn hints(app: &App) -> &'static str {
             "↑↓ elegir · r reintentar · d activar/desactivar · Enter continuar"
         }
         Screen::Providers => "↑↓ elegir · r volver a detectar · d activar/desactivar · Esc volver",
+        Screen::Chat => {
+            "Enter enviar · Tab modelo · ↑↓ PgUp/PgDn o rueda: desplazar · Esc agentes y tareas · Ctrl+C salir"
+        }
         Screen::Home => {
-            "↑↓ elegir · Enter abrir · n nuevo · p proveedores · r recovery · : comando · q salir"
+            "↑↓ elegir · Enter abrir · n nuevo · p proveedores · r recovery · : comando · Esc chat · q salir"
         }
         Screen::NewAgent => "↑↓ campo · ←→ opción · Enter siguiente/crear · Esc cancelar",
         Screen::ModelPicker => "↑↓ elegir · Enter usar · Esc volver",
@@ -390,6 +395,185 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
         "Proveedores"
     };
     paragraph(f, area, title, lines);
+}
+
+// --- 00 Chat ---------------------------------------------------------------
+
+/// Parte `s` en líneas de a lo sumo `width` caracteres, cortando en espacios cuando se puede.
+fn wrap(s: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for src in s.lines() {
+        let mut line = String::new();
+        let mut len = 0;
+        for word in src.split(' ') {
+            let mut word: Vec<char> = word.chars().collect();
+            // Una palabra más larga que la línea se parte a la fuerza.
+            while word.len() > width {
+                if len > 0 {
+                    out.push(std::mem::take(&mut line));
+                    len = 0;
+                }
+                out.push(word.drain(..width).collect());
+            }
+            let n = word.len();
+            if len > 0 && len + 1 + n > width {
+                out.push(std::mem::take(&mut line));
+                len = 0;
+            }
+            if len > 0 {
+                line.push(' ');
+                len += 1;
+            }
+            line.extend(word);
+            len += n;
+        }
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// Prompt de un handoff: lo ve el modelo nuevo, no el usuario (FLOW §13.4 ya marca el cambio).
+// ponytail: se reconoce por su frase inicial (crates/context/src/handoff.rs); si cambia, hay que
+// actualizarla acá o el chat mostraría el handoff entero.
+const HANDOFF_PROMPT: &str = "Retomas una tarea de código";
+
+fn chat_lines(messages: &[Value], width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for m in messages {
+        let content = m["content"].as_str().unwrap_or("");
+        match m["role"].as_str().unwrap_or("") {
+            "EXECUTOR_CHANGE" => {
+                for l in wrap(content, width) {
+                    lines.push(Line::from(colored(l, Color::Magenta)));
+                }
+            }
+            "USER" if content.starts_with(HANDOFF_PROMPT) => continue,
+            role @ ("USER" | "ASSISTANT") => {
+                let (who, color) = if role == "USER" {
+                    ("tú", ACCENT)
+                } else {
+                    ("agente", Color::Green)
+                };
+                for (i, l) in wrap(content, width.saturating_sub(9))
+                    .into_iter()
+                    .enumerate()
+                {
+                    let prefix = if i == 0 {
+                        format!("{who:>7} │ ")
+                    } else {
+                        "        │ ".into()
+                    };
+                    lines.push(Line::from(vec![colored(prefix, color), Span::raw(l)]));
+                }
+            }
+            _ => continue,
+        }
+        lines.push(Line::raw(""));
+    }
+    lines
+}
+
+fn chat(app: &App, f: &mut Frame, area: Rect) {
+    let view = app.chat.as_ref();
+    let state = view.map_or("", |v| v.state()).to_string();
+    let reason = view
+        .and_then(|v| v.inspect["agent"]["state_reason"].as_str())
+        .map_or_else(|| state_phrase(&state).to_string(), str::to_string);
+    let current = view.and_then(|v| v.model());
+    let mut model = vec![
+        dim("Modelo:  "),
+        Span::raw(current.unwrap_or("").to_string()),
+    ];
+    if current.is_none() && app.chat_model.is_none() {
+        model.push(Span::raw("—"));
+    }
+    match (&app.chat_model, current) {
+        (Some(next), Some(cur)) if next != cur => {
+            model.push(dim("  →  "));
+            model.push(colored(next.clone(), ACCENT).add_modifier(Modifier::BOLD));
+            model.push(dim("  (cambia al enviar)"));
+        }
+        (Some(next), None) => {
+            model.push(colored(next.clone(), ACCENT).add_modifier(Modifier::BOLD));
+            model.push(dim("  (primer mensaje)"));
+        }
+        _ => {}
+    }
+    model.push(dim("   Rama: symphony/chat"));
+    let head = vec![
+        if view.is_some() {
+            Line::from(vec![
+                bold("CHAT  "),
+                colored(state.clone(), state_color(&state)).add_modifier(Modifier::BOLD),
+                dim(format!("  {reason}")),
+            ])
+        } else {
+            Line::from(vec![bold("CHAT  "), dim("todavía no empezó")])
+        },
+        Line::from(model),
+    ];
+    let [top, body, input] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(3),
+        Constraint::Length(4),
+    ])
+    .areas(area);
+    f.render_widget(Paragraph::new(head).block(boxed("Chat")), top);
+
+    let inner_w = usize::from(body.width.saturating_sub(2));
+    let inner_h = usize::from(body.height.saturating_sub(2));
+    let mut lines = view.map_or_else(Vec::new, |v| chat_lines(&v.messages, inner_w));
+    if lines.is_empty() {
+        lines.push(Line::from(dim("Escribe tu primer mensaje para empezar.")));
+        lines.push(Line::from(dim(
+            "Symphony trabaja en la rama symphony/chat de este proyecto y guarda un commit por turno.",
+        )));
+        lines.push(Line::from(dim(
+            "Con Tab eliges el modelo de cada mensaje: cambiar a mitad conserva la conversación.",
+        )));
+    }
+    let max = lines.len().saturating_sub(inner_h);
+    let scroll = usize::from(app.chat_scroll).min(max);
+    let offset = max - scroll;
+    let position = if max == 0 {
+        String::new()
+    } else if scroll == 0 {
+        " final ".to_string()
+    } else {
+        format!(
+            " ↑ {scroll} líneas antes del final · {}-{} de {} ",
+            offset + 1,
+            (offset + inner_h).min(lines.len()),
+            lines.len()
+        )
+    };
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(boxed("Conversación").title_bottom(Line::from(dim(position)).right_aligned()))
+            .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0)),
+        body,
+    );
+
+    // Lo escrito se muestra por su cola: la parte que se está tecleando siempre se ve.
+    let room = usize::from(input.width.saturating_sub(2))
+        .saturating_mul(2)
+        .saturating_sub(1);
+    let typed: Vec<char> = app.chat_input.chars().collect();
+    let shown: String = typed[typed.len().saturating_sub(room)..].iter().collect();
+    let title = match &app.chat_model {
+        Some(m) => format!("Mensaje · para {m} (Tab cambia)"),
+        None => "Mensaje".to_string(),
+    };
+    f.render_widget(
+        Paragraph::new(format!("{shown}▏"))
+            .block(boxed(&title))
+            .wrap(Wrap { trim: false }),
+        input,
+    );
 }
 
 // --- 04 Home ----------------------------------------------------------------

@@ -732,6 +732,7 @@ Merge conflict in 2 files
 <h2>18. Inventario completo de vistas / ventanas</h2>
 <table>
 <tr><th>#</th><th>Vista</th><th>Cuándo aparece</th><th>Objetivo principal</th></tr>
+<tr><td>00</td><td>Chat (inicio)</td><td>Al abrir un proyecto configurado</td><td>Conversar en la rama <code>symphony/chat</code>; Tab elige el modelo de cada mensaje; Esc lleva a Home.</td></tr>
 <tr><td>01</td><td>Launch / Boot</td><td>Al abrir Symphony</td><td>Detectar/restaurar proyecto.</td></tr>
 <tr><td>02</td><td>First-run Setup</td><td>Proyecto nuevo</td><td>Configurar lo mínimo.</td></tr>
 <tr><td>03</td><td>Provider Setup</td><td>Proveedor sin login/no disponible</td><td>Habilitar o saltar proveedor.</td></tr>
@@ -904,6 +905,16 @@ AGENT RUNNING
 <div class="step">Agentes inconsistentes aparecen en Recovery Center.</div>
 <div class="step">El usuario decide restart, failover, pause o archive.</div>
 <div class="step">Vuelve al Home con estado coherente.</div>
+</div>
+
+<h3>Journey F — Chat con cambio de proveedor</h3>
+<div class="path">
+<div class="step">Symphony abre en el Chat; el primer mensaje crea el chat (rama <code>symphony/chat</code>, un commit por turno).</div>
+<div class="step">El agente responde y queda en READY, esperando mensaje.</div>
+<div class="step">El usuario sigue escribiendo; con la rueda o PgUp/PgDn recorre el historial.</div>
+<div class="step">Con Tab elige otro modelo: al enviar, el mensaje viaja con la conversación (handoff) y el chat muestra el cambio de executor.</div>
+<div class="step">Si un proveedor agota su cuota, el failover pasa al siguiente sin perder el historial.</div>
+<div class="step">Esc abre Home (agentes y tareas); Esc en Home vuelve al Chat.</div>
 </div>
 </section>
 

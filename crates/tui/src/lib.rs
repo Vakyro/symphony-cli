@@ -8,7 +8,9 @@ pub mod ui;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind,
+};
 use symphony_protocol::Connection;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -34,6 +36,11 @@ fn spawn_input(tx: mpsc::Sender<Msg>) {
                 // Windows también manda Release: solo cuenta la pulsación.
                 Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => Msg::Key(k),
                 Ok(Event::Resize(..)) => Msg::Resize,
+                Ok(Event::Mouse(m)) => match m.kind {
+                    MouseEventKind::ScrollUp => Msg::Scroll(3),
+                    MouseEventKind::ScrollDown => Msg::Scroll(-3),
+                    _ => continue,
+                },
                 Ok(_) => continue,
                 Err(_) => return,
             };
@@ -72,6 +79,8 @@ where
     let mut app = App::new(cwd);
     app.now_ms = now_ms();
     let mut terminal = ratatui::init();
+    // Para la rueda; con la captura activa, seleccionar texto pide Shift.
+    let _ = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
     let result = async {
         let mut pending = app.start();
         loop {
@@ -95,6 +104,7 @@ where
         }
     }
     .await;
+    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }

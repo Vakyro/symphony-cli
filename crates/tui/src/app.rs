@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
+    /// 00 Chat: la vista inicial (P07.5.S7).
+    Chat,
     /// 01 Launch.
     Launch,
     /// 01 Launch, rama "no parece un repo".
@@ -83,6 +85,8 @@ pub enum Req {
     Send,
     Switch,
     Attach,
+    ChatGet,
+    ChatCreate,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +112,8 @@ pub enum Msg {
     /// Reloj (ms desde epoch): refresco y edades relativas.
     Tick(i64),
     Resize,
+    /// Rueda del ratón: positivo = hacia atrás en el historial.
+    Scroll(i16),
     Disconnected(String),
 }
 
@@ -194,6 +200,13 @@ impl AgentView {
     pub fn state(&self) -> &str {
         self.inspect["agent"]["state"].as_str().unwrap_or("")
     }
+
+    /// Modelo del run abierto o, si no hay, del último que tuvo.
+    pub fn model(&self) -> Option<&str> {
+        self.inspect["current_run"]["model_id"]
+            .as_str()
+            .or_else(|| self.inspect["runs"].as_array()?.last()?["model_id"].as_str())
+    }
 }
 
 /// Cada cuántos ticks (1 s) se relee la vista aunque no llegue ningún evento.
@@ -219,6 +232,13 @@ pub struct App {
     /// A dónde sigue Provider Setup al continuar.
     pub after_setup: Screen,
     pub agent: Option<AgentView>,
+    /// El chat del proyecto (`None` hasta que exista: nace con el primer mensaje).
+    pub chat: Option<AgentView>,
+    pub chat_input: String,
+    /// Modelo para el próximo mensaje del chat (Tab lo cambia).
+    pub chat_model: Option<String>,
+    /// Líneas por encima del final que se está mirando (0 = lo más nuevo).
+    pub chat_scroll: u16,
     /// Barra de comandos abierta (`:`), con lo escrito.
     pub command: Option<String>,
     pub notice: Option<Notice>,
@@ -263,8 +283,12 @@ impl App {
             },
             new_agent: NewAgent::default(),
             pick_for: PickFor::NewAgent,
-            after_setup: Screen::Home,
+            after_setup: Screen::Chat,
             agent: None,
+            chat: None,
+            chat_input: String::new(),
+            chat_model: None,
+            chat_scroll: 0,
             command: None,
             notice: None,
             now_ms: 0,
@@ -383,8 +407,59 @@ impl App {
         )
     }
 
+    /// La vista de agente que está en pantalla: la del chat o la de un agente.
+    fn view(&self) -> Option<&AgentView> {
+        if self.screen == Screen::Chat {
+            self.chat.as_ref()
+        } else {
+            self.agent.as_ref()
+        }
+    }
+
+    fn view_mut(&mut self) -> Option<&mut AgentView> {
+        if self.screen == Screen::Chat {
+            self.chat.as_mut()
+        } else {
+            self.agent.as_mut()
+        }
+    }
+
+    /// Inspect y logs del chat, si existe.
+    fn chat_calls(&self) -> Vec<Call> {
+        let Some(chat) = &self.chat else {
+            return Vec::new();
+        };
+        vec![
+            call(Req::Inspect, "agent.inspect", json!({ "agent": chat.id })),
+            call(
+                Req::Logs,
+                "agent.logs",
+                json!({ "agent": chat.id, "limit": 200 }),
+            ),
+        ]
+    }
+
+    fn available_models(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .filter(|m| m["available"].as_bool().unwrap_or(false))
+            .filter_map(|m| m["id"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    /// Sin elección del usuario, el próximo mensaje va al modelo del chat o al primero disponible.
+    fn default_chat_model(&mut self) {
+        if self.chat_model.is_none() {
+            self.chat_model = self
+                .chat
+                .as_ref()
+                .and_then(|c| c.model().map(str::to_string))
+                .or_else(|| self.available_models().into_iter().next());
+        }
+    }
+
     fn agent_call(&self, req: Req, method: &'static str) -> Option<Call> {
-        let id = &self.agent.as_ref()?.id;
+        let id = &self.view()?.id;
         let params = match req {
             Req::Logs => json!({ "agent": id, "limit": 200 }),
             _ => json!({ "agent": id }),
@@ -421,6 +496,19 @@ impl App {
                 calls.extend(self.tab_call());
             }
             Screen::ModelPicker => calls.push(call(Req::Models, "models.list", json!({}))),
+            Screen::Chat => {
+                if self.chat.is_none() {
+                    calls.push(call(
+                        Req::ChatGet,
+                        "chat.get",
+                        json!({ "project_root": self.root() }),
+                    ));
+                }
+                if self.models.is_empty() {
+                    calls.push(call(Req::Models, "models.list", json!({})));
+                }
+                calls.extend(self.chat_calls());
+            }
             Screen::Launch | Screen::NotARepo | Screen::FirstRun | Screen::NewAgent => {}
         }
         calls
@@ -466,6 +554,16 @@ impl App {
                 Vec::new()
             }
             Msg::Resize => Vec::new(),
+            Msg::Scroll(n) => {
+                if self.screen == Screen::Chat {
+                    self.chat_scroll = if n > 0 {
+                        self.chat_scroll.saturating_add(n.unsigned_abs())
+                    } else {
+                        self.chat_scroll.saturating_sub(n.unsigned_abs())
+                    };
+                }
+                Vec::new()
+            }
             Msg::Disconnected(why) => {
                 self.connected = false;
                 self.error(format!(
@@ -496,7 +594,7 @@ impl App {
                     return self.go(if recovery {
                         Screen::Recovery
                     } else {
-                        Screen::Home
+                        Screen::Chat
                     });
                 } else if self.first_run.name.is_empty() {
                     self.first_run.name = self.project_name().to_string();
@@ -505,10 +603,10 @@ impl App {
             Req::ProjectInit => {
                 self.info("Proyecto inicializado.");
                 let next = if self.providers_needing_attention() > 0 {
-                    self.after_setup = Screen::Home;
+                    self.after_setup = Screen::Chat;
                     Screen::ProviderSetup
                 } else {
-                    Screen::Home
+                    Screen::Chat
                 };
                 let mut calls = vec![self.status_call()];
                 calls.extend(self.go(next));
@@ -525,7 +623,24 @@ impl App {
                 return vec![Self::providers_call()];
             }
             Req::Agents => self.agents = list("agents"),
-            Req::Models => self.models = list("models"),
+            Req::Models => {
+                self.models = list("models");
+                self.default_chat_model();
+            }
+            Req::ChatGet => {
+                if let Some(id) = v["agent_id"].as_str() {
+                    self.chat = Some(AgentView::new(id.to_string()));
+                    return self.chat_calls();
+                }
+            }
+            Req::ChatCreate => {
+                let Some(id) = v["agent_id"].as_str() else {
+                    return Vec::new();
+                };
+                self.chat = Some(AgentView::new(id.to_string()));
+                self.info("Chat iniciado en la rama symphony/chat.");
+                return self.chat_calls();
+            }
             Req::Recovery => self.recovery = list("items"),
             Req::RecoveryAct => {
                 self.info("Hecho.");
@@ -541,13 +656,15 @@ impl App {
                 return calls;
             }
             Req::Inspect => {
-                if let Some(a) = &mut self.agent {
+                if let Some(a) = self.view_mut() {
                     a.inspect = v;
                 }
+                self.default_chat_model();
             }
             Req::Logs => {
-                if let Some(a) = &mut self.agent {
-                    a.messages = list("messages");
+                let messages = list("messages");
+                if let Some(a) = self.view_mut() {
+                    a.messages = messages;
                 }
             }
             Req::Activity => {
@@ -644,6 +761,7 @@ impl App {
             }
             Screen::FirstRun => self.first_run_key(key),
             Screen::ProviderSetup | Screen::Providers => self.providers_key(key),
+            Screen::Chat => self.chat_key(key),
             Screen::Home => self.home_key(key),
             Screen::NewAgent => self.new_agent_key(key),
             Screen::ModelPicker => self.picker_key(key),
@@ -681,7 +799,7 @@ impl App {
                 self.screen = Screen::FirstRun;
                 Vec::new()
             }
-            KeyCode::Char('o') => self.go(Screen::Home),
+            KeyCode::Char('o') => self.go(Screen::Chat),
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.quit = true;
                 Vec::new()
@@ -757,6 +875,84 @@ impl App {
         }
     }
 
+    fn chat_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Esc => return self.go(Screen::Home),
+            KeyCode::Enter => return self.chat_send(),
+            KeyCode::Tab | KeyCode::BackTab => {
+                let models = self.available_models();
+                if !models.is_empty() {
+                    let at = self
+                        .chat_model
+                        .as_ref()
+                        .and_then(|m| models.iter().position(|x| x == m));
+                    let next = match at {
+                        Some(i) => cycle(i, models.len(), key.code == KeyCode::Tab),
+                        None => 0,
+                    };
+                    self.chat_model = models.get(next).cloned();
+                }
+            }
+            KeyCode::Backspace => {
+                self.chat_input.pop();
+            }
+            KeyCode::Char(c) => self.chat_input.push(c),
+            KeyCode::Up => self.chat_scroll = self.chat_scroll.saturating_add(1),
+            KeyCode::Down => self.chat_scroll = self.chat_scroll.saturating_sub(1),
+            KeyCode::PageUp => self.chat_scroll = self.chat_scroll.saturating_add(10),
+            KeyCode::PageDown => self.chat_scroll = self.chat_scroll.saturating_sub(10),
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    /// Enter en el chat: el primer mensaje crea el chat; los siguientes se mandan, y si el
+    /// modelo elegido (Tab) no es el del chat, cambian de executor llevando el mensaje.
+    fn chat_send(&mut self) -> Vec<Call> {
+        let text = self.chat_input.trim().to_string();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let model = self.chat_model.clone();
+        let next = match &self.chat {
+            None => {
+                let Some(model) = model else {
+                    self.error("No hay modelos disponibles: habilita un proveedor (Esc, luego p).");
+                    return Vec::new();
+                };
+                call(
+                    Req::ChatCreate,
+                    "agent.create",
+                    json!({
+                        "title": text,
+                        "project_root": self.root(),
+                        "model": model,
+                        "failover": "ANY",
+                        "chat": true,
+                    }),
+                )
+            }
+            Some(chat) => match model.filter(|m| Some(m.as_str()) != chat.model()) {
+                Some(m) => call(
+                    Req::Switch,
+                    "agent.switch",
+                    json!({ "agent": chat.id, "model": m, "message": text }),
+                ),
+                None => call(
+                    Req::Send,
+                    "agent.send",
+                    json!({ "agent": chat.id, "text": text }),
+                ),
+            },
+        };
+        self.chat_input.clear();
+        self.chat_scroll = 0;
+        vec![next]
+    }
+
     fn home_key(&mut self, key: KeyEvent) -> Vec<Call> {
         if self.move_selection(key.code) {
             return Vec::new();
@@ -770,6 +966,7 @@ impl App {
                 None => self.new_agent(),
             },
             KeyCode::Char('n') => self.new_agent(),
+            KeyCode::Esc => self.go(Screen::Chat),
             KeyCode::Char('p') => self.go(Screen::Providers),
             KeyCode::Char('r') => self.go(Screen::Recovery),
             KeyCode::Char(':') | KeyCode::Char('/') => {

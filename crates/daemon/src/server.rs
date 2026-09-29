@@ -335,6 +335,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         },
         "agent.create" | "agent.spawn" => agent_create(req, state).await,
         "agent.list" | "agents.list" => agent_list(req, state),
+        "chat.get" => chat_get(req, state),
         "agent.inspect" => agent_inspect(req, state).await,
         "agent.send" => agent_send(req, state).await,
         "agent.pause" => agent_pause(req, state).await,
@@ -434,6 +435,20 @@ async fn agent_create(req: Request, state: &State) -> Response {
         ),
         Err(e) => Response::error(req.id, e.code(), e.to_string()),
     }
+}
+
+/// El agente del chat del proyecto, si ya existe (P07.5.S7). No crea nada: abrir Symphony
+/// no debe dejar worktrees; el chat nace con el primer mensaje (`agent.create` con `chat`).
+fn chat_get(req: Request, state: &State) -> Response {
+    // `project_root` ya es la raíz del repo (la devuelve `project.status`).
+    let root = project_root_param(&req.params).display().to_string();
+    read_view(req, state, |c| {
+        let agent = repo::project_by_root(c, &root)
+            .ok()
+            .flatten()
+            .and_then(|p| repo::chat_agent(c, p.id).ok().flatten());
+        Ok(json!({ "agent_id": agent.map(|a| a.id.to_string()) }))
+    })
 }
 
 fn agent_list(req: Request, state: &State) -> Response {
