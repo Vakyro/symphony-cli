@@ -20,7 +20,7 @@ Lo que Leo pide (chat agéntico, cambiar de modelo/proveedor entre mensajes, fai
 Lo que **falta** para que exista el chat:
 
 1. **Mensajes después del turno (`resume` nativo).** Hoy `send_message` falla si el proceso ya terminó (ADR-0005, adenda). Sin esto no hay chat. **Los adapters ya tienen `resume_spec`** (ver §7); falta cablearlo en el executor. Ojo con el nombre: `pause()`/`resume()` actuales son suspender/reanudar el árbol de procesos, no el `resume` del CLI. Conviene otro nombre para no confundir (p. ej. `continue_session`).
-2. **Agente sin task/worktree.** `create_agent` siempre crea task + worktree + branch + checkpoint (`runtime.rs` ~305–520). Un chat corto en la raíz del proyecto no debería crear rama. Confirmado en §7: `worktree_id` es `Option`, pero `prepare_handoff` exige worktree.
+2. **Agente "chat general" con worktree propio (decisión de Leo).** El chat es un agente normal cuyo worktree/rama es el más cercano a `main` (una "pre-main"), creado una vez por proyecto. `create_agent` ya sabe crear task + worktree + branch + checkpoint (`runtime.rs` ~305–520), y `prepare_handoff` ya exige worktree, así que **no hace falta soportar agentes sin worktree**. Lo que falta: crearlo/reutilizarlo de forma idempotente (uno por proyecto), que su task no se marque como terminada tras un turno y una rama con nombre reservado (p. ej. `symphony/chat`) basada en `main`.
 3. **Detectar agotamiento de contexto/cuota.** `needs_failover` solo reacciona a `ProviderError`. Ver §7: los CLIs compactan solos, así que el disparador debe ser una política de Symphony sobre el uso de tokens, no un error.
 4. **Contexto de la conversación en el handoff.** El handoff v1 se diseñó para tareas con cambios en Git. En un chat sin diff, lo que hay que transferir es la conversación. Confirmado en §7: el handoff v1 **no** incluye mensajes; es trabajo real.
 5. **Vista Chat como pantalla inicial** con selector de modelo por mensaje.
@@ -33,7 +33,7 @@ Propuesta: insertar una fase corta **antes** de P08 (nombre provisional "P07.5 �
 
 **P07.5 · Chat (orden sugerido, cada paso con su test):**
 1. `continue_session`: `resume` por adapter para mensajes posteriores al turno (Claude y Codex). Cierra un pendiente ya conocido.
-2. Agente en modo conversación (sin worktree/branch/task visible; cwd = raíz del proyecto).
+2. Agente "chat general": se crea o reutiliza una vez por proyecto con su worktree/rama pre-main (p. ej. `symphony/chat`, basada en `main`), sin ciclo de vida de tarea (no termina tras el turno).
 3. Vista Chat como home + scroll (rueda, página, posición).
 4. Cambio de modelo/proveedor por mensaje reutilizando `switch()` + handoff con historial de conversación.
 5. Failover reactivo por cuota/contexto agotado (empezando por lo que se pueda detectar de verdad; parsers parciales de P10.S2).
@@ -95,9 +95,9 @@ Pruebas en un directorio temporal, con prompts mínimos (Claude Code 2.1.284 con
 ### Spike 3 · ¿El handoff transporta una conversación? ❌ no, tal como está
 - `HandoffInput` (`crates/context/src/handoff.rs`) solo tiene objetivo, plan, último comando, fallos, archivos, `git status` y diff. **No incluye mensajes.** El historial solo se cuenta en caracteres para estimar el coste `raw` (`daemon/src/handoff.rs` ~97).
 - `prepare_handoff` **exige** worktree y checkpoint (`ok_or("el agente no tiene worktree")`). Un chat sin worktree fallaría ahí.
-- `worktree_id` es `Option` en el agente, así que un agente sin worktree es válido en el esquema. **Resuelve la duda de §1.2.**
+- `worktree_id` es `Option` en el agente, pero **no se aprovechará**: el chat tendrá worktree propio (decisión de Leo), así que este requisito de `prepare_handoff` deja de ser un problema.
 - Los mensajes sí están en la base (`repo::conversation_chars` los lee), así que el dato existe.
-- **Trabajo real que sale de aquí:** un handoff de conversación (transcript recortado por modo + último estado) y que `prepare_handoff` acepte agentes sin worktree.
+- **Trabajo real que sale de aquí:** un handoff de conversación (transcript recortado por modo + último estado). Con el chat en su propio worktree, `prepare_handoff` **no** necesita cambios para aceptar agentes sin worktree; los cambios de archivos del chat sí viajan por el diff y el `git status` que ya usa.
 
 ### Spike 1 · Señal de contexto agotado: ⚠️ el supuesto era incorrecto
 - **Cuota:** ya hay parsers para "usage limit", rate limit, auth, red y modelo no disponible en ambos adapters, con fixtures reales. Esa señal existe y funciona para el failover.
@@ -112,16 +112,17 @@ Pruebas en un directorio temporal, con prompts mínimos (Claude Code 2.1.284 con
 
 ### Efecto en las recomendaciones
 1. **P07.5 paso 1** baja de riesgo: solo hay que cablear `resume_spec` en el executor.
-2. **Nuevo paso** en P07.5: handoff de conversación y `prepare_handoff` sin worktree (antes de cambiar de proveedor en el chat).
+2. **Nuevo paso** en P07.5: handoff de conversación (transcript) antes de cambiar de proveedor en el chat.
 3. **P07.5 paso 5** cambia de nombre: "failover reactivo por cuota" (funciona) + "política de cambio por uso de tokens" (nueva), no "detección de contexto lleno".
 4. El riesgo principal pasa de "¿hay señal?" a "¿qué información se pierde en el handoff de conversación y cuánto cuesta?".
 
 ## 8. Preguntas para Leo
 
-1. ¿El chat es un agente sin worktree (mi recomendación, reutiliza todo) o una entidad nueva?
+1. ~~¿El chat es un agente sin worktree o una entidad nueva?~~ **Resuelta por Leo:** agente "chat general" con worktree propio, la rama más cercana a `main` (pre-main). Queda una consecuencia por decidir, ver la pregunta 5.
 2. ¿Aceptas que el failover automático de contexto/cuota salga **después** del cambio manual de modelo si el mini-spike 1 no encuentra una señal fiable?
 3. ¿Se difiere P08 (multiagente) hasta terminar el chat, o se mantiene en paralelo como opción avanzada?
 4. ¿Quieres que la vista inicial sea el chat y los agentes/tareas queden como segunda pantalla?
+5. Si el chat es la rama pre-main, ¿las ramas de los agentes de tareas (P08+) salen de la rama del chat y se integran de vuelta a ella, y solo la rama del chat se fusiona a `main`? Es una jerarquía `main ← chat ← agentes` que cambia la base (`base_ref`) de los worktrees y el flujo de merge de P08.S7. Para P07.5 basta con que el chat salga de `main`; esto se decide antes de P08.
 
 ## 9. Qué cambiaría en el PLAN si se aprueba
 
