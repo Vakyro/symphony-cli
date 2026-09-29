@@ -8,7 +8,8 @@ use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use serde_json::Value;
 
 use crate::app::{
-    App, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Tab, ago, state_phrase,
+    AgentView, App, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Tab, ago,
+    state_phrase,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -441,39 +442,103 @@ fn wrap(s: &str, width: usize) -> Vec<String> {
 // actualizarla acá o el chat mostraría el handoff entero.
 const HANDOFF_PROMPT: &str = "Retomas una tarea de código";
 
-fn chat_lines(messages: &[Value], width: usize) -> Vec<Line<'static>> {
+/// Líneas de un mensaje (vacío si no se muestra).
+fn message_lines(m: &Value, width: usize) -> Vec<Line<'static>> {
+    let content = m["content"].as_str().unwrap_or("");
     let mut lines = Vec::new();
-    for m in messages {
-        let content = m["content"].as_str().unwrap_or("");
-        match m["role"].as_str().unwrap_or("") {
-            "EXECUTOR_CHANGE" => {
-                for l in wrap(content, width) {
-                    lines.push(Line::from(colored(l, Color::Magenta)));
-                }
-            }
-            "USER" if content.starts_with(HANDOFF_PROMPT) => continue,
-            role => {
-                let (who, color) = match role {
-                    "USER" => ("tú", ACCENT),
-                    "ASSISTANT" => ("agente", Color::Green),
-                    _ => ("sistema", Color::DarkGray),
-                };
-                for (i, l) in wrap(content, width.saturating_sub(9))
-                    .into_iter()
-                    .enumerate()
-                {
-                    let prefix = if i == 0 {
-                        format!("{who:>7} │ ")
-                    } else {
-                        "        │ ".into()
-                    };
-                    lines.push(Line::from(vec![colored(prefix, color), Span::raw(l)]));
-                }
+    match m["role"].as_str().unwrap_or("") {
+        "EXECUTOR_CHANGE" => {
+            for l in wrap(content, width) {
+                lines.push(Line::from(colored(l, Color::Magenta)));
             }
         }
-        lines.push(Line::raw(""));
+        "USER" if content.starts_with(HANDOFF_PROMPT) => return lines,
+        role => {
+            let (who, color) = match role {
+                "USER" => ("tú", ACCENT),
+                "ASSISTANT" => ("agente", Color::Green),
+                _ => ("sistema", Color::DarkGray),
+            };
+            for (i, l) in wrap(content, width.saturating_sub(9))
+                .into_iter()
+                .enumerate()
+            {
+                let prefix = if i == 0 {
+                    format!("{who:>7} │ ")
+                } else {
+                    "        │ ".into()
+                };
+                lines.push(Line::from(vec![colored(prefix, color), Span::raw(l)]));
+            }
+        }
     }
+    lines.push(Line::raw(""));
     lines
+}
+
+/// Una herramienta que usó el agente, en una línea tenue.
+fn tool_line(t: &Value, width: usize) -> Line<'static> {
+    let (mark, color) = match t["status"].as_str().unwrap_or("") {
+        "DONE" => ("✓", Color::Green),
+        "FAILED" | "DENIED" => ("✗", Color::Red),
+        _ => ("…", Color::Yellow),
+    };
+    let cmd = t["command"].as_str().unwrap_or("").replace('\n', " ");
+    let tool = t["tool"].as_str().unwrap_or("?");
+    let room = width.saturating_sub(tool.chars().count() + 12);
+    let cmd: String = cmd.chars().take(room).collect();
+    Line::from(vec![
+        dim("        ⚙ "),
+        colored(format!("{mark} "), color),
+        dim(format!("{tool} {cmd}")),
+    ])
+}
+
+/// La conversación con lo que el agente hizo entre mensajes (herramientas), por orden de hora.
+/// `tools` viene de `agent.activity` (lo más nuevo primero); solo cuentan los `kind == "tool"`.
+fn chat_lines(messages: &[Value], tools: &[Value], width: usize) -> Vec<Line<'static>> {
+    let at = |v: &Value| v["at"].as_i64().unwrap_or(0);
+    let mut timeline: Vec<(i64, Vec<Line<'static>>)> = messages
+        .iter()
+        .map(|m| (at(m), message_lines(m, width)))
+        .collect();
+    timeline.extend(
+        tools
+            .iter()
+            .rev()
+            .filter(|t| t["kind"] == "tool")
+            .map(|t| (at(t), vec![tool_line(t, width)])),
+    );
+    // Estable: a igual hora conserva el orden (mensajes antes que herramientas).
+    timeline.sort_by_key(|(t, _)| *t);
+    timeline.into_iter().flat_map(|(_, l)| l).collect()
+}
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// «⠋ pensando… 12 s» / «⠋ ejecutando Bash… 3 s»: lo que el agente está haciendo ahora.
+fn working_line(app: &App, view: &AgentView) -> Line<'static> {
+    let running_tool = view
+        .activity
+        .iter()
+        .find(|t| t["kind"] == "tool" && t["status"] == "RUNNING")
+        .and_then(|t| t["tool"].as_str());
+    // Tiempo desde lo último que se supo del agente (mensaje o herramienta).
+    let last = view
+        .messages
+        .iter()
+        .chain(view.activity.iter())
+        .filter_map(|v| v["at"].as_i64())
+        .max();
+    let secs = last.map_or(0, |l| ((app.now_ms - l) / 1000).max(0));
+    let what = running_tool.map_or_else(|| "pensando".to_string(), |t| format!("ejecutando {t}"));
+    Line::from(vec![
+        colored(
+            format!("{} ", SPINNER[app.frame as usize % SPINNER.len()]),
+            Color::Yellow,
+        ),
+        dim(format!("{what}… {secs} s")),
+    ])
 }
 
 fn chat(app: &App, f: &mut Frame, area: Rect) {
@@ -525,7 +590,10 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
 
     let inner_w = usize::from(body.width.saturating_sub(2));
     let inner_h = usize::from(body.height.saturating_sub(2));
-    let mut lines = view.map_or_else(Vec::new, |v| chat_lines(&v.messages, inner_w));
+    let mut lines = view.map_or_else(Vec::new, |v| chat_lines(&v.messages, &v.activity, inner_w));
+    if let Some(v) = view.filter(|v| v.state() == "RUNNING") {
+        lines.push(working_line(app, v));
+    }
     if lines.is_empty() {
         lines.push(Line::from(dim("Escribe tu primer mensaje para empezar.")));
         lines.push(Line::from(dim(
@@ -892,7 +960,7 @@ fn from_bottom(total: usize, height: u16, scroll: u16) -> u16 {
 fn conversation(app: &App, f: &mut Frame, area: Rect) {
     let Some(a) = &app.agent else { return };
     // Con ajuste de línea: un texto largo del agente no se corta en el borde.
-    let mut lines = chat_lines(&a.messages, usize::from(area.width.saturating_sub(2)));
+    let mut lines = chat_lines(&a.messages, &[], usize::from(area.width.saturating_sub(2)));
     if lines.is_empty() {
         lines.push(Line::from(dim("Sin mensajes todavía.")));
     }

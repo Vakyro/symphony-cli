@@ -663,7 +663,7 @@ async fn agent_logs(req: Request, state: &State) -> Response {
         Ok(logs) => {
             let messages: Vec<Value> = logs
                 .into_iter()
-                .map(|(role, content)| json!({ "role": role, "content": content }))
+                .map(|(role, content, at)| json!({ "role": role, "content": content, "at": at }))
                 .collect();
             Response::ok(req.id, json!({ "messages": messages }))
         }

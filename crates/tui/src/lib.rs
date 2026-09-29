@@ -93,7 +93,19 @@ where
                 return Ok(());
             }
             terminal.draw(|f| ui::render(&app, f))?;
-            let Some(msg) = rx.recv().await else {
+            // Mientras el agente trabaja se redibuja ~7 veces por segundo (el indicador gira).
+            let received = if app.animating() {
+                match tokio::time::timeout(Duration::from_millis(150), rx.recv()).await {
+                    Ok(m) => m,
+                    Err(_) => {
+                        app.frame = app.frame.wrapping_add(1);
+                        continue;
+                    }
+                }
+            } else {
+                rx.recv().await
+            };
+            let Some(msg) = received else {
                 return Ok(());
             };
             pending = app.update(msg);

@@ -239,6 +239,8 @@ pub struct App {
     pub chat_model: Option<String>,
     /// Líneas por encima del final que se está mirando (0 = lo más nuevo).
     pub chat_scroll: u16,
+    /// Fotograma de las animaciones (lo avanza el loop mientras algo trabaja).
+    pub frame: u32,
     /// Tope de `chat_scroll` con el tamaño actual (lo fija el render; `ui::chat`).
     pub chat_max: std::cell::Cell<u16>,
     /// Barra de comandos abierta (`:`), con lo escrito.
@@ -291,6 +293,7 @@ impl App {
             chat_input: String::new(),
             chat_model: None,
             chat_scroll: 0,
+            frame: 0,
             chat_max: std::cell::Cell::new(u16::MAX),
             command: None,
             notice: None,
@@ -411,6 +414,11 @@ impl App {
     }
 
     /// La vista de agente que está en pantalla: la del chat o la de un agente.
+    /// ¿Hay algo trabajando que se anima en pantalla? El loop redibuja rápido solo entonces.
+    pub fn animating(&self) -> bool {
+        self.screen == Screen::Chat && self.chat.as_ref().is_some_and(|c| c.state() == "RUNNING")
+    }
+
     fn view(&self) -> Option<&AgentView> {
         if self.screen == Screen::Chat {
             self.chat.as_ref()
@@ -439,6 +447,8 @@ impl App {
                 "agent.logs",
                 json!({ "agent": chat.id, "limit": 200 }),
             ),
+            // Las herramientas que va usando el agente: el proceso en vivo (P07.5.S7b).
+            call(Req::Activity, "agent.activity", json!({ "agent": chat.id })),
         ]
     }
 
@@ -671,8 +681,9 @@ impl App {
                 }
             }
             Req::Activity => {
-                if let Some(a) = &mut self.agent {
-                    a.activity = list("items");
+                let items = list("items");
+                if let Some(a) = self.view_mut() {
+                    a.activity = items;
                 }
             }
             Req::Diff => {

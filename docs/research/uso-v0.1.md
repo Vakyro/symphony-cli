@@ -99,6 +99,7 @@ Leo probó la vista Chat en su terminal (Claude `haiku` y Codex `gpt-5.6-luna`, 
 6. **Exportar conversaciones completas a `.md`.**
 
 ### Diagnóstico
+- **Actualización 2026-09-29:** (1) tiene primera versión hecha (P07.5.S7b): herramientas intercaladas y «pensando… N s». Tiempos medidos en `docs/phases/P07.5-chat.md` § S7b: primer evento ~8,6 s con Claude haiku y ~21 s con Codex, ambos con cambio de proveedor.
 - (1) Los eventos de proceso (mensajes intermedios del agente, herramientas, `TurnUsage`) ya llegan por el bus y se persisten; el chat solo pinta `messages` (USER/ASSISTANT). Falta una vista de «actividad en vivo» del turno en curso (mensajes parciales, tool calls) y un indicador de trabajo (spinner). Depende de qué emitan los adaptadores en vivo (Claude stream-json sí; Codex por hooks/exec: verificar).
 - (4) Probable relación con `agent.logs` `limit: 200` y con el recorte de líneas por vista; verificar en la vista de agente antes de asumir causa.
 - (2) y (3) son de TUI (captura de ratón, foco de scroll por mensaje).

@@ -1438,7 +1438,7 @@ impl Runtime {
         &self,
         agent_id: AgentId,
         limit: Option<usize>,
-    ) -> Result<Vec<(String, String)>, AgentOpError> {
+    ) -> Result<Vec<(String, String, i64)>, AgentOpError> {
         let records = self.read_op(|c| repo::agent_messages(c, agent_id, limit))?;
         let objects = symphony_object_store::ObjectStore::new(
             symphony_core::SymphonyHome::at(&self.home).objects_dir(),
@@ -1451,7 +1451,7 @@ impl Runtime {
             .into_iter()
             .map(|m| {
                 let content = crate::handoff::message_text(&conn, &objects, &m);
-                (m.role, content)
+                (m.role, content, m.created_at)
             })
             .collect())
     }

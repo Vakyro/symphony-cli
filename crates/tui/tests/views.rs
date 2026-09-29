@@ -680,3 +680,41 @@ fn agent_conversation_wraps_long_messages_instead_of_cutting_them() {
     .unwrap();
     assert!(draw(&app).contains("FIN-DEL-TEXTO"));
 }
+
+#[test]
+fn chat_shows_the_agent_process_live_in_time_order() {
+    let mut app = chat_app();
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    let chat = app.chat.as_mut().unwrap();
+    chat.inspect = json!({ "agent": { "state": "RUNNING" } });
+    chat.messages = serde_json::from_value(json!([
+        { "role": "USER", "content": "corre los tests", "at": NOW - 6_000 },
+        { "role": "ASSISTANT", "content": "Voy a correr el chequeo.", "at": NOW - 5_000 },
+    ]))
+    .unwrap();
+    // `agent.activity` trae lo más nuevo primero.
+    chat.activity = serde_json::from_value(json!([
+        { "kind": "tool", "tool": "Bash", "command": "cargo test", "status": "RUNNING", "at": NOW - 2_000 },
+        { "kind": "tool", "tool": "Read", "command": "STATUS.md", "status": "DONE", "at": NOW - 4_000 },
+        { "kind": "checkpoint", "seq": 1, "at": NOW - 3_000 },
+    ]))
+    .unwrap();
+    assert!(app.animating());
+    let screen = draw(&app);
+    let at = |s: &str| screen.find(s).unwrap_or_else(|| panic!("falta `{s}`"));
+    assert!(
+        at("corre los tests") < at("Voy a correr") && at("Voy a correr") < at("Read STATUS.md")
+    );
+    assert!(at("Read STATUS.md") < at("Bash cargo test"));
+    assert!(!screen.contains("checkpoint"));
+    assert!(screen.contains("ejecutando Bash… 2 s"));
+}
+
+#[test]
+fn chat_at_rest_does_not_animate() {
+    let mut app = chat_app();
+    assert!(!app.animating());
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    app.chat.as_mut().unwrap().inspect = json!({ "agent": { "state": "READY" } });
+    assert!(!app.animating());
+}
