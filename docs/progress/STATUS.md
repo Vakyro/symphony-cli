@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-09-26 · por claude-code/haiku-4.5
+**Actualizado:** 2026-09-28 · por claude-code/sonnet-5.5
 **Fase actual:** P07 · TUI y release v0.1 (rama `phase/p07-tui`)
-**Paso actual:** P07.S10 · Replanificación (gate diferido: uso real ≥ 2 semanas). P07 cerrada por decisión de Leo (2026-09-26); P08 no empieza sin el ADR de S10
+**Paso actual:** P07.S10 · Replanificación adelantada solo para el chat: ADR-0006 (PROPUESTO) inserta P07.5 · Chat general antes de P08. P08–P16 siguen provisionales. Rama de trabajo del spike: `spike/p08-decisiones`
 **Estado del paso:** v0.1.0 ✅ en `main` con CI verde (200 tests). Uso real iniciado 2026-09-26; primeras observaciones en `docs/research/uso-v0.1.md`.
 **En curso por:** —
 
@@ -25,9 +25,10 @@
 - [ ] P07.S10 Replanificación (gate: ≥ 2 semanas de uso real)
 
 ## Próxima acción concreta
-1. Leo continúa usando v0.1 con Claude Code y Codex durante al menos 2 semanas; registra tareas, handoffs, fallas y rendimiento en `docs/research/uso-v0.1.md`.
-2. P07.S9: skill `health` + revisión de código del diff de la fase; corregir hallazgos.
-3. Al terminar el uso: ADR de replanificación de P08–P16 con `the-council`, incluyendo las propuestas del día 1, merge a `main` y tag `p07-done`.
+1. **Leo:** revisar `docs/adr/0006-chat-general-y-replanificacion.md` y confirmar 2 puntos: (a) P08 se difiere hasta cerrar P07.5; (b) el failover por umbral de tokens es opcional y apagado por defecto. Con eso el ADR pasa a ACEPTADO.
+2. Mientras tanto se puede empezar **P07.5.S1** (continuar la sesión después del turno) y **S2** (instalación global mínima): no dependen de esos puntos. Crear la bitácora `docs/phases/P07.5-chat.md` al empezar.
+3. Leo sigue usando v0.1 y anotando en `docs/research/uso-v0.1.md`; el gate de ≥ 2 semanas aplica a la revisión de P08–P16 tras cerrar P07.5.
+4. Merge de `spike/p08-decisiones` a `main` cuando Leo apruebe el ADR (no antes).
 
 ## Propuesta clave para S10: Chat agentico con failover entre proveedores
 
@@ -68,4 +69,5 @@ Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y val
 | P05 | ✅ | p05-done |
 | P06 | ✅ | p06-done |
 | P07 | ✅ (S10 pendiente, diferido por Leo) | p07-done, v0.1.0 |
-| P08–P16 | ⏳ (P08–P16 provisionales hasta P07.S10) | |
+| P07.5 | ⏳ propuesta (ADR-0006) | p075-done |
+| P08–P16 | ⏳ (provisionales; P08–P10 con rediseño pendiente) | |

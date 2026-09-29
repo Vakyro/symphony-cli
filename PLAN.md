@@ -11,6 +11,7 @@
 | 2026-09-24 | Nuevo **P00.S0 · Prevalidación**: probar herramientas existentes (Claude Squad y similares) y hacer el Test D a mano, antes de escribir código | IDEA §10 pedía probar lo existente y el PLAN no tenía paso para eso. Test D es el supuesto que decide el producto (IDEA §7 fila 4) y se puede probar en horas sin Rust |
 | 2026-09-24 | P01.S2 investiga el **modo de interacción** (headless o PTY) y P01.S8 produce **ADR-0005** | Ningún documento decidía cómo ve e interviene Leo en la sesión de cada CLI. Headless pierde la TUI del CLI; PTY dentro de ratatui obliga a emular una terminal. Cambia P04, P05 y P07 |
 | 2026-09-24 | **P08–P16 son provisionales.** Nuevo gate **P07.S10 · Replanificación** tras v0.1: uso real ≥ 2 semanas con 2 proveedores, y luego revisión de P08–P16 con ADR | El detalle de P08–P16 se escribió sin evidencia de uso; el spike y el uso diario lo van a cambiar. Evita construir 5 adapters y una GUI sobre supuestos |
+| 2026-09-28 | Nueva fase **P07.5 · Chat general** antes de P08 (ADR-0006, propuesto): chat agéntico en la vista inicial, con worktree propio pre-main y cambio de proveedor sin perder contexto. P08–P10 quedan diferidas y pendientes de rediseño | El uso real de v0.1 mostró que el valor está en un chat simple con continuidad entre proveedores, no en orquestar varios agentes. El chat reutiliza casi todo P05–P07 |
 
 ---
 
@@ -410,6 +411,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 | P05 | Adapters y event bus | Claude Code y Codex como executors con hooks → eventos | `p05-done` |
 | P06 | Agent runtime, checkpoints y handoff | Forced-kill test: un agente sobrevive a su modelo | `p06-done` |
 | P07 | TUI y release v0.1 | Journey A completo en TUI + gate de replanificación (P07.S10) | `p07-done`, `v0.1.0` |
+| P07.5 | Chat general | Chat como vista inicial; un chat empieza en Claude, cambia a Codex y sigue sin reexplicar | `p075-done` |
 | P08 ⚠️ | Runtime multiagente | Scheduler, DAG, validación y merge; benchmark de 3 agentes | `p08-done` |
 | P09 ⚠️ | Context Engine | Compresión reversible, handoff por niveles y MCP de contexto | `p09-done` |
 | P10 ⚠️ | Salud, failover y routing | Failover automático, profiles y `/explain-route` | `p10-done`, `v0.5.0` |
@@ -420,7 +422,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 | P15 ⚠️ | GUI de escritorio | Tauri + SolidJS sobre la misma API | `p15-done` |
 | P16 ⚠️ | Validación final | Todas las vistas y journeys probados, benchmark principal, v1.0 | `p16-done`, `v1.0.0` |
 
-⚠️ **Provisional.** P08–P16 describen la dirección, no un contrato. Se revisan en P07.S10 con evidencia de uso real, y cualquier cambio queda en un ADR. Hasta entonces, un agente no invierte trabajo en esas fases (ni crea sus crates, tablas o vistas) y el MVP se queda en 2 proveedores: Claude Code y Codex.
+⚠️ **Provisional.** P07.5 se añadió por ADR-0006 (pendiente de que Leo confirme dos puntos). P08–P16 describen la dirección, no un contrato. Se revisan en P07.S10 con evidencia de uso real, y cualquier cambio queda en un ADR. Hasta entonces, un agente no invierte trabajo en esas fases (ni crea sus crates, tablas o vistas) y el MVP se queda en 2 proveedores: Claude Code y Codex.
 
 ---
 
@@ -865,10 +867,56 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 
 ---
 
+## P07.5 · Chat general
+
+**Objetivo:** un chat agéntico en la vista inicial, con el cambio de proveedor/modelo sin perder contexto como diferenciador.
+**Prerrequisito:** P07 cerrada (v0.1.0). ADR-0006. Los pasos S1 y S2 no dependen de los dos puntos pendientes de Leo; S3 en adelante esperan su confirmación.
+**Docs:** ADR-0006, ADR-0004, ADR-0005 (y su adenda); `docs/research/spike-p08-decisiones.md`, `docs/research/uso-v0.1.md`; DB §3.C, §3.D; FLOW §6, §7, §13; IDEA §5.7.
+**Tecnologías:** las de P05–P07 (sin dependencias nuevas).
+**Skills:** `test-driven-development`, `eval-harness`, `ponytail-review`.
+
+### P07.5.S1 · Continuar la sesión después del turno
+- **Qué:** cuando llega un mensaje y el proceso ya terminó, el executor usa `resume_spec` del adapter (`--resume` en Claude, `exec resume` en Codex) con el mensaje. Nombre sugerido: `continue_session`, para no confundirlo con `pause()/resume()` (suspensión del árbol de procesos).
+- **Verifica:** test con `fake-agent` (mensaje tras el fin del turno conserva la sesión); live opt-in con permiso de Leo: Claude y Codex recuerdan un dato del turno anterior.
+
+### P07.5.S2 · Instalación global mínima
+- **Qué:** `symphony` y `symphonyd` se instalan (`cargo install --path` o binario en el PATH) y se abren desde cualquier carpeta; QUICKSTART explica qué vive en `<proyecto>/.symphony/` y qué en `~/.symphony`.
+- **Verifica:** desde un repo distinto, `symphony --version` y abrir la TUI funcionan.
+
+### P07.5.S3 · Handoff conversacional
+- **Qué:** `HandoffInput` incluye la conversación (transcript recortado por modo `raw/safe/balanced/aggressive`, con estimación de tokens). El diff y el `git status` del worktree siguen siendo la fuente de verdad de los archivos.
+- **Verifica:** para un chat fijo, `raw` ≥ `safe` ≥ `balanced` ≥ `aggressive` en tokens; `raw` no omite mensajes. Repetir la prueba de forced kill de P06.S8 con una conversación de ≥ 10 turnos.
+
+### P07.5.S4 · Agente «chat general»
+- **Qué:** un agente por proyecto, creado o reutilizado de forma idempotente, con worktree y rama `symphony/chat` basada en `main`; su task no se cierra tras un turno. Se permite `Running → Ready` (`state_reason`: «esperando mensaje») en `core::transitions`, sin migración.
+- **Verifica:** proptest de transiciones actualizado; crear el chat dos veces devuelve el mismo agente.
+
+### P07.5.S5 · Commit por turno y estado en el bus
+- **Qué:** al recibir `TurnFinished`, commit automático en el worktree del chat (sin commit si no hay cambios; mensaje con número de turno y modelo). Los cambios de estado del agente se emiten al bus desde el punto único de escritura (`set_state`) y la TUI deja de depender del sondeo para eso. Añadir a CONSTRAINTS la regla «camino barato por evento × agente».
+- **Verifica:** un turno con cambios deja un commit y el worktree limpio; un turno sin cambios no deja commit; test de que el bus recibe el evento de estado.
+
+### P07.5.S6 · Cambio de modelo/proveedor
+- **Qué:** cambio manual por mensaje reutilizando `switch()` con el handoff conversacional; failover por cuota del chat con los parsers existentes; política opcional por umbral de tokens (apagada por defecto) que lee el uso del stream (`turn.completed.usage` en Codex, `result` en Claude).
+- **Verifica:** Journey de chat (nuevo, F): empieza en Claude, cambia a Codex a mitad y continúa sin reexplicar; cuota simulada con `fake-agent` activa el failover.
+
+### P07.5.S7 · Vista Chat como inicio
+- **Qué:** la vista inicial es el chat (agentes y tareas pasan a segunda pantalla), con selector de modelo por mensaje, scroll por rueda y página, y señal de posición. Actualizar FLOW con la vista y el Journey F.
+- **Verifica:** snapshots `insta` de la vista; prueba en terminal real de Leo.
+
+### P07.5.S8 · Skills en el chat
+- **Qué:** comprobar que las skills nativas de Claude y Codex funcionan dentro del chat; documentar lo que no.
+- **Verifica:** una skill de cada CLI invocada desde el chat (live opt-in).
+
+### P07.5.S9 · Cierre (gate)
+- Medir con una conversación larga el coste en tokens de cada cambio de proveedor (`eval-harness`) y anotarlo. Skill `health`, `ponytail-review`, protocolo §4.6, tag `p075-done`.
+- **Criterios de salida P07.5:** Leo abre `symphony` en cualquier carpeta, conversa con Claude, cambia a Codex a mitad y el contexto se conserva; el trabajo del chat queda en commits de `symphony/chat`; se registran cifras de coste. Tras esto se hace la revisión de P08–P16 con el gate de uso original.
+
+---
+
 ## P08 · Runtime multiagente
 
 **Objetivo:** 3 agentes en paralelo sin que la máquina se trabe.
-**Prerrequisito:** ADR de replanificación de P07.S10 aprobado. Si ese ADR cambió esta fase, gana el ADR (§1.2).
+**Prerrequisito:** P07.5 cerrada y ADR de replanificación de P07.S10 aprobado. **Rediseño pendiente** por ADR-0006: el destino de integración pasa a ser la rama del chat y se reevalúa el alcance. Si el ADR cambió esta fase, gana el ADR (§1.2).
 **Docs:** IDEA §5.4, §5.9–§5.11; STACK §7.2, §8, §23, §25.2; DB §3.B, §3.F, §3.H, §6 (Fase 2); FLOW §9, §10, §14, §15, Journeys B y D; ADR-0003.
 **Tecnologías:** `tokio::sync::Semaphore`, BinaryHeap, sysinfo, Job Objects / cgroups v2 / process groups, notify (en P09), cargo-llvm-cov.
 **Skills:** `test-driven-development`, `performance-optimization`, `deprecation-and-migration`, `the-council` (si el benchmark falla).

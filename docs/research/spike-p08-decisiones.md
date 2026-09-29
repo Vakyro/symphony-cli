@@ -1,7 +1,7 @@
 # Spike: decisiones antes de P08
 
 Fecha: 2026-09-28 · Insumos: `uso-v0.1.md`, `referencias-herdr-ax.md`, PLAN P08–P10 (detalle) y código actual (`crates/daemon`, `crates/core`, `crates/store`).
-**Es una recomendación para el ADR de P07.S10, no una decisión aprobada. No modifica PLAN.md.**
+**Insumo del ADR-0006 (`docs/adr/0006-chat-general-y-replanificacion.md`), que recoge las decisiones y las plasma en PLAN.md (fase P07.5).**
 
 Límite de lo leído: del PLAN leí el detalle de P08–P10; de P11–P16 solo los títulos de pasos. Del código leí `executor.rs`, `runtime.rs`, `enums.rs` y tamaños de archivos, no todo el repo. Lo marcado **(verificar)** no se comprobó.
 
@@ -70,7 +70,7 @@ Lo que sí hace falta ahora, mínimo: un chat entre turnos no está `COMPLETED` 
 - reutilizar `READY`/`PAUSED` con una razón (`state_reason`) — barato, impreciso;
 - agregar un estado (p. ej. `IDLE`) en `enums.rs` + `transitions.rs` + DB — un cambio pequeño y explícito.
 
-**(verificar en `transitions.rs`)** qué transiciones permite `RUNNING → …` al terminar el turno, antes de elegir. Mi voto: agregar un estado `IDLE`, y dejar `phase + conditions` como decisión del ADR previo a P08 con datos del scheduler.
+**Verificado en `transitions.rs`:** `Completed` es terminal y `Running → Ready` no está permitida. Opción elegida en ADR-0006: permitir `Running → Ready` con `state_reason` «esperando mensaje» (solo cambia la tabla de transiciones; sin migración). Un estado `IDLE` propio o `phase + conditions` se deja para el ADR previo a P08, con datos del scheduler.
 
 ## 4. Event bus
 
