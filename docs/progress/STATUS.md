@@ -1,9 +1,9 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-09-28 · por claude-code/sonnet-5.5
-**Fase actual:** P07 · TUI y release v0.1 (rama `phase/p07-tui`)
-**Paso actual:** P07.S10 · Replanificación adelantada solo para el chat: ADR-0006 (ACEPTADO por Leo, 2026-09-28) inserta P07.5 · Chat general antes de P08. P08–P16 siguen provisionales.
-**Estado del paso:** v0.1.0 ✅ en `main` con CI verde (200 tests). Uso real iniciado 2026-09-26; primeras observaciones en `docs/research/uso-v0.1.md`.
+**Fase actual:** P07.5 · Chat general (rama `phase/p075-chat`, ADR-0006 aceptado)
+**Paso actual:** P07.5.S3 · Handoff conversacional (S1 y S2 hechos). P08–P16 siguen provisionales
+**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
 
 ## Salud del repo
@@ -22,10 +22,22 @@
 - [x] P07.S7 Snapshots y E2E (terminal real ✅ Leo; Journey A live con Claude Code ✅ 17 s)
 - [x] P07.S8 Release v0.1.0 (tag `v0.1.0`, CHANGELOG, build release: daemon idle 16.5 MB)
 - [x] P07.S9 Cierre (revisión de código: 1 hallazgo corregido, `spawn src/main.rs …` ya no se toma como modelo; `health` no corrido)
-- [ ] P07.S10 Replanificación (gate: ≥ 2 semanas de uso real)
+- [ ] P07.S10 Replanificación (gate: ≥ 2 semanas de uso real; adelantada solo para el chat por ADR-0006)
+
+## Progreso de P07.5
+- [x] P07.5.S1 Continuar la sesión después del turno (`continue_session`)
+- [x] P07.5.S2 Instalación global mínima
+- [ ] P07.5.S3 Handoff conversacional
+- [ ] P07.5.S4 Agente «chat general» (worktree `symphony/chat`, `Running → Ready`)
+- [ ] P07.5.S5 Commit por turno y estado en el bus
+- [ ] P07.5.S6 Cambio de modelo/proveedor
+- [ ] P07.5.S7 Vista Chat como inicio
+- [ ] P07.5.S8 Skills en el chat
+- [ ] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
-1. Empezar **P07.5.S1** (continuar la sesión después del turno) y **S2** (instalación global mínima). Crear la bitácora `docs/phases/P07.5-chat.md` al empezar y trabajar en una rama `phase/p075-chat`.
+1. **Leo:** en tu máquina hay copias viejas de `symphony.exe`/`symphonyd.exe` (v0.1.0, sin S1) en `%APPDATA%\npm`, antes que `~/.cargo/bin` en el PATH. Para usar S1 hay que reemplazarlas o borrarlas y correr los dos `cargo install` de QUICKSTART §1 (con `symphony daemon stop` antes).
+2. P07.5.S3: `HandoffInput` gana la conversación (transcript recortado por modo).
 3. Leo sigue usando v0.1 y anotando en `docs/research/uso-v0.1.md`; el gate de ≥ 2 semanas aplica a la revisión de P08–P16 tras cerrar P07.5.
 
 ## Propuesta clave para S10: Chat agentico con failover entre proveedores

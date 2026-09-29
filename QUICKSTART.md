@@ -17,27 +17,47 @@ codex --version     # si lo tienes
 
 ## 1. Obtener Symphony
 
-### Opción A: Compilar desde el repo
+### Opción A (recomendada): instalar globalmente
+Así `symphony` se abre desde cualquier carpeta, no solo desde este repo.
 ```bash
 git clone https://github.com/Vakyro/symphony-cli.git
 cd symphony-cli
 
-# Compilar (toma ~2 min la primera vez)
-cargo build -p symphony-cli -p symphony-daemon --release
+# Instala `symphony` y `symphonyd` en ~/.cargo/bin (toma varios minutos la primera vez)
+cargo install --path crates/cli --locked
+cargo install --path crates/daemon --locked
 
-# Binarios listos en target/release/
-# - symphony-cli (o symphony-cli.exe en Windows)
-# - symphonyd (o symphonyd.exe en Windows)
+# Comprueba, desde otra carpeta cualquiera:
+cd ~/mi-proyecto
+symphony --version
 ```
 
-### Opción B: Usar desde el repo directamente
+`symphony` busca `symphonyd` junto a su propio ejecutable, así que ambos deben quedar en la misma carpeta (con `cargo install` lo están). `~/.cargo/bin` debe estar en el `PATH` (rustup lo agrega).
+
+**Para actualizar:** repite los dos `cargo install` con `--force`. En Windows, detén antes el daemon (`symphony daemon stop`); si sigue corriendo, el instalador falla con «Acceso denegado» porque `symphonyd.exe` está en uso.
+
+**Si `symphony --version` muestra una versión vieja:** hay otra copia antes en el `PATH`. Búscalas todas (PowerShell: `Get-Command symphony -All`; bash: `which -a symphony`) y borra la vieja o pon `~/.cargo/bin` primero. `symphony` y `symphonyd` deben venir del mismo lugar.
+
+### Opción B: solo compilar
+```bash
+cargo build -p symphony-cli -p symphony-daemon --release
+# Binarios en target/release/: symphony y symphonyd (.exe en Windows)
+```
+
+### Opción C: sin instalar (solo dentro del repo)
 ```bash
 cd symphony-cli
-# Todos los comandos abajo funcionan con "cargo run -p symphony-cli --" 
-# en lugar de "symphony"
+# Todos los comandos abajo funcionan con "cargo run -p symphony-cli --"
+# en lugar de "symphony". Solo funciona con este repo como carpeta actual.
 ```
 
 Asume `symphony` en el PATH de aquí en adelante.
+
+### Dónde guarda Symphony sus datos
+- **Global, en `~/.symphony`** (o `SYMPHONY_HOME`): la base de datos SQLite, el daemon (socket y logs), los worktrees de los agentes y `config.toml`. Se comparte entre todos tus proyectos.
+- **En tu proyecto, en `<proyecto>/.symphony/`**: la configuración propia del proyecto (`project.toml`). Se crea en el primer arranque de la TUI (first-run), no al crear un agente desde la línea de comandos.
+
+No hace falta instalar Symphony dentro de cada proyecto.
 
 ---
 
@@ -140,6 +160,13 @@ El agente trabaja solo. Tú ves:
 ```
 Presiona [ d ]  →  Ves git diff del worktree del agente
 ```
+
+### Seguir la conversación después de que el agente termine su turno
+Cuando el agente termina (`COMPLETED`), puedes escribirle otro mensaje: Symphony retoma la sesión del CLI (Claude Code o Codex) con el mismo modelo, y el CLI recuerda lo anterior. El agente vuelve a `RUNNING` y, al terminar, a `COMPLETED`.
+```
+symphony send 1 "ahora agrega tests"
+```
+En la TUI, presiona `m` en la vista del agente y escribe el mensaje. Si el agente está `FAILED` o `PAUSED`, el mensaje se rechaza con una pista (recupéralo o reanúdalo primero).
 
 ### Abrir el agente en su CLI nativo
 ```
