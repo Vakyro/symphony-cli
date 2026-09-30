@@ -86,6 +86,8 @@ pub enum Req {
     Switch,
     Attach,
     Export,
+    SkillsAnthropic,
+    SkillsOpenai,
     ChatGet,
     ChatCreate,
 }
@@ -104,6 +106,35 @@ pub struct Failure {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectPhase {
+    Start,
+    Move,
+    End,
+}
+
+/// Texto seleccionado con el ratón: de `start` a `end` (columna, fila), en orden de lectura.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection {
+    pub start: (u16, u16),
+    pub end: (u16, u16),
+    /// Ya se soltó el botón: el loop copia el texto una vez.
+    pub done: bool,
+    pub copied: bool,
+}
+
+impl Selection {
+    /// Extremos ordenados por posición de lectura (fila y luego columna).
+    pub fn ordered(&self) -> ((u16, u16), (u16, u16)) {
+        let key = |p: (u16, u16)| (p.1, p.0);
+        if key(self.start) <= key(self.end) {
+            (self.start, self.end)
+        } else {
+            (self.end, self.start)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Msg {
     Key(KeyEvent),
@@ -117,6 +148,8 @@ pub enum Msg {
     Paste(String),
     /// Rueda del ratón: positivo = hacia atrás en el historial.
     Scroll(i16),
+    /// Arrastre del ratón para seleccionar texto (columna, fila de la pantalla).
+    Select(SelectPhase, u16, u16),
     Disconnected(String),
 }
 
@@ -242,6 +275,12 @@ pub struct App {
     pub providers: Vec<Value>,
     pub agents: Vec<Value>,
     pub models: Vec<Value>,
+    /// Catálogo de skills y comandos por proveedor (`anthropic`, `openai`) para el autocompletado.
+    pub skills: std::collections::HashMap<String, Vec<Value>>,
+    /// Opción elegida en el desplegable de skills.
+    pub skill_sel: usize,
+    /// Lo escrito cuando se cerró el desplegable con Esc: mientras no cambie, no se reabre.
+    pub skill_dismissed: Option<String>,
     pub recovery: Vec<Value>,
     pub selected: usize,
     pub first_run: FirstRun,
@@ -259,6 +298,8 @@ pub struct App {
     pub chat_scroll: u16,
     /// Fotograma de las animaciones (lo avanza el loop mientras algo trabaja).
     pub frame: u32,
+    /// Selección con el ratón en curso o ya copiada (se borra al teclear, desplazar o hacer clic).
+    pub selection: Option<Selection>,
     /// Texto que el loop debe copiar al portapapeles (lo toma con `take`).
     pub copy: Option<String>,
     /// Captura del ratón (rueda). Apagada, la terminal deja seleccionar y copiar con el ratón.
@@ -301,6 +342,9 @@ impl App {
             providers: Vec::new(),
             agents: Vec::new(),
             models: Vec::new(),
+            skills: std::collections::HashMap::new(),
+            skill_sel: 0,
+            skill_dismissed: None,
             recovery: Vec::new(),
             selected: 0,
             first_run: FirstRun {
@@ -316,6 +360,7 @@ impl App {
             chat_model: None,
             chat_scroll: 0,
             frame: 0,
+            selection: None,
             copy: None,
             mouse: true,
             chat_max: std::cell::Cell::new(u16::MAX),
@@ -546,6 +591,18 @@ impl App {
                 if self.models.is_empty() {
                     calls.push(call(Req::Models, "models.list", json!({})));
                 }
+                if self.skills.is_empty() {
+                    for (req, provider) in [
+                        (Req::SkillsAnthropic, "anthropic"),
+                        (Req::SkillsOpenai, "openai"),
+                    ] {
+                        calls.push(call(
+                            req,
+                            "skills.list",
+                            json!({ "provider": provider, "project_root": self.root() }),
+                        ));
+                    }
+                }
                 calls.extend(self.chat_calls());
             }
             Screen::Launch | Screen::NotARepo | Screen::FirstRun | Screen::NewAgent => {}
@@ -576,7 +633,10 @@ impl App {
 
     fn handle(&mut self, msg: Msg) -> Vec<Call> {
         match msg {
-            Msg::Key(key) => self.key(key),
+            Msg::Key(key) => {
+                self.selection = None;
+                self.key(key)
+            }
             Msg::Reply(req, result) => self.reply(req, result),
             Msg::Event(_) => {
                 self.dirty = true;
@@ -600,7 +660,33 @@ impl App {
                 }
                 Vec::new()
             }
+            Msg::Select(phase, x, y) => {
+                match (phase, self.selection.as_mut()) {
+                    (SelectPhase::Start, _) => {
+                        self.selection = Some(Selection {
+                            start: (x, y),
+                            end: (x, y),
+                            done: false,
+                            copied: false,
+                        });
+                    }
+                    (SelectPhase::Move, Some(sel)) if !sel.done => sel.end = (x, y),
+                    // Un clic sin arrastrar no es una selección.
+                    (SelectPhase::End, Some(sel)) if !sel.done => {
+                        sel.end = (x, y);
+                        if sel.start == sel.end {
+                            self.selection = None;
+                        } else {
+                            sel.done = true;
+                        }
+                    }
+                    _ => {}
+                }
+                Vec::new()
+            }
             Msg::Scroll(n) => {
+                // El contenido se mueve: la selección ya no apunta a lo mismo.
+                self.selection = None;
                 if self.screen == Screen::Chat {
                     self.scroll_chat(i32::from(n));
                 }
@@ -666,6 +752,12 @@ impl App {
                     if enabled { "activado" } else { "desactivado" }
                 ));
                 return vec![Self::providers_call()];
+            }
+            Req::SkillsAnthropic => {
+                self.skills.insert("anthropic".into(), list("skills"));
+            }
+            Req::SkillsOpenai => {
+                self.skills.insert("openai".into(), list("skills"));
             }
             Req::Agents => self.agents = list("agents"),
             Req::Models => {
@@ -937,6 +1029,51 @@ impl App {
         self.chat_scroll = to.clamp(0, i32::from(self.chat_max.get())) as u16;
     }
 
+    /// Proveedor (`anthropic`/`openai`) del modelo elegido para el próximo mensaje.
+    fn chat_provider(&self) -> Option<&str> {
+        let id = self.chat_model.as_deref()?;
+        self.models
+            .iter()
+            .find(|m| m["id"] == id)
+            .and_then(|m| m["provider_id"].as_str())
+    }
+
+    /// Prefijo con el que el proveedor invoca una skill: `/` en Claude, `$` en Codex.
+    pub fn skill_prefix(&self) -> Option<char> {
+        match self.chat_provider()? {
+            "anthropic" => Some('/'),
+            "openai" => Some('$'),
+            _ => None,
+        }
+    }
+
+    /// Skills que coinciden con lo que se está escribiendo (`/fl…`, `$de…`), primero las que
+    /// empiezan igual. Vacío si no se escribe una invocación, si ya hay un espacio (ya se
+    /// eligió) o si se cerró el desplegable con Esc.
+    pub fn skill_matches(&self) -> Vec<&Value> {
+        let input = self.chat_input.as_str();
+        let Some(prefix) = self.skill_prefix() else {
+            return Vec::new();
+        };
+        let Some(token) = input.strip_prefix(prefix) else {
+            return Vec::new();
+        };
+        if token.contains(char::is_whitespace) || self.skill_dismissed.as_deref() == Some(input) {
+            return Vec::new();
+        }
+        let token = token.to_lowercase();
+        let Some(catalog) = self.chat_provider().and_then(|p| self.skills.get(p)) else {
+            return Vec::new();
+        };
+        let name = |s: &Value| s["name"].as_str().unwrap_or("").to_lowercase();
+        let mut found: Vec<&Value> = catalog
+            .iter()
+            .filter(|s| name(s).contains(&token))
+            .collect();
+        found.sort_by_key(|s| !name(s).starts_with(&token));
+        found
+    }
+
     /// Lo último que dijo el agente en el chat (para copiarlo).
     fn last_reply(&self) -> Option<String> {
         self.chat
@@ -967,6 +1104,37 @@ impl App {
             }
             return Vec::new();
         }
+        let matches = self.skill_matches();
+        if !matches.is_empty() {
+            let (last, name) = (
+                matches.len() - 1,
+                matches[self.skill_sel.min(matches.len() - 1)]["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+            );
+            match key.code {
+                KeyCode::Up => {
+                    self.skill_sel = self.skill_sel.min(last).saturating_sub(1);
+                    return Vec::new();
+                }
+                KeyCode::Down => {
+                    self.skill_sel = (self.skill_sel + 1).min(last);
+                    return Vec::new();
+                }
+                KeyCode::Right => {
+                    let prefix = self.skill_prefix().unwrap_or('/');
+                    self.chat_input = format!("{prefix}{name} ");
+                    self.skill_sel = 0;
+                    return Vec::new();
+                }
+                KeyCode::Esc => {
+                    self.skill_dismissed = Some(self.chat_input.clone());
+                    return Vec::new();
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::F(2) => {
                 self.mouse = !self.mouse;
@@ -994,8 +1162,12 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.chat_input.pop();
+                self.skill_sel = 0;
             }
-            KeyCode::Char(c) => self.chat_input.push(c),
+            KeyCode::Char(c) => {
+                self.chat_input.push(c);
+                self.skill_sel = 0;
+            }
             KeyCode::Up => self.scroll_chat(1),
             KeyCode::Down => self.scroll_chat(-1),
             KeyCode::PageUp => self.scroll_chat(10),

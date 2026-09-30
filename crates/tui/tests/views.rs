@@ -126,6 +126,8 @@ fn home_app() -> App {
     ok(&mut app, Req::Agents, agents());
     ok(&mut app, Req::Providers, providers());
     ok(&mut app, Req::Recovery, json!({ "items": [] }));
+    ok(&mut app, Req::SkillsAnthropic, json!({ "skills": [] }));
+    ok(&mut app, Req::SkillsOpenai, json!({ "skills": [] }));
     app
 }
 
@@ -373,7 +375,10 @@ fn open_without_setup_goes_home_without_listing_other_projects() {
     let calls = press(&mut app, KeyCode::Char('o'));
     assert_eq!(app.screen, Screen::Chat);
     // Sin proyecto en la base, `agent.list` traería agentes de otros proyectos.
-    assert_eq!(methods(&calls), ["chat.get", "models.list"]);
+    assert_eq!(
+        methods(&calls),
+        ["chat.get", "models.list", "skills.list", "skills.list"]
+    );
 }
 
 #[test]
@@ -822,4 +827,101 @@ fn export_is_ctrl_e_in_the_chat_and_e_in_the_agent_view() {
         methods(&press(&mut app, KeyCode::Char('e'))),
         ["agent.export"]
     );
+}
+
+/// Chat con catálogo de skills de Claude y de Codex ya cargado.
+fn skills_app() -> App {
+    let mut app = chat_app();
+    app.skills.insert(
+        "anthropic".into(),
+        serde_json::from_value(json!([
+            { "name": "deslop", "description": "Limpia código", "source": "usuario" },
+            { "name": "flintstone", "description": "Respuestas breves", "source": "usuario" },
+            { "name": "ponytail:review", "description": "Revisa sobre-ingeniería", "source": "plugin" },
+        ]))
+        .unwrap(),
+    );
+    app.skills.insert(
+        "openai".into(),
+        serde_json::from_value(
+            json!([{ "name": "deslop", "description": "Limpia", "source": "usuario" }]),
+        )
+        .unwrap(),
+    );
+    app.chat_model = Some("claude/sonnet".into());
+    app
+}
+
+fn type_text(app: &mut App, text: &str) {
+    for c in text.chars() {
+        press(app, KeyCode::Char(c));
+    }
+}
+
+fn names(app: &App) -> Vec<String> {
+    app.skill_matches()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn slash_opens_the_claude_catalog_and_filters_while_typing() {
+    let mut app = skills_app();
+    type_text(&mut app, "hola");
+    assert!(names(&app).is_empty());
+    let mut app = skills_app();
+    type_text(&mut app, "/");
+    assert_eq!(names(&app), ["deslop", "flintstone", "ponytail:review"]);
+    assert!(draw(&app).contains("/flintstone"));
+    type_text(&mut app, "fl");
+    assert_eq!(names(&app), ["flintstone"]);
+    // Coincidencias por el inicio primero, luego las que lo contienen.
+    let mut app = skills_app();
+    type_text(&mut app, "/re");
+    assert_eq!(names(&app), ["ponytail:review"]);
+    // Un espacio significa que ya se eligió: se cierra.
+    type_text(&mut app, "view x");
+    assert!(names(&app).is_empty());
+}
+
+#[test]
+fn right_arrow_completes_the_selected_skill_and_up_down_choose() {
+    let mut app = skills_app();
+    type_text(&mut app, "/");
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.chat_input, "/deslop ");
+    let mut app = skills_app();
+    type_text(&mut app, "/");
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down); // tope
+    press(&mut app, KeyCode::Up);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.chat_input, "/flintstone ");
+}
+
+#[test]
+fn esc_closes_the_catalog_without_leaving_the_chat_and_typing_reopens_it() {
+    let mut app = skills_app();
+    type_text(&mut app, "/f");
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::Chat);
+    assert!(names(&app).is_empty());
+    type_text(&mut app, "l");
+    assert_eq!(names(&app), ["flintstone"]);
+}
+
+#[test]
+fn codex_uses_dollar_and_the_other_prefix_gets_a_hint() {
+    let mut app = skills_app();
+    app.chat_model = Some("codex/gpt-5".into());
+    type_text(&mut app, "$");
+    assert_eq!(names(&app), ["deslop"]);
+    assert!(draw(&app).contains("$deslop"));
+    let mut app = skills_app();
+    app.chat_model = Some("codex/gpt-5".into());
+    type_text(&mut app, "/");
+    assert!(names(&app).is_empty());
+    assert!(draw(&app).contains("las skills empiezan con $"));
 }

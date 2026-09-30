@@ -336,6 +336,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.create" | "agent.spawn" => agent_create(req, state).await,
         "agent.list" | "agents.list" => agent_list(req, state),
         "chat.get" => chat_get(req, state),
+        "skills.list" => skills_list(&req),
         "agent.inspect" => agent_inspect(req, state).await,
         "agent.send" => agent_send(req, state).await,
         "agent.pause" => agent_pause(req, state).await,
@@ -450,6 +451,29 @@ fn chat_get(req: Request, state: &State) -> Response {
             .and_then(|p| repo::chat_agent(c, p.id).ok().flatten());
         Ok(json!({ "agent_id": agent.map(|a| a.id.to_string()) }))
     })
+}
+
+/// Catálogo de skills y comandos de un proveedor (`anthropic` u `openai`) para el autocompletado
+/// del chat. Lee del disco: no crea sesiones ni gasta cuota.
+fn skills_list(req: &Request) -> Response {
+    let provider = req
+        .params
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let root = project_root_param(&req.params);
+    let Some(home) = std::env::home_dir() else {
+        return Response::error(
+            req.id.clone(),
+            "no_home",
+            "no se encontró la carpeta del usuario",
+        );
+    };
+    let skills: Vec<Value> = crate::skills::catalog(provider, &home, Some(&root))
+        .iter()
+        .map(crate::skills::Skill::to_json)
+        .collect();
+    Response::ok(req.id.clone(), json!({ "skills": skills }))
 }
 
 fn agent_list(req: Request, state: &State) -> Response {

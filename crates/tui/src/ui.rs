@@ -1,14 +1,15 @@
 //! Render de las vistas (FLOW §18: 01–09, 12, 13, 22, 24, 30). Funciones puras de `&App`.
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use serde_json::Value;
 
 use crate::app::{
-    AgentView, App, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Tab, ago,
+    AgentView, App, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab, ago,
     state_phrase,
 };
 
@@ -637,11 +638,64 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
         "
 ",
     );
-    let title = match &app.chat_model {
+    let mut title = match &app.chat_model {
         Some(m) => format!("Mensaje · para {m} (Tab cambia)"),
         None => "Mensaje".to_string(),
     };
+    // Prefijo de skill del otro proveedor: no se reconocería; se avisa en vez de fallar callado.
+    if let (Some(prefix), Some(first)) = (app.skill_prefix(), app.chat_input.chars().next()) {
+        let other = if prefix == '/' { '$' } else { '/' };
+        if first == other && !app.chat_input.contains(char::is_whitespace) {
+            title = format!("Con este modelo las skills empiezan con {prefix}");
+        }
+    }
     f.render_widget(Paragraph::new(shown).block(boxed(&title)), input);
+    skill_popup(app, f, body);
+}
+
+/// Desplegable de skills sobre la conversación, pegado a la caja de mensaje.
+fn skill_popup(app: &App, f: &mut Frame, body: Rect) {
+    let matches = app.skill_matches();
+    if matches.is_empty() {
+        return;
+    }
+    let rows = matches.len().min(8);
+    let sel = app.skill_sel.min(matches.len() - 1);
+    let start = (sel + 1).saturating_sub(rows);
+    let height = u16::try_from(rows + 2).unwrap_or(10).min(body.height);
+    let area = Rect {
+        y: body.y + body.height - height,
+        height,
+        ..body
+    };
+    let prefix = app.skill_prefix().unwrap_or('/');
+    let lines: Vec<Line> = matches[start..start + rows]
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let selected = start + i == sel;
+            let name = format!("{prefix}{}", text(&m["name"]));
+            let row = Line::from(vec![
+                marker(selected),
+                bold(format!("{name:<30} ")),
+                dim(text(&m["description"])),
+            ]);
+            if selected {
+                row.style(Style::default().fg(ACCENT))
+            } else {
+                row
+            }
+        })
+        .collect();
+    let who = if prefix == '/' { "Claude" } else { "Codex" };
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(boxed(&format!(
+            "Skills de {who} ({}) · → completa · ↑↓ elige · Esc cierra",
+            matches.len()
+        ))),
+        area,
+    );
 }
 
 // --- 04 Home ----------------------------------------------------------------
@@ -1148,4 +1202,71 @@ fn recovery(app: &App, f: &mut Frame, area: Rect) {
         )));
     }
     paragraph(f, area, "Recovery Center", lines);
+}
+
+// --- selección con el ratón -------------------------------------------------
+
+/// Tramos `(fila, desde, hasta)` de la selección, ambos extremos incluidos y dentro del buffer.
+fn selection_rows(area: Rect, sel: &Selection) -> Vec<(u16, u16, u16)> {
+    let ((x0, y0), (x1, y1)) = sel.ordered();
+    let (left, right) = (area.left(), area.right().saturating_sub(1));
+    let last_row = area.bottom().saturating_sub(1);
+    (y0..=y1.min(last_row))
+        .map(|y| {
+            let from = if y == y0 { x0.max(left) } else { left };
+            let to = if y == y1 { x1.min(right) } else { right };
+            (y, from, to)
+        })
+        .filter(|(_, from, to)| from <= to)
+        .collect()
+}
+
+/// Resalta (video inverso) lo seleccionado.
+pub fn highlight(buf: &mut Buffer, sel: &Selection) {
+    for (y, from, to) in selection_rows(buf.area, sel) {
+        buf.set_style(
+            Rect::new(from, y, to - from + 1, 1),
+            Style::default().add_modifier(Modifier::REVERSED),
+        );
+    }
+}
+
+/// Una fila de pantalla sin el marco ni la etiqueta del hablante (`  tú │ `); `None` si es
+/// una línea de marco.
+fn clean_row(row: &str) -> Option<String> {
+    let t = row.trim_end();
+    if t.trim_start().starts_with(['┌', '└']) {
+        return None;
+    }
+    let mut t = t.trim_end_matches('│').trim_end();
+    if t.trim_start().starts_with('│') {
+        t = &t[t.find('│').map_or(0, |i| i + '│'.len_utf8())..];
+    }
+    if let Some(pos) = t.find('│') {
+        let label = &t[..pos];
+        if label.chars().count() <= 9 && label.chars().all(|c| c.is_alphabetic() || c == ' ') {
+            t = &t[pos + '│'.len_utf8()..];
+            t = t.strip_prefix(' ').unwrap_or(t);
+        }
+    }
+    Some(t.trim_end().to_string())
+}
+
+/// El texto que se ve en la selección, tal como está en pantalla.
+// ponytail: lo que se lee es lo dibujado: los saltos de línea del ajuste al ancho quedan como
+// saltos de línea; para el texto original está `Ctrl+Y` (última respuesta) o exportar a `.md`.
+pub fn selected_text(buf: &Buffer, sel: &Selection) -> String {
+    let rows: Vec<String> = selection_rows(buf.area, sel)
+        .into_iter()
+        .filter_map(|(y, from, to)| {
+            let row: String = (from..=to).map(|x| buf[(x, y)].symbol()).collect();
+            clean_row(&row)
+        })
+        .collect();
+    rows.join(
+        "
+",
+    )
+    .trim()
+    .to_string()
 }

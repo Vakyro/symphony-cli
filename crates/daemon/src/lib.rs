@@ -11,4 +11,5 @@ pub mod providers;
 pub mod recorder;
 pub mod runtime;
 pub mod server;
+pub mod skills;
 pub mod views;

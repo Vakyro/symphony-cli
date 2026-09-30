@@ -11,13 +11,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use symphony_protocol::Connection;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
-use app::{App, Msg};
+use app::{App, Msg, SelectPhase};
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -93,6 +93,15 @@ fn spawn_input(tx: mpsc::Sender<Msg>) {
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => Msg::Scroll(3),
                     MouseEventKind::ScrollDown => Msg::Scroll(-3),
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        Msg::Select(SelectPhase::Start, m.column, m.row)
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        Msg::Select(SelectPhase::Move, m.column, m.row)
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        Msg::Select(SelectPhase::End, m.column, m.row)
+                    }
                     _ => continue,
                 },
                 _ => continue,
@@ -106,6 +115,19 @@ fn spawn_input(tx: mpsc::Sender<Msg>) {
 
 /// Tecla sintética de un salto de línea pegado (ver `spawn_input`).
 pub const NEWLINE: char = '\n';
+
+/// Copia al portapapeles lo que `app.copy` tenga pendiente y lo avisa.
+fn copy_pending(app: &mut App) {
+    if let Some(text) = app.copy.take() {
+        if text.trim().is_empty() {
+            return;
+        }
+        match copy_to_clipboard(&text) {
+            Ok(()) => app.info(format!("Copiado ({} caracteres).", text.chars().count())),
+            Err(e) => app.error(format!("No se pudo copiar: {e}")),
+        }
+    }
+}
 
 /// Copia `text` al portapapeles con la herramienta del sistema (sin dependencias nuevas).
 fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
@@ -180,12 +202,7 @@ where
             if app.quit {
                 return Ok(());
             }
-            if let Some(text) = app.copy.take() {
-                match copy_to_clipboard(&text) {
-                    Ok(()) => app.info(format!("Copiado ({} caracteres).", text.chars().count())),
-                    Err(e) => app.error(format!("No se pudo copiar: {e}")),
-                }
-            }
+            copy_pending(&mut app);
             if app.mouse != mouse_on {
                 mouse_on = app.mouse;
                 let _ = if mouse_on {
@@ -194,7 +211,25 @@ where
                     ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture)
                 };
             }
-            terminal.draw(|f| ui::render(&app, f))?;
+            // La selección se resalta y se lee del propio fotograma dibujado (lo que se ve es lo
+            // que se copia); al soltar el botón se copia una sola vez.
+            let mut picked = None;
+            terminal.draw(|f| {
+                ui::render(&app, f);
+                if let Some(sel) = &app.selection {
+                    ui::highlight(f.buffer_mut(), sel);
+                    if sel.done && !sel.copied {
+                        picked = Some(ui::selected_text(f.buffer_mut(), sel));
+                    }
+                }
+            })?;
+            if let Some(text) = picked {
+                if let Some(sel) = app.selection.as_mut() {
+                    sel.copied = true;
+                }
+                app.copy = Some(text);
+                copy_pending(&mut app);
+            }
             // Mientras el agente trabaja se redibuja ~7 veces por segundo (el indicador gira).
             let received = if app.animating() {
                 match tokio::time::timeout(Duration::from_millis(150), rx.recv()).await {
