@@ -117,7 +117,7 @@ fn hints(app: &App) -> &'static str {
         }
         Screen::Providers => "↑↓ elegir · r volver a detectar · d activar/desactivar · Esc volver",
         Screen::Chat => {
-            "Enter enviar · Tab modelo · ↑↓/rueda · Ctrl+Y copiar · F2 selección · Esc tareas · Ctrl+C salir"
+            "Enter enviar · Tab modelo · ↑↓/rueda · ^Y copiar · ^E exportar · F2 ratón · Esc tareas"
         }
         Screen::Home => {
             "↑↓ elegir · Enter abrir · n nuevo · p proveedores · r recovery · : comando · Esc chat · q salir"
@@ -127,7 +127,7 @@ fn hints(app: &App) -> &'static str {
         Screen::Agent => match app.agent.as_ref() {
             Some(a) if a.typing => "Enter enviar · Esc cancelar",
             _ => {
-                "←→ pestaña · m mensaje · p pausa · s modelo · o abrir en el CLI · d diff · x detener · Esc"
+                "←→ pestaña · m mensaje · p pausa · s modelo · o CLI · e exportar · d diff · x detener · Esc"
             }
         },
         Screen::Recovery => {

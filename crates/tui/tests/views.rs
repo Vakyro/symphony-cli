@@ -802,3 +802,24 @@ fn agent_conversation_scrolls_back_with_up_and_the_wheel_within_its_limits() {
     }
     assert!(draw(&app).contains("mensaje 39"));
 }
+
+#[test]
+fn export_is_ctrl_e_in_the_chat_and_e_in_the_agent_view() {
+    let mut app = chat_app();
+    // Sin chat todavía no hay nada que exportar.
+    assert!(ctrl(&mut app, 'e').is_empty());
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    assert_eq!(methods(&ctrl(&mut app, 'e')), ["agent.export"]);
+    ok(
+        &mut app,
+        Req::Export,
+        json!({ "path": "/p/.symphony/exports/chat-1.md" }),
+    );
+    assert!(matches!(&app.notice, Some(Notice::Info(t)) if t.contains("chat-1.md")));
+
+    let mut app = agent_app(Tab::Conversation);
+    assert_eq!(
+        methods(&press(&mut app, KeyCode::Char('e'))),
+        ["agent.export"]
+    );
+}

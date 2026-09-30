@@ -345,6 +345,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.switch" => agent_switch(req, state).await,
         "agent.diff" => agent_diff(req, state).await,
         "agent.logs" => agent_logs(req, state).await,
+        "agent.export" => agent_export(req, state).await,
         "agent.attach" => agent_attach(req, state).await,
         "agent.activity" => agent_view(req, state, |c, a| {
             crate::views::activity(c, a, 200).map(|v| json!({ "items": v }))
@@ -668,6 +669,68 @@ async fn agent_logs(req: Request, state: &State) -> Response {
             Response::ok(req.id, json!({ "messages": messages }))
         }
         Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+/// Exporta la conversación completa a `<proyecto>/.symphony/exports/<agente>-<fecha>.md`
+/// (`.symphony/` está en `.gitignore`: no ensucia el repo ni los commits del chat).
+async fn agent_export(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let logs = match state.runtime.logs(agent_id, None).await {
+        Ok(l) => l,
+        Err(e) => return Response::error(req.id, "agent_error", e.0),
+    };
+    let meta = match state.reader.lock() {
+        Ok(c) => (|| -> Result<_, String> {
+            let a = repo::get_agent(&c, agent_id).map_err(|e| e.to_string())?;
+            let task = repo::get_task(&c, a.task_id).map_err(|e| e.to_string())?;
+            let project = repo::get_project(&c, a.project_id).map_err(|e| e.to_string())?;
+            let tools = crate::views::activity(&c, &agent_id.to_string(), 100_000)
+                .map_err(|e| e.to_string())?;
+            Ok((a.number, task, project, tools))
+        })(),
+        Err(_) => Err("lector de la base no disponible".to_string()),
+    };
+    let (number, task, project, tools) = match meta {
+        Ok(m) => m,
+        Err(e) => return Response::error(req.id, "store_error", e),
+    };
+    let is_chat = task.code == repo::CHAT_TASK_CODE;
+    let label = if is_chat {
+        "chat general".to_string()
+    } else {
+        format!("agente #{number}")
+    };
+    let now = now_ms();
+    let md = crate::export::markdown(
+        &crate::export::Meta {
+            title: if is_chat { "Chat general" } else { &task.title },
+            project: &project.name,
+            agent: &label,
+        },
+        now,
+        &logs,
+        tools.as_array().map_or(&[][..], Vec::as_slice),
+    );
+    let dir = std::path::Path::new(&project.root_path)
+        .join(".symphony")
+        .join("exports");
+    let prefix = if is_chat {
+        "chat".to_string()
+    } else {
+        format!("agente-{number}")
+    };
+    let path = dir.join(crate::export::file_name(&prefix, now));
+    let written = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, md));
+    match written {
+        Ok(()) => Response::ok(
+            req.id,
+            json!({ "path": path.display().to_string(), "messages": logs.len() }),
+        ),
+        Err(e) => Response::error(req.id, "export_failed", format!("no se pudo escribir: {e}")),
     }
 }
 

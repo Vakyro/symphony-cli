@@ -85,6 +85,7 @@ pub enum Req {
     Send,
     Switch,
     Attach,
+    Export,
     ChatGet,
     ChatCreate,
 }
@@ -737,6 +738,10 @@ impl App {
                 }
                 return self.refresh();
             }
+            Req::Export => {
+                let path = v["path"].as_str().unwrap_or("?");
+                self.info(format!("Conversación exportada: {path}"));
+            }
             Req::Send => {
                 self.info("Mensaje enviado.");
                 return self.refresh();
@@ -946,6 +951,14 @@ impl App {
 
     fn chat_key(&mut self, key: KeyEvent) -> Vec<Call> {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.code == KeyCode::Char('e') {
+                return self
+                    .chat
+                    .as_ref()
+                    .map(|c| call(Req::Export, "agent.export", json!({ "agent": c.id })))
+                    .into_iter()
+                    .collect();
+            }
             if key.code == KeyCode::Char('y') {
                 match self.last_reply() {
                     Some(t) => self.copy = Some(t),
@@ -1311,6 +1324,9 @@ impl App {
             KeyCode::PageDown => {
                 scroll_view(a, 10);
                 return Vec::new();
+            }
+            KeyCode::Char('e') => {
+                return vec![call(Req::Export, "agent.export", json!({ "agent": a.id }))];
             }
             KeyCode::Char('m') => {
                 a.typing = true;
