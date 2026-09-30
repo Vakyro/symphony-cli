@@ -436,6 +436,27 @@ mod tests {
         assert!(!raw_prompt.contains("omitidos"));
     }
 
+    /// Medición de P07.5.S9: `cargo nextest run -p symphony-context --run-ignored only --no-capture`.
+    #[test]
+    #[ignore = "imprime la tabla de coste del handoff; no verifica nada nuevo"]
+    fn handoff_cost_table() {
+        println!(
+            "mensajes | raw | safe | balanced | aggressive  (tokens que lee el proveedor nuevo)"
+        );
+        for n in [10, 40, 100, 200] {
+            let mut input = fixed();
+            input.conversation = chat(n, 800);
+            let t = |m| assemble(&input, m).tokens_sent;
+            println!(
+                "{n:>8} | {} | {} | {} | {}",
+                t(ContextMode::Raw),
+                t(ContextMode::Safe),
+                t(ContextMode::Balanced),
+                t(ContextMode::Aggressive)
+            );
+        }
+    }
+
     #[test]
     fn tokens_are_estimated_by_characters() {
         assert_eq!(estimate_tokens(""), 0);
