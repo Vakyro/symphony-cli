@@ -98,6 +98,46 @@ fn op_err(e: impl std::fmt::Display) -> AgentOpError {
     AgentOpError(e.to_string())
 }
 
+/// Prefijo con el que cada CLI reconoce una skill al inicio del mensaje: `/nombre` en Claude,
+/// `$nombre` en Codex (P07.5.S8).
+fn skill_prefix(provider: &str) -> Option<char> {
+    match provider {
+        "anthropic" => Some('/'),
+        "openai" => Some('$'),
+        _ => None,
+    }
+}
+
+/// Añade el mensaje nuevo del usuario al prompt del handoff. Claude solo interpreta `/skill` si
+/// es lo primero del mensaje (probado: dentro del prompt de handoff no se aplica), así que si el
+/// mensaje empieza por el prefijo de skill del proveedor destino, esa invocación se sube al
+/// inicio y el resto del handoff pasa como sus argumentos.
+// ponytail: los argumentos de la skill incluyen todo el handoff; suficiente para skills de estilo
+// o de tarea. `/skill` escrito para el otro proveedor no se traduce.
+fn with_user_message(prompt: &str, message: &str, provider: &str) -> String {
+    let body = format!(
+        "{prompt}
+
+## Mensaje nuevo del usuario (respóndelo primero)
+{message}"
+    );
+    let trimmed = message.trim_start();
+    match skill_prefix(provider) {
+        Some(p) if trimmed.starts_with(p) && trimmed.len() > 1 => {
+            let (invocation, rest) = trimmed
+                .split_once(char::is_whitespace)
+                .unwrap_or((trimmed, ""));
+            format!(
+                "{invocation} {}
+
+{body}",
+                rest.trim()
+            )
+        }
+        _ => body,
+    }
+}
+
 impl Runtime {
     fn read_op<T>(
         &self,
@@ -685,12 +725,7 @@ impl Runtime {
         };
         // El mensaje nuevo del usuario (cambio manual) va al final, para que lo responda primero.
         let prompt = match message {
-            Some(m) => format!(
-                "{prompt}
-
-## Mensaje nuevo del usuario (respóndelo primero)
-{m}"
-            ),
+            Some(m) => with_user_message(&prompt, m, &model.provider_id),
             None => prompt,
         };
         let run = RunId::new();
@@ -1537,5 +1572,38 @@ impl Runtime {
                 "ended_at": r.ended_at,
             })).collect::<Vec<_>>(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod skill_tests {
+    use super::with_user_message;
+
+    #[test]
+    fn a_skill_invocation_moves_to_the_front_for_its_own_provider() {
+        let p = with_user_message("HANDOFF", "/flintstone explica un worktree", "anthropic");
+        assert!(
+            p.starts_with("/flintstone explica un worktree\n\nHANDOFF"),
+            "{p}"
+        );
+        // El mensaje sigue también al final, para quien no lea la invocación.
+        assert!(p.ends_with("respóndelo primero)\n/flintstone explica un worktree"));
+        let p = with_user_message("HANDOFF", "$deslop este archivo", "openai");
+        assert!(p.starts_with("$deslop este archivo\n\nHANDOFF"), "{p}");
+    }
+
+    #[test]
+    fn other_messages_and_other_providers_are_left_at_the_end() {
+        let plain = "HANDOFF\n\n## Mensaje nuevo del usuario (respóndelo primero)\nhola";
+        assert_eq!(with_user_message("HANDOFF", "hola", "anthropic"), plain);
+        // `/x` para Codex y `$x` para Claude no son skills de ese CLI: no se tocan.
+        assert!(with_user_message("H", "/flintstone x", "openai").starts_with('H'));
+        assert!(with_user_message("H", "$flintstone x", "anthropic").starts_with('H'));
+        // Una barra sola no es una invocación.
+        assert!(with_user_message("H", "/", "anthropic").starts_with('H'));
+        // Una skill sin argumentos también sube.
+        assert!(
+            with_user_message("H", "/flintstone", "anthropic").starts_with("/flintstone \n\nH")
+        );
     }
 }

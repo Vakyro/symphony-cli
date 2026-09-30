@@ -6,6 +6,7 @@ pub mod app;
 pub mod io;
 pub mod ui;
 
+use std::collections::VecDeque;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ratatui::crossterm::event::{
@@ -25,36 +26,76 @@ fn now_ms() -> i64 {
 }
 
 /// Lee el teclado en un hilo propio (crossterm bloquea) hasta que la TUI se cierre.
+/// Cuánto se espera tras un Enter para ver si lo que sigue es un pegado.
+const PASTE_WINDOW: Duration = Duration::from_millis(15);
+
+/// ¿Este Enter forma parte de un pegado? La consola de Windows no manda pegado entre corchetes:
+/// las líneas llegan como Enter seguidos de más teclas, y una persona no teclea tan rápido.
+/// `next(espera)` da el siguiente evento si llega a tiempo. El «soltar» del propio Enter no
+/// cuenta (Windows lo manda siempre) y lo que no es tecla (ratón, foco) tampoco delata un pegado;
+/// lo que se leyó de más pasa a `later` para procesarse después.
+fn enter_is_pasted(
+    mut next: impl FnMut(Duration) -> Option<Event>,
+    later: &mut VecDeque<Event>,
+) -> bool {
+    while let Some(e) = next(PASTE_WINDOW) {
+        match e {
+            Event::Key(k) if k.kind == KeyEventKind::Release => {}
+            Event::Key(_) => {
+                later.push_back(e);
+                return true;
+            }
+            other => later.push_back(other),
+        }
+    }
+    false
+}
+
 fn spawn_input(tx: mpsc::Sender<Msg>) {
     std::thread::spawn(move || {
+        let mut later: VecDeque<Event> = VecDeque::new();
         while !tx.is_closed() {
-            match event::poll(Duration::from_millis(200)) {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(_) => return,
-            }
-            let msg = match event::read() {
+            let ev = match later.pop_front() {
+                Some(e) => e,
+                None => {
+                    match event::poll(Duration::from_millis(200)) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(_) => return,
+                    }
+                    match event::read() {
+                        Ok(e) => e,
+                        Err(_) => return,
+                    }
+                }
+            };
+            let msg = match ev {
                 // Windows también manda Release: solo cuenta la pulsación.
-                // Un Enter seguido de más eventos en 15 ms es un pegado (una persona no teclea tan rápido) (la consola de Windows no manda
-                // pegado entre corchetes): es un salto de línea del texto, no «enviar».
-                Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => {
-                    if k.code == KeyCode::Enter
-                        && event::poll(Duration::from_millis(15)).unwrap_or(false)
-                    {
+                Event::Key(k) if k.kind != KeyEventKind::Release => {
+                    let pasted = k.code == KeyCode::Enter
+                        && enter_is_pasted(
+                            |wait| {
+                                event::poll(wait)
+                                    .ok()
+                                    .filter(|ready| *ready)
+                                    .and_then(|_| event::read().ok())
+                            },
+                            &mut later,
+                        );
+                    if pasted {
                         Msg::Key(KeyEvent::new(KeyCode::Char(NEWLINE), KeyModifiers::NONE))
                     } else {
                         Msg::Key(k)
                     }
                 }
-                Ok(Event::Resize(..)) => Msg::Resize,
-                Ok(Event::Paste(text)) => Msg::Paste(text),
-                Ok(Event::Mouse(m)) => match m.kind {
+                Event::Resize(..) => Msg::Resize,
+                Event::Paste(text) => Msg::Paste(text),
+                Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => Msg::Scroll(3),
                     MouseEventKind::ScrollDown => Msg::Scroll(-3),
                     _ => continue,
                 },
-                Ok(_) => continue,
-                Err(_) => return,
+                _ => continue,
             };
             if tx.blocking_send(msg).is_err() {
                 return;
@@ -184,4 +225,55 @@ where
     );
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::crossterm::event::{KeyEventState, MouseEvent};
+
+    fn key(code: KeyCode, kind: KeyEventKind) -> Event {
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    fn pasted(events: Vec<Event>) -> (bool, usize) {
+        let mut it = events.into_iter();
+        let mut later = VecDeque::new();
+        let r = enter_is_pasted(|_| it.next(), &mut later);
+        (r, later.len())
+    }
+
+    #[test]
+    fn a_lone_enter_is_not_a_paste_even_with_its_own_release() {
+        assert_eq!(pasted(vec![]), (false, 0));
+        // Windows manda el «soltar» tras cada tecla: no delata un pegado.
+        assert_eq!(
+            pasted(vec![key(KeyCode::Enter, KeyEventKind::Release)]),
+            (false, 0)
+        );
+    }
+
+    #[test]
+    fn enter_followed_by_more_keys_is_a_paste() {
+        let next = key(KeyCode::Char('a'), KeyEventKind::Press);
+        assert_eq!(pasted(vec![next.clone()]), (true, 1));
+        let release = key(KeyCode::Enter, KeyEventKind::Release);
+        assert_eq!(pasted(vec![release, next]), (true, 1));
+    }
+
+    #[test]
+    fn mouse_events_after_enter_do_not_make_it_a_paste_but_are_kept() {
+        let moved = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(pasted(vec![moved]), (false, 1));
+    }
 }

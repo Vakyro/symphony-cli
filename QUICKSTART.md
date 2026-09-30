@@ -208,6 +208,12 @@ switch 1 codex/gpt-5.x
 
 ---
 
+### Skills en el chat
+Las skills que ya tienes instaladas en cada CLI funcionan en el chat (las de usuario y las de plugins; las de proyecto solo si están commiteadas en la rama base del chat):
+- Con un modelo de **Claude**: escribe `/nombre-de-la-skill lo que quieras` al inicio del mensaje.
+- Con un modelo de **Codex**: escribe `$nombre-de-la-skill lo que quieras`.
+- Al cambiar de proveedor, la skill que escribas con el prefijo del proveedor **destino** se aplica; con el del otro no se reconoce. Lo que una skill deja activo en la sesión (p. ej. un «modo») no viaja en el cambio.
+
 ## 8. Ver cambios y mergear
 
 Cuando el agente dice "listo":

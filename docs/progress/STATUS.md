@@ -2,12 +2,12 @@
 
 **Actualizado:** 2026-09-29 · por claude-code/sonnet-5.5
 **Fase actual:** P07.5 · Chat general (rama `phase/p075-chat`, ADR-0006 aceptado)
-**Paso actual:** P07.5.S8 · Skills en el chat (S1–S7 hechos). P08–P16 siguen provisionales
-**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
+**Paso actual:** P07.5.S9 · Cierre (gate) (S1–S8 hechos; Leo prueba todo con skills antes). P08–P16 siguen provisionales
+**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (224 tests; los live se omiten sin `SYMPHONY_LIVE=1`)
+- `cargo xtask check`: ✅ (240 tests; los live se omiten sin `SYMPHONY_LIVE=1`)
 - `cargo deny check`: ✅ (solo avisos de duplicados)
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny). La rama `phase/p07-tui` y el tag `v0.1.0` se pushean en P07.S8.
 - Tests conocidos en rojo: ninguno.
@@ -32,14 +32,14 @@
 - [x] P07.5.S5 Commit por turno y estado en el bus
 - [x] P07.5.S6 Cambio de modelo/proveedor
 - [x] P07.5.S7 Vista Chat como inicio
-- [ ] P07.5.S8 Skills en el chat
+- [x] P07.5.S8 Skills en el chat
 - [ ] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
-1. P07.5.S8: skills en el chat (ver PLAN). Antes, Leo prueba S7 (ya reinstalado en `~/.cargo/bin` con los dos binarios) y sus opiniones ya están documentadas (Día 2 de `uso-v0.1.md`: proceso en vivo, copiar, scroll, textos cortados, exportar `.md`, UX). Decidir con Leo qué entra antes de S8.
+1. Leo prueba todo el chat con skills (reinstalado en `~/.cargo/bin`): `/skill` en Claude, `$skill` en Codex; qué notas y opiniones quedan documentadas. Luego P07.5.S9 (cierre: medir coste de cambios de proveedor, `health`, `ponytail-review`, protocolo §4.6, tag `p075-done`).
 2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
 pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin S3).
-3. ADR-0007 (aceptado): el gate de ≥ 2 semanas pasa a criterio de contenido. Antes de S8 se atienden las observaciones del Día 2 (`uso-v0.1.md`): 1) ~~textos cortados (bug)~~ ✅ corregido, 2) ~~proceso del agente en vivo~~ ✅ primera versión (herramientas intercaladas + «pensando… N s»); falta medir `resume` sin cambio de proveedor y el texto en construcción (deltas de Claude), 3) ~~copiar y pegar~~ ✅ (Ctrl+Y, pegado multilínea, F2 selección), ~~scroll de respuesta~~ ✅ (bug de ↑/↓ invertidos en la vista de agente), y ~~exportar a `.md`~~ ✅ (Ctrl+E / e → `.symphony/exports/`). Leo sigue anotando en `uso-v0.1.md`.
+3. ADR-0007 (aceptado): el gate de ≥ 2 semanas pasa a criterio de contenido. Ya se atendieron (antes de S8) las observaciones del Día 2 (`uso-v0.1.md`): 1) ~~textos cortados (bug)~~ ✅ corregido, 2) ~~proceso del agente en vivo~~ ✅ primera versión (herramientas intercaladas + «pensando… N s»); falta medir `resume` sin cambio de proveedor y el texto en construcción (deltas de Claude), 3) ~~copiar y pegar~~ ✅ (Ctrl+Y, pegado multilínea, F2 selección), ~~scroll de respuesta~~ ✅ (bug de ↑/↓ invertidos en la vista de agente), y ~~exportar a `.md`~~ ✅ (Ctrl+E / e → `.symphony/exports/`). Leo sigue anotando en `uso-v0.1.md`.
 
 ## Propuesta clave para S10: Chat agentico con failover entre proveedores
 
@@ -56,7 +56,7 @@ pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin
 Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y validaciones pendientes.
 
 ## Handoff para el siguiente agente
-- **Dónde retomar (2026-09-29):** rama `phase/p075-chat` (S1–S7 hechos, sin fusionar hasta cerrar la fase). `main` = ADR-0006 aceptado + PLAN con P07.5. Empieza por **P07.5.S8**; al terminar, agrégalo a la bitácora `docs/phases/P07.5-chat.md`. Corre `cargo xtask check` antes de tocar código.
+- **Dónde retomar (2026-09-29):** rama `phase/p075-chat` (S1–S8 hechos, sin fusionar hasta cerrar la fase). `main` = ADR-0006 aceptado + PLAN con P07.5. Empieza por **P07.5.S9** (antes, Leo prueba todo con skills y sus opiniones se documentan); al terminar, agrégalo a la bitácora `docs/phases/P07.5-chat.md`. Corre `cargo xtask check` antes de tocar código.
 - **Contexto de esta sesión:** `docs/research/spike-p08-decisiones.md` y `docs/adr/0006-chat-general-y-replanificacion.md` tienen las decisiones y su evidencia; `docs/progress/SESSIONS.md` y `LEARNINGS.md` (sección P07.5) resumen lo hecho y aprendido.
 - **Pistas para S4 (agente «chat general»)** — verificar en el código antes de fiarse:
   - `runtime.rs` `create_agent` crea task + worktree + branch + checkpoint + run; la rama sale de `symphony_git::agent_branch(...)`. El chat necesita rama fija `symphony/chat` basada en `main` y ser idempotente (uno por proyecto): decidir cómo se identifica (¿`tasks.kind`? revisar los CHECK de DB §3.B y `docs/spec/symphony_database.md`).
