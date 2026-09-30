@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use symphony_adapter_common::ProviderAdapter;
+use symphony_adapter_common::{AgentEvent, ProviderAdapter};
 use symphony_core::{AgentState, ContextMode, FailoverPolicy};
 use symphony_daemon::bus::EventBus;
 use symphony_daemon::providers;
@@ -150,6 +150,7 @@ fn req(e: &Env, title: &str, execution: Execution) -> CreateAgent {
         failover: FailoverPolicy::Any,
         context_mode: ContextMode::Balanced,
         priority: 0,
+        chat: false,
     }
 }
 
@@ -294,6 +295,108 @@ async fn decide_later_creates_a_ready_agent_without_executor() {
     assert_eq!(count(&e, "agent_runs"), 0);
     assert_eq!(count(&e, "checkpoints"), 1);
     assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "READY");
+    e.writer.shutdown();
+}
+
+/// P07.5.S4: crear el chat dos veces devuelve el mismo agente, en `symphony/chat`.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_is_created_once_per_project_on_its_own_branch() {
+    let e = env(WORK, None).await;
+    let mut r = req(&e, "Chat", Execution::DecideLater);
+    r.chat = true;
+    let first = e.runtime.create_agent(r.clone()).await.unwrap();
+    let again = e.runtime.create_agent(r).await.unwrap();
+    assert_eq!(again.agent_id, first.agent_id);
+    assert_eq!(again.worktree, first.worktree);
+    assert_eq!(first.branch, "symphony/chat");
+    assert_eq!(first.task_code, "CHAT");
+    assert_eq!(count(&e, "agents"), 1);
+    assert_eq!(count(&e, "worktrees"), 1);
+    assert_eq!(count(&e, "tasks"), 1);
+    assert_eq!(
+        git(&e.repo, &["rev-parse", "symphony/chat"]),
+        git(&e.repo, &["rev-parse", "HEAD"])
+    );
+    e.writer.shutdown();
+}
+
+/// P07.5.S4: el turno del chat termina en `READY` («esperando mensaje»), no en `COMPLETED`.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_waits_for_a_message_after_its_turn() {
+    let e = env(WORK, None).await;
+    let mut r = req(&e, "Hola", Execution::Exact("fake/fast".into()));
+    r.chat = true;
+    e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+    assert_eq!(
+        one::<String>(&e, "SELECT state_reason FROM agents"),
+        "esperando mensaje"
+    );
+    assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "READY");
+    e.writer.shutdown();
+}
+
+/// P07.5.S5: un turno con cambios deja un commit y el worktree limpio; uno sin cambios, ninguno.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_commits_a_turn_only_when_it_changed_files() {
+    let e = env(WORK, None).await;
+    let mut r = req(&e, "Hola", Execution::Exact("fake/fast".into()));
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let subjects = |n: &str| git(&e.repo, &["log", "--format=%s", n]);
+    assert_eq!(subjects("symphony/chat"), "chat: turno 1 (fake/fast)\ninit");
+    assert_eq!(git(&created.worktree, &["status", "--porcelain"]), "");
+    assert_eq!(
+        git(&created.worktree, &["show", "HEAD:fix.txt"]),
+        "arreglado"
+    );
+
+    // El segundo turno reescribe el mismo contenido: no hay cambios, no hay commit.
+    e.runtime
+        .continue_session(created.agent_id, "otra vez")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(subjects("symphony/chat"), "chat: turno 1 (fake/fast)\ninit");
+    assert_eq!(subjects("main"), "init");
+    e.writer.shutdown();
+}
+
+/// P07.5.S5: el bus recibe los cambios de estado desde el punto único de escritura.
+#[tokio::test(flavor = "multi_thread")]
+async fn bus_announces_agent_state_changes() {
+    let e = env(WORK, None).await;
+    let mut rx = e.bus.subscribe();
+    let mut r = req(&e, "Hola", Execution::Exact("fake/fast".into()));
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+
+    let seen = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let ev = rx.recv().await.unwrap();
+            if let AgentEvent::StateChanged { from, to, reason } = &ev.event {
+                assert_eq!(ev.agent_id, Some(created.agent_id.to_string()));
+                return (from.clone(), to.clone(), reason.clone());
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        seen,
+        (
+            "RUNNING".to_string(),
+            "READY".to_string(),
+            Some("esperando mensaje".to_string())
+        )
+    );
     e.writer.shutdown();
 }
 
@@ -1073,11 +1176,122 @@ command = ["git", "no-such-subcommand"]
         "+arreglado",
         "--- src/nuevo.txt (archivo nuevo)\ncontenido nuevo",
         "--- tardio.txt (archivo nuevo)\nescrito tarde",
+        "## Conversación hasta ahora",
+        "**Usuario:** Arreglar auth",
+        "**Asistente:** Voy por partes.",
     ] {
         assert!(p.contains(want), "falta {want:?} en:\n{p}");
     }
     assert_eq!(h.tokens_sent, symphony_context::handoff::estimate_tokens(p));
-    assert!(h.tokens_raw_estimate > h.tokens_sent, "{h:?}");
+    // Nada se recortó: lo que costaría en RAW es lo que se envió.
+    assert!(h.tokens_raw_estimate >= h.tokens_sent, "{h:?}");
+    e.writer.shutdown();
+}
+
+/// P07.5.S3 (criterio de PLAN): con una conversación de 10 turnos, el handoff en modo
+/// `raw` lleva todos, en orden, sin omitir nada.
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_of_a_ten_turn_conversation_keeps_every_turn_in_raw() {
+    let script = "[[step]]\nkind = \"say\"\ntext = \"ok\"\n";
+    let e = env(script, None).await;
+    let mut r = req(&e, "Charla larga", Execution::Exact("fake/fast".into()));
+    r.context_mode = ContextMode::Raw;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    for i in 1..10 {
+        e.writer.handle().flush().await.unwrap();
+        e.runtime
+            .continue_session(created.agent_id, &format!("mensaje {i}"))
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+    }
+    e.writer.handle().flush().await.unwrap();
+
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "cambio")
+        .await
+        .unwrap();
+    let p = &h.prompt;
+    assert_eq!(h.mode, ContextMode::Raw);
+    assert!(p.contains("**Usuario:** Charla larga"), "{p}");
+    let mut at = 0;
+    for i in 1..10 {
+        let want = format!("**Usuario:** mensaje {i}");
+        let found = p[at..]
+            .find(&want)
+            .unwrap_or_else(|| panic!("falta {want:?} o está fuera de orden en:\n{p}"));
+        at += found + want.len();
+    }
+    assert_eq!(p.matches("**Usuario:**").count(), 10);
+    assert_eq!(p.matches("**Asistente:** ok").count(), 10);
+    assert!(!p.contains("omitidos"));
+    e.writer.shutdown();
+}
+
+/// P07.5.S3: el handoff lleva la conversación (usuario y asistente) y no anida el
+/// prompt de un handoff anterior, que ya trae esa misma conversación.
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_carries_the_conversation_without_nesting_earlier_handoffs() {
+    let first = "[[step]]\nkind = \"say\"\ntext = \"primero\"\n[[step]]\nkind = \"hang\"\n";
+    let second = "[[step]]\nkind = \"say\"\ntext = \"segundo\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Arreglar auth",
+            Execution::Exact("alpha/fast".into()),
+        ))
+        .await
+        .unwrap();
+    // Esperar a que el primer executor haya dicho algo antes de cambiarlo.
+    let started = std::time::Instant::now();
+    loop {
+        e.writer.handle().flush().await.unwrap();
+        if count(&e, "messages WHERE role = 'ASSISTANT'") > 0 {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(15), "sin respuesta");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    e.runtime
+        .switch(created.agent_id, "beta/smart")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "otro cambio")
+        .await
+        .unwrap();
+    let p = &h.prompt;
+    let order: Vec<usize> = [
+        "**Usuario:** Arreglar auth",
+        "**Asistente:** primero",
+        // Sin nada del usuario entre medias, las dos respuestas quedan juntas.
+        "
+
+segundo",
+    ]
+    .iter()
+    .map(|want| {
+        p.find(want)
+            .unwrap_or_else(|| panic!("falta {want:?} en:\n{p}"))
+    })
+    .collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "fuera de orden:\n{p}"
+    );
+    assert_eq!(
+        p.matches("Retomas una tarea de código").count(),
+        1,
+        "el prompt del handoff anterior no debe entrar a la conversación:\n{p}"
+    );
     e.writer.shutdown();
 }
 
@@ -1269,6 +1483,154 @@ async fn manual_switch_replaces_only_the_executor_and_remembers_the_model() {
     e.writer.shutdown();
 }
 
+/// P07.5.S6, Journey de chat: empieza en un proveedor, cambia a otro a mitad con un mensaje
+/// nuevo y el segundo recibe la conversación sin que el usuario repita nada.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_switches_provider_mid_conversation_with_a_new_message() {
+    let first = "[[step]]\nkind = \"edit\"\npath = \"alpha.txt\"\ncontent = \"a\\n\"\n";
+    let second = "[[step]]\nkind = \"edit\"\npath = \"beta.txt\"\ncontent = \"b\\n\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let mut r = req(
+        &e,
+        "Empieza el arreglo",
+        Execution::Exact("alpha/fast".into()),
+    );
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+
+    e.runtime
+        .switch_with_message(created.agent_id, "beta/fast", Some("ahora sigue tú"))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+    assert_eq!(one::<i64>(&e, "SELECT COUNT(*) FROM agents"), 1);
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "USER_SWITCH"
+    );
+    assert_eq!(
+        git(&e.repo, &["log", "--format=%s", "symphony/chat"]),
+        "chat: turno 2 (beta/fast)\nchat: turno 1 (alpha/fast)\ninit"
+    );
+    // El mensaje nuevo llegó al modelo (va en su prompt) y quedó como `USER` aparte.
+    let sent: String = one(
+        &e,
+        "SELECT content FROM messages WHERE role = 'USER' AND run_id =
+            (SELECT id FROM agent_runs WHERE provider_id = 'beta') ORDER BY id LIMIT 1",
+    );
+    assert!(sent.contains("ahora sigue tú"), "{sent}");
+    assert!(sent.contains("Empieza el arreglo"), "{sent}");
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "otro cambio")
+        .await
+        .unwrap();
+    assert!(
+        h.prompt.contains("**Usuario:** Empieza el arreglo"),
+        "{}",
+        h.prompt
+    );
+    assert!(
+        h.prompt.contains("**Usuario:** ahora sigue tú"),
+        "{}",
+        h.prompt
+    );
+    assert_eq!(h.prompt.matches("**Usuario:**").count(), 2, "{}", h.prompt);
+    e.writer.shutdown();
+}
+
+/// P07.5.S6: política por umbral. Apagada, el chat sigue en su proveedor; encendida y con el
+/// último turno por encima del umbral, el siguiente mensaje pasa al otro proveedor.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_rotates_provider_only_when_the_token_threshold_is_on_and_reached() {
+    let first = "[[step]]\nkind = \"usage\"\ntokens = 5000\n";
+    let second = "[[step]]\nkind = \"edit\"\npath = \"beta.txt\"\ncontent = \"b\\n\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let mut r = req(&e, "Hola", Execution::Exact("alpha/fast".into()));
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let providers = |e: &Env| -> String {
+        one(
+            e,
+            "SELECT GROUP_CONCAT(provider_id, ',') FROM (SELECT provider_id FROM agent_runs ORDER BY seq)",
+        )
+    };
+
+    // Apagada (por defecto): se reanuda la sesión de alpha.
+    e.runtime
+        .continue_session(created.agent_id, "sigue")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(providers(&e), "alpha,alpha");
+
+    // Encendida: el último turno de alpha usó 5000 ≥ 1000, el mensaje va a beta.
+    e.runtime.set_chat_switch_tokens(Some(1000));
+    e.runtime
+        .continue_session(created.agent_id, "y ahora")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(providers(&e), "alpha,alpha,beta");
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "FAILOVER"
+    );
+    assert_eq!(one::<i64>(&e, "SELECT COUNT(*) FROM provider_failures"), 0);
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+
+    // Beta no reportó uso: el siguiente mensaje se queda en beta (no rebota).
+    e.runtime
+        .continue_session(created.agent_id, "otra más")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(providers(&e), "alpha,alpha,beta,beta");
+    e.writer.shutdown();
+}
+
+/// P07.5.S6: cuota agotada en el chat → failover con los parsers existentes y, al terminar,
+/// el chat sigue abierto (`READY`) y con su turno commiteado.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_fails_over_on_quota_and_keeps_waiting_for_messages() {
+    let first = "[[step]]\nkind = \"say\"\ntext = \"voy\"\n[[step]]\nkind = \"quota_exhausted\"\nresets_at = 1790300000\n";
+    let second = "[[step]]\nkind = \"edit\"\npath = \"beta.txt\"\ncontent = \"b\\n\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let mut r = req(
+        &e,
+        "Arregla el login",
+        Execution::Exact("alpha/fast".into()),
+    );
+    r.chat = true;
+    e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "READY");
+    assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "READY");
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "FAILOVER"
+    );
+    assert_eq!(one::<i64>(&e, "SELECT COUNT(*) FROM provider_failures"), 1);
+    assert_eq!(
+        git(&e.repo, &["log", "--format=%s", "-1", "symphony/chat"]),
+        "chat: turno 1 (beta/fast)"
+    );
+    e.writer.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn hung_executor_is_failed_and_reclaim_keeps_its_workspace() {
     let script = r#"
@@ -1418,6 +1780,93 @@ ms = 1500
     e.writer.handle().flush().await.unwrap();
     let note: String = one(&e, "SELECT content FROM messages WHERE role = 'SYSTEM'");
     assert!(note.contains("Sesión abierta en"), "{note}");
+    e.writer.shutdown();
+}
+
+/// P07.5.S1: un mensaje después del turno retoma la sesión del CLI (mismo modelo y
+/// mismo session id, sin handoff) y reabre al agente `COMPLETED`.
+#[tokio::test(flavor = "multi_thread")]
+async fn message_after_the_turn_resumes_the_cli_session() {
+    let script = "[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+    let e = env(script, None).await;
+    let waiting = e
+        .runtime
+        .create_agent(req(&e, "sin modelo", Execution::DecideLater))
+        .await
+        .unwrap();
+    let err = e
+        .runtime
+        .continue_session(waiting.agent_id, "hola")
+        .await
+        .unwrap_err()
+        .0;
+    assert!(err.contains("todavía no tiene una sesión"), "{err}");
+
+    let created = e
+        .runtime
+        .create_agent(req(&e, "con modelo", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id;
+    let state =
+        |e: &Env| one::<String>(e, &format!("SELECT state FROM agents WHERE id = '{agent}'"));
+    assert_eq!(state(&e), "COMPLETED");
+    let first: String = one(
+        &e,
+        &format!("SELECT cli_session_id FROM agent_runs WHERE agent_id = '{agent}'"),
+    );
+
+    let run = e.runtime.continue_session(agent, "sigue").await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(
+        one::<i64>(
+            &e,
+            &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id = '{agent}'")
+        ),
+        2
+    );
+    let second: String = one(
+        &e,
+        &format!("SELECT cli_session_id FROM agent_runs WHERE id = '{run}'"),
+    );
+    assert_eq!(second, first, "el run nuevo debe continuar la misma sesión");
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT model_id FROM agent_runs WHERE id = '{run}'")
+        ),
+        "fake/fast"
+    );
+    assert_eq!(state(&e), "COMPLETED");
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT status FROM tasks WHERE id = (SELECT task_id FROM agents WHERE id = '{agent}')"
+            )
+        ),
+        "DONE"
+    );
+    // Sin handoff ni cambio de executor: la conversación sigue en el CLI.
+    assert_eq!(count(&e, "executor_changes"), 0);
+    assert_eq!(
+        one::<i64>(
+            &e,
+            &format!("SELECT COUNT(*) FROM handoffs WHERE to_run_id = '{run}'")
+        ),
+        0
+    );
+    let said: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM messages WHERE agent_id = '{agent}' AND role = 'USER' AND content = 'sigue'"
+        ),
+    );
+    assert_eq!(said, 1);
     e.writer.shutdown();
 }
 

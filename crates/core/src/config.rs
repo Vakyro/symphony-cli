@@ -88,6 +88,16 @@ pub struct Config {
     pub context: ContextConfig,
     pub providers: ProvidersConfig,
     pub logging: LoggingConfig,
+    pub chat: ChatConfig,
+}
+
+/// `[chat]`: política opcional de cambio de proveedor por uso de contexto (P07.5.S6).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ChatConfig {
+    /// Si el último turno del chat llegó a este número de tokens, el siguiente mensaje
+    /// pasa al siguiente proveedor. `None` (por defecto) = apagado.
+    pub switch_at_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -189,6 +199,11 @@ quota_reserve = 0.20
 [logging]
 # error · warn · info · debug · trace
 level = "info"
+
+[chat]
+# Apagado por defecto. Con un valor, si el último turno del chat llegó a esa cantidad de
+# tokens de contexto, el siguiente mensaje pasa al siguiente proveedor con el historial.
+# switch_at_tokens = 150000
 "#;
 
 impl Config {
@@ -202,6 +217,9 @@ impl Config {
                 "providers.quota_reserve = {} debe estar entre 0.0 y 1.0",
                 self.providers.quota_reserve
             )));
+        }
+        if self.chat.switch_at_tokens == Some(0) {
+            return Err(invalid("chat.switch_at_tokens debe ser mayor que 0".into()));
         }
         if self.routing.default_profile.trim().is_empty() {
             return Err(invalid(

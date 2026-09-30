@@ -215,6 +215,11 @@ impl ProviderAdapter for FakeAdapter {
                     vec![AgentEvent::ProviderError(e)]
                 })
                 .unwrap_or_default(),
+            (Some("usage"), _) => v
+                .get("tokens")
+                .and_then(Value::as_u64)
+                .map(|context_tokens| vec![AgentEvent::TurnUsage { context_tokens }])
+                .unwrap_or_default(),
             (Some("result"), _) => vec![AgentEvent::TurnFinished { last_message: None }],
             _ => Vec::new(),
         }

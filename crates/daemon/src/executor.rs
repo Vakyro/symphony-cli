@@ -10,11 +10,14 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use symphony_adapter_common::{AgentEvent, ProviderAdapter, ProviderError, SpawnRequest};
+use symphony_adapter_common::{
+    AgentEvent, ProviderAdapter, ProviderError, ResumeRequest, SpawnRequest,
+};
 use symphony_core::{
     AgentId, AgentState, ExecutorChangeId, FailoverPolicy, FailureType, HandoffId, MessageId,
     ProjectId, ProviderFailureId, RunEndReason, RunId, RunStatus, TaskId, TaskStatus,
 };
+use symphony_git::Repo;
 use symphony_process::{ExitStatus, OutputLine, Supervised};
 use symphony_store::repo;
 use tokio::sync::{mpsc, oneshot};
@@ -34,6 +37,8 @@ pub(crate) struct Launch {
     pub worktree: PathBuf,
     pub cli_model: String,
     pub prompt: String,
+    /// Sesión del CLI a continuar (`resume_spec`) en vez de abrir una nueva.
+    pub resume_session: Option<String>,
 }
 
 /// Órdenes para el executor vivo de un agente.
@@ -93,6 +98,46 @@ fn op_err(e: impl std::fmt::Display) -> AgentOpError {
     AgentOpError(e.to_string())
 }
 
+/// Prefijo con el que cada CLI reconoce una skill al inicio del mensaje: `/nombre` en Claude,
+/// `$nombre` en Codex (P07.5.S8).
+fn skill_prefix(provider: &str) -> Option<char> {
+    match provider {
+        "anthropic" => Some('/'),
+        "openai" => Some('$'),
+        _ => None,
+    }
+}
+
+/// Añade el mensaje nuevo del usuario al prompt del handoff. Claude solo interpreta `/skill` si
+/// es lo primero del mensaje (probado: dentro del prompt de handoff no se aplica), así que si el
+/// mensaje empieza por el prefijo de skill del proveedor destino, esa invocación se sube al
+/// inicio y el resto del handoff pasa como sus argumentos.
+// ponytail: los argumentos de la skill incluyen todo el handoff; suficiente para skills de estilo
+// o de tarea. `/skill` escrito para el otro proveedor no se traduce.
+fn with_user_message(prompt: &str, message: &str, provider: &str) -> String {
+    let body = format!(
+        "{prompt}
+
+## Mensaje nuevo del usuario (respóndelo primero)
+{message}"
+    );
+    let trimmed = message.trim_start();
+    match skill_prefix(provider) {
+        Some(p) if trimmed.starts_with(p) && trimmed.len() > 1 => {
+            let (invocation, rest) = trimmed
+                .split_once(char::is_whitespace)
+                .unwrap_or((trimmed, ""));
+            format!(
+                "{invocation} {}
+
+{body}",
+                rest.trim()
+            )
+        }
+        _ => body,
+    }
+}
+
 impl Runtime {
     fn read_op<T>(
         &self,
@@ -146,10 +191,14 @@ impl Runtime {
             return Err("la base de datos no acepta escrituras".into());
         }
         let started = async {
-            let spec = l
-                .adapter
-                .spawn_spec(&spawn_req)
-                .map_err(|e| e.to_string())?;
+            let spec = match &l.resume_session {
+                Some(id) => l.adapter.resume_spec(&ResumeRequest {
+                    spawn: spawn_req.clone(),
+                    cli_session_id: id.clone(),
+                }),
+                None => l.adapter.spawn_spec(&spawn_req),
+            }
+            .map_err(|e| e.to_string())?;
             let mut proc = symphony_process::spawn(spec)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -173,10 +222,17 @@ impl Runtime {
             }
         };
         let (run_id, pid) = (l.run_id, proc.pid().unwrap_or(0));
+        let session = l.resume_session.clone();
         let _ = self
             .writer
             .write(Box::new(move |t| {
-                Ok(repo::set_run_process(t, run_id, pid, None, None)?)
+                Ok(repo::set_run_process(
+                    t,
+                    run_id,
+                    pid,
+                    session.as_deref(),
+                    None,
+                )?)
             }))
             .await;
         let (control, rx) = mpsc::unbounded_channel();
@@ -362,6 +418,7 @@ impl Runtime {
     async fn finish_natural(&self, l: &Launch, exit: ExitStatus) {
         // ponytail: exit 0 = tarea terminada; el heartbeat (P06.S6) cubre los cuelgues.
         if exit == ExitStatus::Exited(0) {
+            self.commit_chat_turn(l).await;
             let (agent, task, run) = (l.agent_id, l.task_id, l.run_id);
             let result = self
                 .writer
@@ -376,8 +433,19 @@ impl Runtime {
                         now,
                     )?;
                     repo::set_handoff_outcome(t, run, "CONTINUED")?;
-                    repo::set_agent_state(t, agent, AgentState::Completed, None, now)?;
-                    repo::set_task_status(t, task, TaskStatus::Done, None, now)?;
+                    if repo::get_task(t, task)?.code == repo::CHAT_TASK_CODE {
+                        repo::set_agent_state(
+                            t,
+                            agent,
+                            AgentState::Ready,
+                            Some("esperando mensaje"),
+                            now,
+                        )?;
+                        repo::set_task_status(t, task, TaskStatus::Ready, None, now)?;
+                    } else {
+                        repo::set_agent_state(t, agent, AgentState::Completed, None, now)?;
+                        repo::set_task_status(t, task, TaskStatus::Done, None, now)?;
+                    }
                     Ok(())
                 }))
                 .await;
@@ -398,6 +466,34 @@ impl Runtime {
         };
         self.finish_failed(l, RunStatus::Failed, code, &reason)
             .await;
+    }
+
+    /// Turno terminado del chat: commit automático de lo que dejó en su worktree (P07.5.S5).
+    /// Corre una vez por run terminado, no por evento; los demás agentes salen tras una lectura.
+    async fn commit_chat_turn(&self, l: &Launch) {
+        let (task, agent) = (l.task_id, l.agent_id);
+        let is_chat = self
+            .read_op(|c| Ok(repo::get_task(c, task)?.code == repo::CHAT_TASK_CODE))
+            .unwrap_or(false);
+        if !is_chat {
+            return;
+        }
+        // El `TurnFinished` de este turno ya está encolado: se espera a que se escriba para contarlo.
+        let _ = self.writer.flush().await;
+        let turn = self
+            .read_op(|c| repo::turns_finished(c, agent))
+            .unwrap_or(0);
+        let message = format!("chat: turno {turn} ({})", l.model_id);
+        let worktree = l.worktree.clone();
+        match tokio::task::spawn_blocking(move || Repo::at(worktree).commit_all(&message)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(agent = %agent, error = %e, "no se pudo commitear el turno del chat")
+            }
+            Err(e) => {
+                tracing::warn!(agent = %agent, error = %e, "no se pudo commitear el turno del chat")
+            }
+        }
     }
 
     /// Run `FAILED/CRASH`, agente `FAILED` con razón y recovery item `EXECUTOR_EXITED`.
@@ -557,6 +653,7 @@ impl Runtime {
                 "FAILOVER",
                 why_en,
                 Some(failure_id),
+                None,
             )
             .await
         {
@@ -577,6 +674,7 @@ impl Runtime {
         change: &'static str,
         reason_en: &str,
         failure_id: Option<ProviderFailureId>,
+        message: Option<&str>,
     ) -> Result<RunId, AgentOpError> {
         let adapter = self
             .adapter(&model.provider_id)
@@ -624,6 +722,11 @@ impl Runtime {
                     None,
                 )
             }
+        };
+        // El mensaje nuevo del usuario (cambio manual) va al final, para que lo responda primero.
+        let prompt = match message {
+            Some(m) => with_user_message(&prompt, m, &model.provider_id),
+            None => prompt,
         };
         let run = RunId::new();
         let (agent_id, task_id, state) = (agent.id, agent.task_id, agent.state);
@@ -712,9 +815,26 @@ impl Runtime {
             worktree: PathBuf::from(worktree),
             cli_model: model.cli_model_id,
             prompt,
+            resume_session: None,
         };
         // Si no arranca, `launch` ya dejó al agente `FAILED` con razón y recovery item.
-        let _ = self.launch(launch).await;
+        let (project, agent_id) = (agent.project_id, agent.id);
+        let launched = self.launch(launch).await;
+        // El mensaje se guarda aparte como `USER`: el primer `USER` del run es el prompt del
+        // handoff y se descarta al armar la conversación (P07.5.S3).
+        if let (Some(text), Ok(())) = (message, launched) {
+            let ev = BusEvent {
+                project_id: project.to_string(),
+                agent_id: Some(agent_id.to_string()),
+                run_id: Some(run.to_string()),
+                source: EventSource::User,
+                event: AgentEvent::UserMessage {
+                    text: text.to_string(),
+                },
+                occurred_at: now_ms(),
+            };
+            self.bus.publish(ev).await.map_err(op_err)?;
+        }
         Ok(run)
     }
 
@@ -745,6 +865,17 @@ impl Runtime {
     /// Cambio manual de modelo (P06.S5): `symphony switch <agente> --model <provider/model>`.
     /// Es una elección exacta del usuario: queda como el modelo pedido del agente.
     pub async fn switch(&self, agent_id: AgentId, model_id: &str) -> Result<RunId, AgentOpError> {
+        self.switch_with_message(agent_id, model_id, None).await
+    }
+
+    /// Como `switch`, y además entrega `message` al modelo nuevo: el chat cambia de
+    /// proveedor a mitad de conversación sin que el usuario repita nada (P07.5.S6).
+    pub async fn switch_with_message(
+        &self,
+        agent_id: AgentId,
+        model_id: &str,
+        message: Option<&str>,
+    ) -> Result<RunId, AgentOpError> {
         let model = self
             .read_op(|c| repo::eligible_model(c, model_id))?
             .map_err(|reason| {
@@ -835,6 +966,7 @@ impl Runtime {
             "USER_SWITCH",
             "user switch",
             None,
+            message,
         )
         .await
     }
@@ -952,6 +1084,161 @@ impl Runtime {
         self.bus.publish(ev).await.map_err(op_err)
     }
 
+    /// Política por umbral (P07.5.S6, apagada por defecto): si el último turno del chat
+    /// usó tanto contexto como el umbral y hay otro executor elegible, el próximo mensaje
+    /// va a ese otro con handoff en vez de reanudar la sesión del CLI.
+    fn rotation_target(
+        &self,
+        agent: &repo::Agent,
+        last: &repo::AgentRun,
+    ) -> Result<Option<repo::EligibleModel>, AgentOpError> {
+        let limit = self
+            .chat_switch_tokens
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(None);
+        }
+        let has_adapter = |p: &str| self.adapter(p).is_some();
+        self.read_op(|c| {
+            if repo::get_task(c, agent.task_id)?.code != repo::CHAT_TASK_CODE
+                || repo::last_turn_tokens(c, last.id)? < limit
+            {
+                return Ok(None);
+            }
+            repo::next_executor(
+                c,
+                agent.id,
+                agent.failover_policy,
+                &last.provider_id,
+                &last.model_id,
+                false,
+                &has_adapter,
+            )
+        })
+    }
+
+    /// Mensaje después de terminado el turno (ADR-0005, adenda; P07.5.S1): retoma la
+    /// sesión del CLI con `resume_spec`, con el mismo modelo y sin handoff, porque la
+    /// conversación sigue en el CLI. Un agente `COMPLETED` se reabre.
+    pub async fn continue_session(
+        &self,
+        agent_id: AgentId,
+        text: &str,
+    ) -> Result<RunId, AgentOpError> {
+        if self.is_live(agent_id) {
+            return Err(AgentOpError(
+                "el agente está trabajando: su executor recibe el mensaje directamente".into(),
+            ));
+        }
+        let (agent, last) = self.read_op(|c| {
+            let agent = repo::get_agent(c, agent_id)?;
+            let last = repo::runs_of(c, agent_id)?
+                .into_iter()
+                .rev()
+                .find(|r| r.cli_session_id.is_some());
+            Ok((agent, last))
+        })?;
+        if !matches!(agent.state, AgentState::Ready | AgentState::Completed) {
+            let hint = match agent.state {
+                AgentState::Failed => "; recupéralo con restart o reclaim",
+                AgentState::Paused => "; reanúdalo primero",
+                _ => "",
+            };
+            return Err(AgentOpError(format!(
+                "el agente #{} está {} y no puede recibir mensajes ahora{hint}",
+                agent.number,
+                agent.state.as_str()
+            )));
+        }
+        let (last, session) = last
+            .and_then(|r| {
+                let session = r.cli_session_id.clone()?;
+                Some((r, session))
+            })
+            .ok_or_else(|| {
+                AgentOpError(format!(
+                    "el agente #{} todavía no tiene una sesión que continuar: asígnale un modelo primero",
+                    agent.number
+                ))
+            })?;
+        if let Some(next) = self.rotation_target(&agent, &last)? {
+            let reason = format!(
+                "El contexto de {} llegó al umbral configurado de tokens.",
+                last.model_id
+            );
+            return self
+                .start_successor(
+                    &agent,
+                    Some(last.id),
+                    next,
+                    &reason,
+                    "FAILOVER",
+                    "context threshold",
+                    None,
+                    Some(text),
+                )
+                .await;
+        }
+        let model = self
+            .read_op(|c| repo::eligible_model(c, &last.model_id))?
+            .map_err(|why| {
+                AgentOpError(format!(
+                    "no se puede continuar con el modelo anterior: {why}"
+                ))
+            })?;
+        let adapter = self
+            .adapter(&model.provider_id)
+            .ok_or_else(|| AgentOpError(format!("no hay adapter para `{}`", model.provider_id)))?;
+        let worktree = self
+            .read_op(|c| {
+                let wt = agent.worktree_id.ok_or_else(|| repo::RepoError::NotFound {
+                    entity: "worktree",
+                    id: agent.id.to_string(),
+                })?;
+                repo::get_worktree(c, wt)
+            })?
+            .path;
+
+        let run = RunId::new();
+        let (task_id, state) = (agent.task_id, agent.state);
+        let (provider, model_id) = (model.provider_id.clone(), model.model_id.clone());
+        self.writer
+            .write(Box::new(move |t| {
+                let now = now_ms();
+                if state == AgentState::Completed {
+                    repo::set_agent_state(t, agent_id, AgentState::Ready, None, now)?;
+                }
+                repo::set_agent_state(t, agent_id, AgentState::Running, None, now)?;
+                let task = repo::get_task(t, task_id)?.status;
+                if task == TaskStatus::Done {
+                    repo::set_task_status(t, task_id, TaskStatus::Ready, None, now)?;
+                }
+                if task != TaskStatus::Running {
+                    repo::set_task_status(t, task_id, TaskStatus::Running, None, now)?;
+                }
+                repo::open_run(t, run, agent_id, &provider, &model_id, now)?;
+                Ok(())
+            }))
+            .await
+            .map_err(op_err)?;
+        let launch = Launch {
+            adapter,
+            project_id: agent.project_id,
+            agent_id,
+            task_id,
+            run_id: run,
+            provider_id: model.provider_id,
+            model_id: model.model_id,
+            worktree: PathBuf::from(worktree),
+            cli_model: model.cli_model_id,
+            prompt: text.to_string(),
+            resume_session: Some(session),
+        };
+        // Si no arranca, `launch` ya dejó al agente `FAILED` con razón y recovery item.
+        self.launch(launch).await.map_err(AgentOpError)?;
+        Ok(run)
+    }
+
     /// Reabre un agente `FAILED` con un run nuevo desde su último checkpoint,
     /// con el mismo proveedor/modelo del run anterior (FLOW §16, IDEA §5.10).
     /// `change`/`resolution` son `RESTART` (crash) o `RECLAIM` (sin latido).
@@ -1002,6 +1289,7 @@ impl Runtime {
                 reason,
                 change,
                 reason_en,
+                None,
                 None,
             )
             .await?;
@@ -1185,34 +1473,22 @@ impl Runtime {
         &self,
         agent_id: AgentId,
         limit: Option<usize>,
-    ) -> Result<Vec<(String, String)>, AgentOpError> {
+    ) -> Result<Vec<(String, String, i64)>, AgentOpError> {
         let records = self.read_op(|c| repo::agent_messages(c, agent_id, limit))?;
         let objects = symphony_object_store::ObjectStore::new(
             symphony_core::SymphonyHome::at(&self.home).objects_dir(),
         );
-        let mut views = Vec::new();
-        for m in records {
-            let content = if let Some(c) = m.content {
-                c
-            } else if let Some(obj_id) = m.content_object_id {
-                let hash = self.read_op(|c| {
-                    c.query_row(
-                        "SELECT blob_hash FROM context_objects WHERE id = ?1",
-                        [obj_id.to_string()],
-                        |r| r.get::<_, String>(0),
-                    )
-                    .map_err(repo::RepoError::from)
-                })?;
-                objects
-                    .get(&hash)
-                    .map(|b| String::from_utf8_lossy(&b).into_owned())
-                    .unwrap_or_else(|_| "(objeto no disponible)".into())
-            } else {
-                String::new()
-            };
-            views.push((m.role, content));
-        }
-        Ok(views)
+        let conn = self
+            .reader
+            .lock()
+            .map_err(|_| AgentOpError("lector de la base no disponible".into()))?;
+        Ok(records
+            .into_iter()
+            .map(|m| {
+                let content = crate::handoff::message_text(&conn, &objects, &m);
+                (m.role, content, m.created_at)
+            })
+            .collect())
     }
 
     /// Información detallada del agente para inspección (FLOW §7, Overview / History).
@@ -1296,5 +1572,38 @@ impl Runtime {
                 "ended_at": r.ended_at,
             })).collect::<Vec<_>>(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod skill_tests {
+    use super::with_user_message;
+
+    #[test]
+    fn a_skill_invocation_moves_to_the_front_for_its_own_provider() {
+        let p = with_user_message("HANDOFF", "/flintstone explica un worktree", "anthropic");
+        assert!(
+            p.starts_with("/flintstone explica un worktree\n\nHANDOFF"),
+            "{p}"
+        );
+        // El mensaje sigue también al final, para quien no lea la invocación.
+        assert!(p.ends_with("respóndelo primero)\n/flintstone explica un worktree"));
+        let p = with_user_message("HANDOFF", "$deslop este archivo", "openai");
+        assert!(p.starts_with("$deslop este archivo\n\nHANDOFF"), "{p}");
+    }
+
+    #[test]
+    fn other_messages_and_other_providers_are_left_at_the_end() {
+        let plain = "HANDOFF\n\n## Mensaje nuevo del usuario (respóndelo primero)\nhola";
+        assert_eq!(with_user_message("HANDOFF", "hola", "anthropic"), plain);
+        // `/x` para Codex y `$x` para Claude no son skills de ese CLI: no se tocan.
+        assert!(with_user_message("H", "/flintstone x", "openai").starts_with('H'));
+        assert!(with_user_message("H", "$flintstone x", "anthropic").starts_with('H'));
+        // Una barra sola no es una invocación.
+        assert!(with_user_message("H", "/", "anthropic").starts_with('H'));
+        // Una skill sin argumentos también sube.
+        assert!(
+            with_user_message("H", "/flintstone", "anthropic").starts_with("/flintstone \n\nH")
+        );
     }
 }

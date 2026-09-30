@@ -34,6 +34,8 @@ fn expected_stream(line: &str) -> Vec<&'static str> {
         ("item.completed", Some("agent_message")) => vec!["AssistantText"],
         // "Reconnecting… (stream disconnected…)": red, transitoria.
         ("error", _) => vec!["ProviderError"],
+        // Uso de contexto del turno (P07.5.S6).
+        ("turn.completed", _) => vec!["TurnUsage"],
         _ => vec![],
     }
 }
@@ -238,4 +240,16 @@ fn quota_comes_from_the_rollout_file() {
         ("seven_day", 0.32)
     );
     assert!(quota_from_rollout(&dir.path().join("no-existe")).is_empty());
+}
+
+/// P07.5.S6: `turn.completed` reporta el uso de contexto del turno.
+#[test]
+fn turn_completed_reports_turn_usage() {
+    let line = r#"{"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":20000,"output_tokens":120}}"#;
+    assert_eq!(
+        adapter().parse_stream_line(line),
+        vec![AgentEvent::TurnUsage {
+            context_tokens: 24763
+        }]
+    );
 }

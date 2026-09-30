@@ -45,6 +45,8 @@ fn expected_stream(line: &str) -> Vec<&'static str> {
             .map(|_| "AssistantText")
             .collect(),
         // Fin del turno: el runtime cierra stdin para que el CLI salga (ADR-0005, adenda P07).
+        // Antes reporta el uso de contexto del turno (P07.5.S6).
+        ("result", _) if v["usage"].is_object() => vec!["TurnUsage", "TurnFinished"],
         ("result", _) => vec!["TurnFinished"],
         // hooks, tool_result, thinking, tareas: vienen por hooks o no importan.
         _ => vec![],
@@ -307,5 +309,23 @@ fn hook_command_cannot_inject_through_the_path() {
     assert_eq!(
         cmd,
         r#"'C:/Users/a$(rm -rf ~)`x`'\''b/symphony.exe' 'hook' 'emit'"#
+    );
+}
+
+/// P07.5.S6: el `result` reporta el uso de contexto del turno antes de terminarlo.
+#[test]
+fn result_reports_turn_usage_before_finishing() {
+    let line = r#"{"type":"result","subtype":"success","result":"listo","usage":{"input_tokens":10,"cache_read_input_tokens":200,"cache_creation_input_tokens":30,"output_tokens":5}}"#;
+    let events = adapter().parse_stream_line(line);
+    assert_eq!(
+        events,
+        vec![
+            AgentEvent::TurnUsage {
+                context_tokens: 240
+            },
+            AgentEvent::TurnFinished {
+                last_message: Some("listo".into())
+            },
+        ]
     );
 }

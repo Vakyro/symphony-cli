@@ -27,7 +27,9 @@ impl AgentState {
                 Paused,
                 Cancelled,
             ],
+            // `Ready` = el chat terminó su turno y espera otro mensaje (P07.5.S4).
             Running => &[
+                Ready,
                 WaitingProvider,
                 WaitingResource,
                 Testing,
@@ -56,7 +58,9 @@ impl AgentState {
             Paused => &[Ready, Running, Cancelled],
             // Reclaim / restart (IDEA §5.10).
             Failed => &[Ready, Cancelled],
-            Completed | Cancelled => &[],
+            // Un mensaje después del turno reabre al agente (P07.5.S1).
+            Completed => &[Ready],
+            Cancelled => &[],
         };
         allowed.contains(&to)
     }
@@ -100,7 +104,9 @@ impl TaskStatus {
             // Replanificar, ignorar la dependencia o cancelar (FLOW §9.3).
             Blocked => &[Ready, Waiting, Cancelled],
             Failed => &[Ready, Cancelled],
-            Done | Cancelled => &[],
+            // Reabierta junto con su agente por un mensaje posterior (P07.5.S1).
+            Done => &[Ready],
+            Cancelled => &[],
         };
         allowed.contains(&to)
     }
@@ -144,6 +150,7 @@ mod tests {
         (
             "RUNNING",
             &[
+                "READY",
                 "WAITING_PROVIDER",
                 "WAITING_RESOURCE",
                 "TESTING",
@@ -180,7 +187,7 @@ mod tests {
         ),
         ("BLOCKED", &["READY", "CANCELLED", "FAILED"]),
         ("PAUSED", &["READY", "RUNNING", "CANCELLED"]),
-        ("COMPLETED", &[]),
+        ("COMPLETED", &["READY"]),
         ("FAILED", &["READY", "CANCELLED"]),
         ("CANCELLED", &[]),
     ];
@@ -197,7 +204,7 @@ mod tests {
         ),
         ("WAITING", &["READY", "BLOCKED", "CANCELLED"]),
         ("BLOCKED", &["READY", "WAITING", "CANCELLED"]),
-        ("DONE", &[]),
+        ("DONE", &["READY"]),
         ("FAILED", &["READY", "CANCELLED"]),
         ("CANCELLED", &[]),
     ];

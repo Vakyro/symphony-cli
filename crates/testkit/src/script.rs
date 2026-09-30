@@ -75,6 +75,10 @@ pub enum Step {
     AuthError,
     /// Muere sin cleanup (exit 134, como un abort).
     Crash,
+    /// Reporta el uso de contexto del turno (`TurnUsage`).
+    Usage {
+        tokens: u64,
+    },
     /// Se cuelga para siempre (para probar timeouts y kills).
     Hang,
 }

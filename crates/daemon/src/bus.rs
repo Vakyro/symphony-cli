@@ -61,6 +61,41 @@ pub struct AgentSnapshot {
 
 pub type BusState = HashMap<String, AgentSnapshot>;
 
+/// Los cambios de estado salen del punto único de escritura (`set_agent_state`) y
+/// llegan a los suscriptores sin pasar por `events`: el estado ya vive en `agents`.
+fn forward_state_changes(
+    mut changes: broadcast::Receiver<symphony_store::AgentStateChange>,
+    tui: &broadcast::Sender<Arc<BusEvent>>,
+) {
+    use broadcast::error::RecvError;
+    // Débil: el reenviador no mantiene abierto el canal cuando el bus se suelta.
+    let tui = tui.downgrade();
+    tokio::spawn(async move {
+        loop {
+            match changes.recv().await {
+                Ok(c) => {
+                    let Some(tui) = tui.upgrade() else { return };
+                    let _ = tui.send(Arc::new(BusEvent {
+                        project_id: c.project_id,
+                        agent_id: Some(c.agent_id),
+                        run_id: None,
+                        source: EventSource::System,
+                        event: AgentEvent::StateChanged {
+                            from: c.from.as_str().into(),
+                            to: c.to.as_str().into(),
+                            reason: c.reason,
+                        },
+                        occurred_at: crate::runtime::now_ms(),
+                    }));
+                }
+                // Los suscriptores releen el estado al ver `bus.lagged` o el siguiente evento.
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return,
+            }
+        }
+    });
+}
+
 #[derive(Clone)]
 pub struct EventBus {
     writer: WriterHandle,
@@ -77,6 +112,7 @@ impl EventBus {
         let (state, _) = watch::channel(BusState::new());
         let checkpoints =
             Checkpointer::start(writer.clone(), objects.clone(), crate::checkpoint::KEEP);
+        forward_state_changes(writer.state_changes(), &tui);
         Self {
             writer,
             recorder: Arc::new(Recorder::new(objects)),

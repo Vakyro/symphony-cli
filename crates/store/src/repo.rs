@@ -209,6 +209,46 @@ pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> Result<(), RepoErro
     Ok(())
 }
 
+/// Código de la task del chat general: identifica al agente sin migración (P07.5.S4).
+pub const CHAT_TASK_CODE: &str = "CHAT";
+
+/// Tokens de contexto del último turno que reportó uso en ese run (0 si ninguno).
+pub fn last_turn_tokens(conn: &Connection, run: RunId) -> Result<u64, RepoError> {
+    let n: Option<i64> = conn
+        .query_row(
+            "SELECT json_extract(payload_json, '$.context_tokens') FROM events
+             WHERE run_id = ?1 AND type = 'TurnUsage' ORDER BY id DESC LIMIT 1",
+            [run.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(n.and_then(|n| u64::try_from(n).ok()).unwrap_or(0))
+}
+
+/// Turnos terminados del agente (eventos `TurnFinished` ya escritos).
+pub fn turns_finished(conn: &Connection, agent: AgentId) -> Result<i64, RepoError> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM events WHERE agent_id = ?1 AND type = 'TurnFinished'",
+        [agent.to_string()],
+        |r| r.get(0),
+    )?)
+}
+
+/// El agente del chat del proyecto, en cualquier estado.
+pub fn chat_agent(conn: &Connection, project: ProjectId) -> Result<Option<Agent>, RepoError> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {AGENT_COLS} FROM agents WHERE archived_at IS NULL AND task_id IN
+                 (SELECT id FROM tasks WHERE project_id = ?1 AND code = ?2)"
+            ),
+            params![project.to_string(), CHAT_TASK_CODE],
+            agent_row,
+        )
+        .optional()?)
+}
+
 pub fn get_task(conn: &Connection, id: TaskId) -> Result<Task, RepoError> {
     conn.query_row(
         "SELECT id, project_id, code, title, description, status, status_reason, priority FROM tasks WHERE id = ?1",
@@ -367,7 +407,8 @@ pub fn set_agent_state(
     reason: Option<&str>,
     now: i64,
 ) -> Result<AgentState, RepoError> {
-    let from = get_agent(conn, id)?.state;
+    let agent = get_agent(conn, id)?;
+    let from = agent.state;
     from.transition(to)?;
     if to.requires_reason() && reason.is_none() {
         return Err(RepoError::MissingReason { state: to.as_str() });
@@ -376,6 +417,13 @@ pub fn set_agent_state(
         "UPDATE agents SET state = ?2, state_reason = ?3, updated_at = ?4 WHERE id = ?1",
         params![id.to_string(), to.as_str(), reason, now],
     )?;
+    crate::writer::record_state_change(crate::AgentStateChange {
+        project_id: agent.project_id.to_string(),
+        agent_id: id.to_string(),
+        from,
+        to,
+        reason: reason.map(str::to_string),
+    });
     Ok(from)
 }
 
@@ -928,17 +976,13 @@ pub fn latest_checkpoint(
         .optional()?)
 }
 
-/// Caracteres de toda la conversación del agente (cortos + largos en el object store):
-/// lo que costaría reenviar el historial sin optimizar.
-pub fn conversation_chars(conn: &Connection, agent: AgentId) -> Result<i64, RepoError> {
-    Ok(conn.query_row(
-        "SELECT COALESCE((SELECT SUM(LENGTH(content)) FROM messages WHERE agent_id = ?1), 0)
-              + COALESCE((SELECT SUM(b.size_bytes) FROM messages m
-                          JOIN context_objects o ON o.id = m.content_object_id
-                          JOIN blobs b ON b.hash = o.blob_hash WHERE m.agent_id = ?1), 0)",
-        [agent.to_string()],
-        |r| r.get(0),
-    )?)
+/// Runs que arrancaron desde un checkpoint (handoff real, no el primer spawn).
+pub fn handoff_run_ids(conn: &Connection, agent: AgentId) -> Result<Vec<RunId>, RepoError> {
+    let mut stmt = conn.prepare(
+        "SELECT to_run_id FROM handoffs WHERE agent_id = ?1 AND checkpoint_id IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([agent.to_string()], |r| col(r, 0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 #[derive(Debug, Clone, PartialEq)]

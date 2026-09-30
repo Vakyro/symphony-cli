@@ -1,14 +1,16 @@
 //! Render de las vistas (FLOW §18: 01–09, 12, 13, 22, 24, 30). Funciones puras de `&App`.
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use serde_json::Value;
 
 use crate::app::{
-    App, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Tab, ago, state_phrase,
+    AgentView, App, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab, ago,
+    state_phrase,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -68,6 +70,7 @@ pub fn render(app: &App, f: &mut Frame) {
 
     let title = match app.screen {
         Screen::Launch | Screen::NotARepo => "",
+        Screen::Chat => "· Chat",
         Screen::FirstRun => "· Configuración inicial",
         Screen::ProviderSetup => "· Proveedores",
         Screen::Home => "",
@@ -92,6 +95,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::NotARepo => not_a_repo(app, f, body),
         Screen::FirstRun => first_run(app, f, body),
         Screen::ProviderSetup | Screen::Providers => providers(app, f, body),
+        Screen::Chat => chat(app, f, body),
         Screen::Home => home(app, f, body),
         Screen::NewAgent => new_agent(app, f, body),
         Screen::ModelPicker => model_picker(app, f, body),
@@ -113,15 +117,18 @@ fn hints(app: &App) -> &'static str {
             "↑↓ elegir · r reintentar · d activar/desactivar · Enter continuar"
         }
         Screen::Providers => "↑↓ elegir · r volver a detectar · d activar/desactivar · Esc volver",
+        Screen::Chat => {
+            "Enter enviar · Tab modelo · ↑↓/rueda · ^Y copiar · ^E exportar · F2 ratón · Esc tareas"
+        }
         Screen::Home => {
-            "↑↓ elegir · Enter abrir · n nuevo · p proveedores · r recovery · : comando · q salir"
+            "↑↓ elegir · Enter abrir · n nuevo · p proveedores · r recovery · : comando · Esc chat · q salir"
         }
         Screen::NewAgent => "↑↓ campo · ←→ opción · Enter siguiente/crear · Esc cancelar",
         Screen::ModelPicker => "↑↓ elegir · Enter usar · Esc volver",
         Screen::Agent => match app.agent.as_ref() {
             Some(a) if a.typing => "Enter enviar · Esc cancelar",
             _ => {
-                "←→ pestaña · m mensaje · p pausa · s modelo · o abrir en el CLI · d diff · x detener · Esc"
+                "←→ pestaña · m mensaje · p pausa · s modelo · o CLI · e exportar · d diff · x detener · Esc"
             }
         },
         Screen::Recovery => {
@@ -390,6 +397,305 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
         "Proveedores"
     };
     paragraph(f, area, title, lines);
+}
+
+// --- 00 Chat ---------------------------------------------------------------
+
+/// Parte `s` en líneas de a lo sumo `width` caracteres, cortando en espacios cuando se puede.
+fn wrap(s: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for src in s.lines() {
+        let mut line = String::new();
+        let mut len = 0;
+        for word in src.split(' ') {
+            let mut word: Vec<char> = word.chars().collect();
+            // Una palabra más larga que la línea se parte a la fuerza.
+            while word.len() > width {
+                if len > 0 {
+                    out.push(std::mem::take(&mut line));
+                    len = 0;
+                }
+                out.push(word.drain(..width).collect());
+            }
+            let n = word.len();
+            if len > 0 && len + 1 + n > width {
+                out.push(std::mem::take(&mut line));
+                len = 0;
+            }
+            if len > 0 {
+                line.push(' ');
+                len += 1;
+            }
+            line.extend(word);
+            len += n;
+        }
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// Prompt de un handoff: lo ve el modelo nuevo, no el usuario (FLOW §13.4 ya marca el cambio).
+// ponytail: se reconoce por su frase inicial (crates/context/src/handoff.rs); si cambia, hay que
+// actualizarla acá o el chat mostraría el handoff entero.
+const HANDOFF_PROMPT: &str = "Retomas una tarea de código";
+
+/// Líneas de un mensaje (vacío si no se muestra).
+fn message_lines(m: &Value, width: usize) -> Vec<Line<'static>> {
+    let content = m["content"].as_str().unwrap_or("");
+    let mut lines = Vec::new();
+    match m["role"].as_str().unwrap_or("") {
+        "EXECUTOR_CHANGE" => {
+            for l in wrap(content, width) {
+                lines.push(Line::from(colored(l, Color::Magenta)));
+            }
+        }
+        "USER" if content.starts_with(HANDOFF_PROMPT) => return lines,
+        role => {
+            let (who, color) = match role {
+                "USER" => ("tú", ACCENT),
+                "ASSISTANT" => ("agente", Color::Green),
+                _ => ("sistema", Color::DarkGray),
+            };
+            for (i, l) in wrap(content, width.saturating_sub(9))
+                .into_iter()
+                .enumerate()
+            {
+                let prefix = if i == 0 {
+                    format!("{who:>7} │ ")
+                } else {
+                    "        │ ".into()
+                };
+                lines.push(Line::from(vec![colored(prefix, color), Span::raw(l)]));
+            }
+        }
+    }
+    lines.push(Line::raw(""));
+    lines
+}
+
+/// Una herramienta que usó el agente, en una línea tenue.
+fn tool_line(t: &Value, width: usize) -> Line<'static> {
+    let (mark, color) = match t["status"].as_str().unwrap_or("") {
+        "DONE" => ("✓", Color::Green),
+        "FAILED" | "DENIED" => ("✗", Color::Red),
+        _ => ("…", Color::Yellow),
+    };
+    let cmd = t["command"].as_str().unwrap_or("").replace('\n', " ");
+    let tool = t["tool"].as_str().unwrap_or("?");
+    let room = width.saturating_sub(tool.chars().count() + 12);
+    let cmd: String = cmd.chars().take(room).collect();
+    Line::from(vec![
+        dim("        ⚙ "),
+        colored(format!("{mark} "), color),
+        dim(format!("{tool} {cmd}")),
+    ])
+}
+
+/// La conversación con lo que el agente hizo entre mensajes (herramientas), por orden de hora.
+/// `tools` viene de `agent.activity` (lo más nuevo primero); solo cuentan los `kind == "tool"`.
+fn chat_lines(messages: &[Value], tools: &[Value], width: usize) -> Vec<Line<'static>> {
+    let at = |v: &Value| v["at"].as_i64().unwrap_or(0);
+    let mut timeline: Vec<(i64, Vec<Line<'static>>)> = messages
+        .iter()
+        .map(|m| (at(m), message_lines(m, width)))
+        .collect();
+    timeline.extend(
+        tools
+            .iter()
+            .rev()
+            .filter(|t| t["kind"] == "tool")
+            .map(|t| (at(t), vec![tool_line(t, width)])),
+    );
+    // Estable: a igual hora conserva el orden (mensajes antes que herramientas).
+    timeline.sort_by_key(|(t, _)| *t);
+    timeline.into_iter().flat_map(|(_, l)| l).collect()
+}
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// «⠋ pensando… 12 s» / «⠋ ejecutando Bash… 3 s»: lo que el agente está haciendo ahora.
+fn working_line(app: &App, view: &AgentView) -> Line<'static> {
+    let running_tool = view
+        .activity
+        .iter()
+        .find(|t| t["kind"] == "tool" && t["status"] == "RUNNING")
+        .and_then(|t| t["tool"].as_str());
+    // Tiempo desde lo último que se supo del agente (mensaje o herramienta).
+    let last = view
+        .messages
+        .iter()
+        .chain(view.activity.iter())
+        .filter_map(|v| v["at"].as_i64())
+        .max();
+    let secs = last.map_or(0, |l| ((app.now_ms - l) / 1000).max(0));
+    let what = running_tool.map_or_else(|| "pensando".to_string(), |t| format!("ejecutando {t}"));
+    Line::from(vec![
+        colored(
+            format!("{} ", SPINNER[app.frame as usize % SPINNER.len()]),
+            Color::Yellow,
+        ),
+        dim(format!("{what}… {secs} s")),
+    ])
+}
+
+fn chat(app: &App, f: &mut Frame, area: Rect) {
+    let view = app.chat.as_ref();
+    let state = view.map_or("", |v| v.state()).to_string();
+    let reason = view
+        .and_then(|v| v.inspect["agent"]["state_reason"].as_str())
+        .map_or_else(|| state_phrase(&state).to_string(), str::to_string);
+    let current = view.and_then(|v| v.model());
+    let mut model = vec![
+        dim("Modelo:  "),
+        Span::raw(current.unwrap_or("").to_string()),
+    ];
+    if current.is_none() && app.chat_model.is_none() {
+        model.push(Span::raw("—"));
+    }
+    match (&app.chat_model, current) {
+        (Some(next), Some(cur)) if next != cur => {
+            model.push(dim("  →  "));
+            model.push(colored(next.clone(), ACCENT).add_modifier(Modifier::BOLD));
+            model.push(dim("  (cambia al enviar)"));
+        }
+        (Some(next), None) => {
+            model.push(colored(next.clone(), ACCENT).add_modifier(Modifier::BOLD));
+            model.push(dim("  (primer mensaje)"));
+        }
+        _ => {}
+    }
+    model.push(dim("   Rama: symphony/chat"));
+    let head = vec![
+        if view.is_some() {
+            Line::from(vec![
+                bold("CHAT  "),
+                colored(state.clone(), state_color(&state)).add_modifier(Modifier::BOLD),
+                dim(format!("  {reason}")),
+            ])
+        } else {
+            Line::from(vec![bold("CHAT  "), dim("todavía no empezó")])
+        },
+        Line::from(model),
+    ];
+    let [top, body, input] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(3),
+        Constraint::Length(4),
+    ])
+    .areas(area);
+    f.render_widget(Paragraph::new(head).block(boxed("Chat")), top);
+
+    let inner_w = usize::from(body.width.saturating_sub(2));
+    let inner_h = usize::from(body.height.saturating_sub(2));
+    let mut lines = view.map_or_else(Vec::new, |v| chat_lines(&v.messages, &v.activity, inner_w));
+    if let Some(v) = view.filter(|v| v.state() == "RUNNING") {
+        lines.push(working_line(app, v));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(dim("Escribe tu primer mensaje para empezar.")));
+        lines.push(Line::from(dim(
+            "Symphony trabaja en la rama symphony/chat de este proyecto y guarda un commit por turno.",
+        )));
+        lines.push(Line::from(dim(
+            "Con Tab eliges el modelo de cada mensaje: cambiar a mitad conserva la conversación.",
+        )));
+    }
+    let max = lines.len().saturating_sub(inner_h);
+    app.chat_max.set(u16::try_from(max).unwrap_or(u16::MAX));
+    let scroll = usize::from(app.chat_scroll).min(max);
+    let offset = max - scroll;
+    let position = if max == 0 {
+        String::new()
+    } else if scroll == 0 {
+        " final ".to_string()
+    } else {
+        format!(
+            " ↑ {scroll} líneas antes del final · {}-{} de {} ",
+            offset + 1,
+            (offset + inner_h).min(lines.len()),
+            lines.len()
+        )
+    };
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(boxed("Conversación").title_bottom(Line::from(dim(position)).right_aligned()))
+            .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0)),
+        body,
+    );
+
+    // Lo escrito se muestra por su cola: las últimas líneas ya ajustadas, así lo que se está
+    // tecleando siempre se ve.
+    let rows = usize::from(input.height.saturating_sub(2)).max(1);
+    let wrapped = wrap(
+        &format!("{}▏", app.chat_input),
+        usize::from(input.width.saturating_sub(2)),
+    );
+    let shown = wrapped[wrapped.len().saturating_sub(rows)..].join(
+        "
+",
+    );
+    let mut title = match &app.chat_model {
+        Some(m) => format!("Mensaje · para {m} (Tab cambia)"),
+        None => "Mensaje".to_string(),
+    };
+    // Prefijo de skill del otro proveedor: no se reconocería; se avisa en vez de fallar callado.
+    if let (Some(prefix), Some(first)) = (app.skill_prefix(), app.chat_input.chars().next()) {
+        let other = if prefix == '/' { '$' } else { '/' };
+        if first == other && !app.chat_input.contains(char::is_whitespace) {
+            title = format!("Con este modelo las skills empiezan con {prefix}");
+        }
+    }
+    f.render_widget(Paragraph::new(shown).block(boxed(&title)), input);
+    skill_popup(app, f, body);
+}
+
+/// Desplegable de skills sobre la conversación, pegado a la caja de mensaje.
+fn skill_popup(app: &App, f: &mut Frame, body: Rect) {
+    let matches = app.skill_matches();
+    if matches.is_empty() {
+        return;
+    }
+    let rows = matches.len().min(8);
+    let sel = app.skill_sel.min(matches.len() - 1);
+    let start = (sel + 1).saturating_sub(rows);
+    let height = u16::try_from(rows + 2).unwrap_or(10).min(body.height);
+    let area = Rect {
+        y: body.y + body.height - height,
+        height,
+        ..body
+    };
+    let prefix = app.skill_prefix().unwrap_or('/');
+    let lines: Vec<Line> = matches[start..start + rows]
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let selected = start + i == sel;
+            let name = format!("{prefix}{}", text(&m["name"]));
+            let row = Line::from(vec![
+                marker(selected),
+                bold(format!("{name:<30} ")),
+                dim(text(&m["description"])),
+            ]);
+            if selected {
+                row.style(Style::default().fg(ACCENT))
+            } else {
+                row
+            }
+        })
+        .collect();
+    let who = if prefix == '/' { "Claude" } else { "Codex" };
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(boxed(&format!(
+            "Skills de {who} ({}) · → completa · ↑↓ elige · Esc cierra",
+            matches.len()
+        ))),
+        area,
+    );
 }
 
 // --- 04 Home ----------------------------------------------------------------
@@ -707,38 +1013,8 @@ fn from_bottom(total: usize, height: u16, scroll: u16) -> u16 {
 
 fn conversation(app: &App, f: &mut Frame, area: Rect) {
     let Some(a) = &app.agent else { return };
-    let mut lines = Vec::new();
-    for m in &a.messages {
-        let content = m["content"].as_str().unwrap_or("");
-        match m["role"].as_str().unwrap_or("") {
-            // FLOW §13.4: separador visible del cambio de executor.
-            "EXECUTOR_CHANGE" => {
-                for l in content.lines() {
-                    lines.push(Line::from(colored(l.to_string(), Color::Magenta)));
-                }
-            }
-            role => {
-                let (who, color) = match role {
-                    "USER" => ("tú", ACCENT),
-                    "ASSISTANT" => ("agente", Color::Green),
-                    _ => ("sistema", Color::DarkGray),
-                };
-                let mut first = true;
-                for l in content.lines() {
-                    let prefix = if first {
-                        format!("{who:>7} │ ")
-                    } else {
-                        "        │ ".into()
-                    };
-                    first = false;
-                    lines.push(Line::from(vec![
-                        colored(prefix, color),
-                        Span::raw(l.to_string()),
-                    ]));
-                }
-            }
-        }
-    }
+    // Con ajuste de línea: un texto largo del agente no se corta en el borde.
+    let mut lines = chat_lines(&a.messages, &[], usize::from(area.width.saturating_sub(2)));
     if lines.is_empty() {
         lines.push(Line::from(dim("Sin mensajes todavía.")));
     }
@@ -753,6 +1029,9 @@ fn conversation(app: &App, f: &mut Frame, area: Rect) {
     } else {
         area
     };
+    let inner = usize::from(area.height.saturating_sub(2));
+    a.scroll_max
+        .set(u16::try_from(lines.len().saturating_sub(inner)).unwrap_or(u16::MAX));
     let offset = from_bottom(lines.len(), area.height, a.scroll);
     f.render_widget(
         Paragraph::new(lines)
@@ -923,4 +1202,71 @@ fn recovery(app: &App, f: &mut Frame, area: Rect) {
         )));
     }
     paragraph(f, area, "Recovery Center", lines);
+}
+
+// --- selección con el ratón -------------------------------------------------
+
+/// Tramos `(fila, desde, hasta)` de la selección, ambos extremos incluidos y dentro del buffer.
+fn selection_rows(area: Rect, sel: &Selection) -> Vec<(u16, u16, u16)> {
+    let ((x0, y0), (x1, y1)) = sel.ordered();
+    let (left, right) = (area.left(), area.right().saturating_sub(1));
+    let last_row = area.bottom().saturating_sub(1);
+    (y0..=y1.min(last_row))
+        .map(|y| {
+            let from = if y == y0 { x0.max(left) } else { left };
+            let to = if y == y1 { x1.min(right) } else { right };
+            (y, from, to)
+        })
+        .filter(|(_, from, to)| from <= to)
+        .collect()
+}
+
+/// Resalta (video inverso) lo seleccionado.
+pub fn highlight(buf: &mut Buffer, sel: &Selection) {
+    for (y, from, to) in selection_rows(buf.area, sel) {
+        buf.set_style(
+            Rect::new(from, y, to - from + 1, 1),
+            Style::default().add_modifier(Modifier::REVERSED),
+        );
+    }
+}
+
+/// Una fila de pantalla sin el marco ni la etiqueta del hablante (`  tú │ `); `None` si es
+/// una línea de marco.
+fn clean_row(row: &str) -> Option<String> {
+    let t = row.trim_end();
+    if t.trim_start().starts_with(['┌', '└']) {
+        return None;
+    }
+    let mut t = t.trim_end_matches('│').trim_end();
+    if t.trim_start().starts_with('│') {
+        t = &t[t.find('│').map_or(0, |i| i + '│'.len_utf8())..];
+    }
+    if let Some(pos) = t.find('│') {
+        let label = &t[..pos];
+        if label.chars().count() <= 9 && label.chars().all(|c| c.is_alphabetic() || c == ' ') {
+            t = &t[pos + '│'.len_utf8()..];
+            t = t.strip_prefix(' ').unwrap_or(t);
+        }
+    }
+    Some(t.trim_end().to_string())
+}
+
+/// El texto que se ve en la selección, tal como está en pantalla.
+// ponytail: lo que se lee es lo dibujado: los saltos de línea del ajuste al ancho quedan como
+// saltos de línea; para el texto original está `Ctrl+Y` (última respuesta) o exportar a `.md`.
+pub fn selected_text(buf: &Buffer, sel: &Selection) -> String {
+    let rows: Vec<String> = selection_rows(buf.area, sel)
+        .into_iter()
+        .filter_map(|(y, from, to)| {
+            let row: String = (from..=to).map(|x| buf[(x, y)].symbol()).collect();
+            clean_row(&row)
+        })
+        .collect();
+    rows.join(
+        "
+",
+    )
+    .trim()
+    .to_string()
 }

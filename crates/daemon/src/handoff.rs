@@ -1,14 +1,16 @@
 //! Junta los datos del handoff (P06.S4): último checkpoint válido + git vivo del
 //! worktree (ADR-0004, H2: git manda) y los pasa al assembler de `symphony-context`.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 
 use serde_json::Value;
-use symphony_context::handoff::{self, HandoffInput, LastCommand, NewFile};
+use symphony_context::handoff::{self, ChatMessage, HandoffInput, LastCommand, NewFile, Speaker};
 use symphony_core::{AgentId, CheckpointId, ContextMode, redact};
 use symphony_git::{FileStatus, Repo};
+use symphony_object_store::ObjectStore;
 use symphony_store::repo;
 
 /// Archivos nuevos más grandes que esto se nombran pero no se incluyen.
@@ -77,14 +79,83 @@ fn live_git(worktree: &Path, base: &str) -> Result<LiveGit, symphony_git::GitErr
     })
 }
 
+/// Texto de un mensaje: en línea o, si era largo, en el object store.
+pub(crate) fn message_text(
+    conn: &rusqlite::Connection,
+    objects: &ObjectStore,
+    m: &repo::MessageRecord,
+) -> String {
+    if let Some(c) = &m.content {
+        return c.clone();
+    }
+    let Some(object) = m.content_object_id else {
+        return String::new();
+    };
+    conn.query_row(
+        "SELECT blob_hash FROM context_objects WHERE id = ?1",
+        [object.to_string()],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|hash| objects.get(&hash).ok())
+    .map_or_else(
+        || "(objeto no disponible)".into(),
+        |b| String::from_utf8_lossy(&b).into_owned(),
+    )
+}
+
+/// Lo dicho hasta ahora: mensajes del usuario y del asistente, en orden. No entran las
+/// herramientas, los separadores de cambio de executor ni los prompts de handoff (el
+/// primer mensaje de un run que arrancó desde un checkpoint), que ya contienen esta misma
+/// conversación. Los fragmentos seguidos del asistente se juntan en un mensaje.
+fn conversation(
+    conn: &rusqlite::Connection,
+    objects: &ObjectStore,
+    agent: AgentId,
+) -> Result<Vec<ChatMessage>, String> {
+    let handoff_runs: HashSet<_> = repo::handoff_run_ids(conn, agent)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+    let mut seen_first_user = HashSet::new();
+    let mut out: Vec<ChatMessage> = Vec::new();
+    for m in repo::agent_messages(conn, agent, None).map_err(|e| e.to_string())? {
+        let speaker = match m.role.as_str() {
+            "USER" => Speaker::User,
+            "ASSISTANT" => Speaker::Assistant,
+            _ => continue,
+        };
+        if speaker == Speaker::User
+            && let Some(run) = m.run_id
+            && handoff_runs.contains(&run)
+            && seen_first_user.insert(run)
+        {
+            continue;
+        }
+        let text = redact(&message_text(conn, objects, &m)).into_owned();
+        if text.trim().is_empty() {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if speaker == Speaker::Assistant && last.speaker == Speaker::Assistant => {
+                last.text.push_str("\n\n");
+                last.text.push_str(&text);
+            }
+            _ => out.push(ChatMessage { speaker, text }),
+        }
+    }
+    Ok(out)
+}
+
 /// Arma el handoff del agente. `reason`: por qué entra un executor nuevo, en una frase.
 pub async fn prepare(
     reader: &Mutex<rusqlite::Connection>,
+    objects: &ObjectStore,
     agent: AgentId,
     reason: &str,
 ) -> Result<PreparedHandoff, String> {
     let started = Instant::now();
-    let (a, wt, checkpoint, history) = {
+    let (a, wt, checkpoint, conversation) = {
         let conn = reader
             .lock()
             .map_err(|_| "lector de la base no disponible")?;
@@ -94,8 +165,8 @@ pub async fn prepare(
         let checkpoint = repo::latest_checkpoint(&conn, agent)
             .map_err(|e| e.to_string())?
             .ok_or("el agente no tiene un checkpoint válido")?;
-        let history = repo::conversation_chars(&conn, agent).map_err(|e| e.to_string())?;
-        (a, wt, checkpoint, history)
+        let conversation = conversation(&conn, objects, agent)?;
+        (a, wt, checkpoint, conversation)
     };
     let (path, base) = (wt.path.clone(), wt.base_ref.clone());
     let git = tokio::task::spawn_blocking(move || live_git(Path::new(&path), &base))
@@ -142,9 +213,10 @@ pub async fn prepare(
         // ponytail: el diff vivo no se guarda aparte; si se recorta, se apunta al del checkpoint.
         diff_uri: checkpoint.diff_uri,
         new_files: git.new_files,
+        conversation,
     };
     let built = handoff::assemble(&input, a.context_mode);
-    let raw = handoff::assemble(&input, ContextMode::Raw).tokens_sent + (history + 3) / 4;
+    let raw = handoff::assemble(&input, ContextMode::Raw).tokens_sent;
     Ok(PreparedHandoff {
         prompt: built.prompt,
         checkpoint_id: Some(checkpoint.id),

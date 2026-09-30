@@ -6,14 +6,18 @@ pub mod app;
 pub mod io;
 pub mod ui;
 
+use std::collections::VecDeque;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use symphony_protocol::Connection;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
-use app::{App, Msg};
+use app::{App, Msg, SelectPhase};
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -22,26 +26,137 @@ fn now_ms() -> i64 {
 }
 
 /// Lee el teclado en un hilo propio (crossterm bloquea) hasta que la TUI se cierre.
+/// Cuánto se espera tras un Enter para ver si lo que sigue es un pegado.
+const PASTE_WINDOW: Duration = Duration::from_millis(15);
+
+/// ¿Este Enter forma parte de un pegado? La consola de Windows no manda pegado entre corchetes:
+/// las líneas llegan como Enter seguidos de más teclas, y una persona no teclea tan rápido.
+/// `next(espera)` da el siguiente evento si llega a tiempo. El «soltar» del propio Enter no
+/// cuenta (Windows lo manda siempre) y lo que no es tecla (ratón, foco) tampoco delata un pegado;
+/// lo que se leyó de más pasa a `later` para procesarse después.
+fn enter_is_pasted(
+    mut next: impl FnMut(Duration) -> Option<Event>,
+    later: &mut VecDeque<Event>,
+) -> bool {
+    while let Some(e) = next(PASTE_WINDOW) {
+        match e {
+            Event::Key(k) if k.kind == KeyEventKind::Release => {}
+            Event::Key(_) => {
+                later.push_back(e);
+                return true;
+            }
+            other => later.push_back(other),
+        }
+    }
+    false
+}
+
 fn spawn_input(tx: mpsc::Sender<Msg>) {
     std::thread::spawn(move || {
+        let mut later: VecDeque<Event> = VecDeque::new();
         while !tx.is_closed() {
-            match event::poll(Duration::from_millis(200)) {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(_) => return,
-            }
-            let msg = match event::read() {
+            let ev = match later.pop_front() {
+                Some(e) => e,
+                None => {
+                    match event::poll(Duration::from_millis(200)) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(_) => return,
+                    }
+                    match event::read() {
+                        Ok(e) => e,
+                        Err(_) => return,
+                    }
+                }
+            };
+            let msg = match ev {
                 // Windows también manda Release: solo cuenta la pulsación.
-                Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => Msg::Key(k),
-                Ok(Event::Resize(..)) => Msg::Resize,
-                Ok(_) => continue,
-                Err(_) => return,
+                Event::Key(k) if k.kind != KeyEventKind::Release => {
+                    let pasted = k.code == KeyCode::Enter
+                        && enter_is_pasted(
+                            |wait| {
+                                event::poll(wait)
+                                    .ok()
+                                    .filter(|ready| *ready)
+                                    .and_then(|_| event::read().ok())
+                            },
+                            &mut later,
+                        );
+                    if pasted {
+                        Msg::Key(KeyEvent::new(KeyCode::Char(NEWLINE), KeyModifiers::NONE))
+                    } else {
+                        Msg::Key(k)
+                    }
+                }
+                Event::Resize(..) => Msg::Resize,
+                Event::Paste(text) => Msg::Paste(text),
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollUp => Msg::Scroll(3),
+                    MouseEventKind::ScrollDown => Msg::Scroll(-3),
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        Msg::Select(SelectPhase::Start, m.column, m.row)
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        Msg::Select(SelectPhase::Move, m.column, m.row)
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        Msg::Select(SelectPhase::End, m.column, m.row)
+                    }
+                    _ => continue,
+                },
+                _ => continue,
             };
             if tx.blocking_send(msg).is_err() {
                 return;
             }
         }
     });
+}
+
+/// Tecla sintética de un salto de línea pegado (ver `spawn_input`).
+pub const NEWLINE: char = '\n';
+
+/// Copia al portapapeles lo que `app.copy` tenga pendiente y lo avisa.
+fn copy_pending(app: &mut App) {
+    if let Some(text) = app.copy.take() {
+        if text.trim().is_empty() {
+            return;
+        }
+        match copy_to_clipboard(&text) {
+            Ok(()) => app.info(format!("Copiado ({} caracteres).", text.chars().count())),
+            Err(e) => app.error(format!("No se pudo copiar: {e}")),
+        }
+    }
+}
+
+/// Copia `text` al portapapeles con la herramienta del sistema (sin dependencias nuevas).
+fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let (mut cmd, bytes): (Command, Vec<u8>) = if cfg!(windows) {
+        // `clip` deja un BOM al inicio del texto; PowerShell con stdin en UTF-8 lo copia limpio.
+        let mut c = Command::new("powershell");
+        c.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::InputEncoding = [Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+        ]);
+        (c, text.as_bytes().to_vec())
+    } else if cfg!(target_os = "macos") {
+        (Command::new("pbcopy"), text.as_bytes().to_vec())
+    } else {
+        let mut c = Command::new("xclip");
+        c.args(["-selection", "clipboard"]);
+        (c, text.as_bytes().to_vec())
+    };
+    let mut child = cmd.stdin(Stdio::piped()).spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(&bytes)?;
+    }
+    // No se espera: PowerShell tarda ~0,5 s en arrancar y la TUI no debe congelarse.
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 /// Corre la TUI en la terminal hasta que el usuario salga.
@@ -72,7 +187,11 @@ where
     let mut app = App::new(cwd);
     app.now_ms = now_ms();
     let mut terminal = ratatui::init();
+    // Para la rueda; con la captura activa, seleccionar texto pide Shift.
+    let _ =
+        ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let result = async {
+        let mut mouse_on = true;
         let mut pending = app.start();
         loop {
             for call in pending.drain(..) {
@@ -83,8 +202,47 @@ where
             if app.quit {
                 return Ok(());
             }
-            terminal.draw(|f| ui::render(&app, f))?;
-            let Some(msg) = rx.recv().await else {
+            copy_pending(&mut app);
+            if app.mouse != mouse_on {
+                mouse_on = app.mouse;
+                let _ = if mouse_on {
+                    ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture)
+                } else {
+                    ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture)
+                };
+            }
+            // La selección se resalta y se lee del propio fotograma dibujado (lo que se ve es lo
+            // que se copia); al soltar el botón se copia una sola vez.
+            let mut picked = None;
+            terminal.draw(|f| {
+                ui::render(&app, f);
+                if let Some(sel) = &app.selection {
+                    ui::highlight(f.buffer_mut(), sel);
+                    if sel.done && !sel.copied {
+                        picked = Some(ui::selected_text(f.buffer_mut(), sel));
+                    }
+                }
+            })?;
+            if let Some(text) = picked {
+                if let Some(sel) = app.selection.as_mut() {
+                    sel.copied = true;
+                }
+                app.copy = Some(text);
+                copy_pending(&mut app);
+            }
+            // Mientras el agente trabaja se redibuja ~7 veces por segundo (el indicador gira).
+            let received = if app.animating() {
+                match tokio::time::timeout(Duration::from_millis(150), rx.recv()).await {
+                    Ok(m) => m,
+                    Err(_) => {
+                        app.frame = app.frame.wrapping_add(1);
+                        continue;
+                    }
+                }
+            } else {
+                rx.recv().await
+            };
+            let Some(msg) = received else {
                 return Ok(());
             };
             pending = app.update(msg);
@@ -95,6 +253,62 @@ where
         }
     }
     .await;
+    let _ = ratatui::crossterm::execute!(
+        std::io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste
+    );
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::crossterm::event::{KeyEventState, MouseEvent};
+
+    fn key(code: KeyCode, kind: KeyEventKind) -> Event {
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    fn pasted(events: Vec<Event>) -> (bool, usize) {
+        let mut it = events.into_iter();
+        let mut later = VecDeque::new();
+        let r = enter_is_pasted(|_| it.next(), &mut later);
+        (r, later.len())
+    }
+
+    #[test]
+    fn a_lone_enter_is_not_a_paste_even_with_its_own_release() {
+        assert_eq!(pasted(vec![]), (false, 0));
+        // Windows manda el «soltar» tras cada tecla: no delata un pegado.
+        assert_eq!(
+            pasted(vec![key(KeyCode::Enter, KeyEventKind::Release)]),
+            (false, 0)
+        );
+    }
+
+    #[test]
+    fn enter_followed_by_more_keys_is_a_paste() {
+        let next = key(KeyCode::Char('a'), KeyEventKind::Press);
+        assert_eq!(pasted(vec![next.clone()]), (true, 1));
+        let release = key(KeyCode::Enter, KeyEventKind::Release);
+        assert_eq!(pasted(vec![release, next]), (true, 1));
+    }
+
+    #[test]
+    fn mouse_events_after_enter_do_not_make_it_a_paste_but_are_kept() {
+        let moved = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(pasted(vec![moved]), (false, 1));
+    }
 }

@@ -119,7 +119,15 @@ fn home_app() -> App {
     ok(&mut app, Req::Agents, agents());
     ok(&mut app, Req::Recovery, json!({ "items": [] }));
     ok(&mut app, Req::Providers, providers());
+    // El inicio es el Chat (P07.5.S7); Esc lleva a agentes y tareas.
+    assert_eq!(app.screen, Screen::Chat);
+    press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen, Screen::Home);
+    ok(&mut app, Req::Agents, agents());
+    ok(&mut app, Req::Providers, providers());
+    ok(&mut app, Req::Recovery, json!({ "items": [] }));
+    ok(&mut app, Req::SkillsAnthropic, json!({ "skills": [] }));
+    ok(&mut app, Req::SkillsOpenai, json!({ "skills": [] }));
     app
 }
 
@@ -231,7 +239,7 @@ fn view_03_provider_setup() {
     insta::assert_snapshot!(draw(&app));
     // Se puede seguir con un solo proveedor.
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.screen, Screen::Home);
+    assert_eq!(app.screen, Screen::Chat);
 }
 
 #[test]
@@ -365,9 +373,12 @@ fn open_without_setup_goes_home_without_listing_other_projects() {
     app.start();
     ok(&mut app, Req::ProjectStatus, status(false, 0));
     let calls = press(&mut app, KeyCode::Char('o'));
-    assert_eq!(app.screen, Screen::Home);
+    assert_eq!(app.screen, Screen::Chat);
     // Sin proyecto en la base, `agent.list` traería agentes de otros proyectos.
-    assert_eq!(methods(&calls), ["providers.list", "recovery.list"]);
+    assert_eq!(
+        methods(&calls),
+        ["chat.get", "models.list", "skills.list", "skills.list"]
+    );
 }
 
 #[test]
@@ -581,4 +592,336 @@ fn open_in_the_cli_reports_the_terminal_or_the_command() {
         "{:?}",
         app.notice
     );
+}
+
+/// Chat de un proyecto configurado, recién abierto (sin conversación).
+fn chat_app() -> App {
+    let mut app = App::new("/work/arete-mobile");
+    app.now_ms = NOW;
+    app.start();
+    ok(&mut app, Req::Providers, providers());
+    ok(&mut app, Req::ProjectStatus, status(true, 0));
+    ok(&mut app, Req::Models, models());
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": null }));
+    app
+}
+
+#[test]
+fn view_00_chat_empty() {
+    insta::assert_snapshot!(draw(&chat_app()));
+}
+
+#[test]
+fn chat_first_message_creates_the_chat_then_sends_and_switches() {
+    let mut app = chat_app();
+    for c in "hola".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["agent.create"]);
+    assert!(app.chat_input.is_empty());
+    ok(&mut app, Req::ChatCreate, json!({ "agent_id": "01CHAT" }));
+    assert!(app.chat.is_some());
+    ok(&mut app, Req::Inspect, inspect());
+
+    // Mismo modelo → agent.send; otro modelo (Tab) → agent.switch con el mensaje.
+    let cur = app.chat.as_ref().unwrap().model().unwrap().to_string();
+    app.chat_model = Some(cur);
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(methods(&press(&mut app, KeyCode::Enter)), ["agent.send"]);
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Char('y'));
+    assert_eq!(methods(&press(&mut app, KeyCode::Enter)), ["agent.switch"]);
+}
+
+#[test]
+fn chat_scroll_never_goes_below_the_end() {
+    let mut app = chat_app();
+    app.update(Msg::Scroll(-3));
+    assert_eq!(app.chat_scroll, 0);
+    app.update(Msg::Scroll(3));
+    assert_eq!(app.chat_scroll, 3);
+}
+
+#[test]
+fn reopening_the_chat_keeps_its_model_so_a_plain_message_does_not_switch() {
+    // `models.list` llega antes que el `inspect` del chat existente.
+    let mut app = chat_app();
+    assert_eq!(app.chat_model.as_deref(), Some("claude/opus"));
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    assert_eq!(app.chat_model, None);
+    ok(&mut app, Req::Inspect, inspect());
+    assert_eq!(app.chat_model.as_deref(), Some("codex/gpt-5"));
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(methods(&press(&mut app, KeyCode::Enter)), ["agent.send"]);
+}
+
+#[test]
+fn chat_scroll_stops_at_the_top_the_render_reports() {
+    let mut app = chat_app();
+    app.chat_max.set(5);
+    for _ in 0..3 {
+        press(&mut app, KeyCode::PageUp);
+    }
+    assert_eq!(app.chat_scroll, 5);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.chat_scroll, 4);
+}
+
+#[test]
+fn chat_long_input_keeps_the_tail_visible() {
+    let mut app = chat_app();
+    app.chat_input = format!("{}FINAL", "palabra ".repeat(40));
+    assert!(draw(&app).contains("FINAL▏"));
+}
+
+#[test]
+fn agent_conversation_wraps_long_messages_instead_of_cutting_them() {
+    let mut app = agent_app(Tab::Conversation);
+    let long = format!("{}FIN-DEL-TEXTO", "palabra ".repeat(40));
+    app.agent.as_mut().unwrap().messages = serde_json::from_value(json!([
+        { "role": "ASSISTANT", "content": long },
+    ]))
+    .unwrap();
+    assert!(draw(&app).contains("FIN-DEL-TEXTO"));
+}
+
+#[test]
+fn chat_shows_the_agent_process_live_in_time_order() {
+    let mut app = chat_app();
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    let chat = app.chat.as_mut().unwrap();
+    chat.inspect = json!({ "agent": { "state": "RUNNING" } });
+    chat.messages = serde_json::from_value(json!([
+        { "role": "USER", "content": "corre los tests", "at": NOW - 6_000 },
+        { "role": "ASSISTANT", "content": "Voy a correr el chequeo.", "at": NOW - 5_000 },
+    ]))
+    .unwrap();
+    // `agent.activity` trae lo más nuevo primero.
+    chat.activity = serde_json::from_value(json!([
+        { "kind": "tool", "tool": "Bash", "command": "cargo test", "status": "RUNNING", "at": NOW - 2_000 },
+        { "kind": "tool", "tool": "Read", "command": "STATUS.md", "status": "DONE", "at": NOW - 4_000 },
+        { "kind": "checkpoint", "seq": 1, "at": NOW - 3_000 },
+    ]))
+    .unwrap();
+    assert!(app.animating());
+    let screen = draw(&app);
+    let at = |s: &str| screen.find(s).unwrap_or_else(|| panic!("falta `{s}`"));
+    assert!(
+        at("corre los tests") < at("Voy a correr") && at("Voy a correr") < at("Read STATUS.md")
+    );
+    assert!(at("Read STATUS.md") < at("Bash cargo test"));
+    assert!(!screen.contains("checkpoint"));
+    assert!(screen.contains("ejecutando Bash… 2 s"));
+}
+
+#[test]
+fn chat_at_rest_does_not_animate() {
+    let mut app = chat_app();
+    assert!(!app.animating());
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    app.chat.as_mut().unwrap().inspect = json!({ "agent": { "state": "READY" } });
+    assert!(!app.animating());
+}
+
+#[test]
+fn pasting_multiple_lines_fills_the_input_without_sending() {
+    let mut app = chat_app();
+    let calls = app.update(Msg::Paste("uno\r\ndos\ntres".into()));
+    assert!(calls.is_empty());
+    assert_eq!(app.chat_input, "uno\ndos\ntres");
+}
+
+fn ctrl(app: &mut App, c: char) -> Vec<Call> {
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char(c),
+        KeyModifiers::CONTROL,
+    )))
+}
+
+#[test]
+fn ctrl_y_copies_the_last_agent_reply_and_says_so_when_there_is_none() {
+    let mut app = chat_app();
+    ctrl(&mut app, 'y');
+    assert!(app.copy.is_none());
+    assert!(matches!(app.notice, Some(Notice::Error(_))));
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    app.chat.as_mut().unwrap().messages = serde_json::from_value(json!([
+        { "role": "ASSISTANT", "content": "primera" },
+        { "role": "USER", "content": "y luego" },
+        { "role": "ASSISTANT", "content": "la ultima" },
+    ]))
+    .unwrap();
+    ctrl(&mut app, 'y');
+    assert_eq!(app.copy.as_deref(), Some("la ultima"));
+}
+
+#[test]
+fn f2_toggles_the_mouse_capture_for_selecting_text() {
+    let mut app = chat_app();
+    assert!(app.mouse);
+    press(&mut app, KeyCode::F(2));
+    assert!(!app.mouse);
+    press(&mut app, KeyCode::F(2));
+    assert!(app.mouse);
+}
+
+#[test]
+fn a_pasted_newline_is_text_in_the_chat_and_enter_elsewhere() {
+    let mut app = chat_app();
+    for c in ['a', symphony_tui::NEWLINE, 'b'] {
+        press(&mut app, KeyCode::Char(c));
+    }
+    assert_eq!(app.chat_input, "a\nb");
+    // Fuera del chat no hay texto multilínea: cuenta como Enter (aquí, entrar a agentes vacío).
+    let mut home = home_app();
+    let calls = press(&mut home, KeyCode::Char(symphony_tui::NEWLINE));
+    assert_eq!(calls, press(&mut home_app(), KeyCode::Enter));
+}
+
+#[test]
+fn agent_conversation_scrolls_back_with_up_and_the_wheel_within_its_limits() {
+    let mut app = agent_app(Tab::Conversation);
+    let long: Vec<Value> = (0..40)
+        .map(|i| json!({ "role": "ASSISTANT", "content": format!("mensaje {i}") }))
+        .collect();
+    app.agent.as_mut().unwrap().messages = long;
+    let top_after = |app: &App| draw(app);
+    assert!(top_after(&app).contains("mensaje 39"));
+    // Up va hacia lo más viejo; la rueda hacia atrás también; ↓ vuelve a lo nuevo.
+    press(&mut app, KeyCode::PageUp);
+    assert!(!top_after(&app).contains("mensaje 39"));
+    app.update(Msg::Scroll(3));
+    let up = app.agent.as_ref().unwrap().scroll;
+    assert!(up >= 13);
+    // Con el tope que fijó el render, pasarse no acumula pulsaciones muertas.
+    for _ in 0..50 {
+        press(&mut app, KeyCode::PageUp);
+    }
+    let max = app.agent.as_ref().unwrap().scroll_max.get();
+    assert_eq!(app.agent.as_ref().unwrap().scroll, max);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.agent.as_ref().unwrap().scroll, max - 1);
+    for _ in 0..200 {
+        press(&mut app, KeyCode::Down);
+    }
+    assert!(draw(&app).contains("mensaje 39"));
+}
+
+#[test]
+fn export_is_ctrl_e_in_the_chat_and_e_in_the_agent_view() {
+    let mut app = chat_app();
+    // Sin chat todavía no hay nada que exportar.
+    assert!(ctrl(&mut app, 'e').is_empty());
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    assert_eq!(methods(&ctrl(&mut app, 'e')), ["agent.export"]);
+    ok(
+        &mut app,
+        Req::Export,
+        json!({ "path": "/p/.symphony/exports/chat-1.md" }),
+    );
+    assert!(matches!(&app.notice, Some(Notice::Info(t)) if t.contains("chat-1.md")));
+
+    let mut app = agent_app(Tab::Conversation);
+    assert_eq!(
+        methods(&press(&mut app, KeyCode::Char('e'))),
+        ["agent.export"]
+    );
+}
+
+/// Chat con catálogo de skills de Claude y de Codex ya cargado.
+fn skills_app() -> App {
+    let mut app = chat_app();
+    app.skills.insert(
+        "anthropic".into(),
+        serde_json::from_value(json!([
+            { "name": "deslop", "description": "Limpia código", "source": "usuario" },
+            { "name": "flintstone", "description": "Respuestas breves", "source": "usuario" },
+            { "name": "ponytail:review", "description": "Revisa sobre-ingeniería", "source": "plugin" },
+        ]))
+        .unwrap(),
+    );
+    app.skills.insert(
+        "openai".into(),
+        serde_json::from_value(
+            json!([{ "name": "deslop", "description": "Limpia", "source": "usuario" }]),
+        )
+        .unwrap(),
+    );
+    app.chat_model = Some("claude/sonnet".into());
+    app
+}
+
+fn type_text(app: &mut App, text: &str) {
+    for c in text.chars() {
+        press(app, KeyCode::Char(c));
+    }
+}
+
+fn names(app: &App) -> Vec<String> {
+    app.skill_matches()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn slash_opens_the_claude_catalog_and_filters_while_typing() {
+    let mut app = skills_app();
+    type_text(&mut app, "hola");
+    assert!(names(&app).is_empty());
+    let mut app = skills_app();
+    type_text(&mut app, "/");
+    assert_eq!(names(&app), ["deslop", "flintstone", "ponytail:review"]);
+    assert!(draw(&app).contains("/flintstone"));
+    type_text(&mut app, "fl");
+    assert_eq!(names(&app), ["flintstone"]);
+    // Coincidencias por el inicio primero, luego las que lo contienen.
+    let mut app = skills_app();
+    type_text(&mut app, "/re");
+    assert_eq!(names(&app), ["ponytail:review"]);
+    // Un espacio significa que ya se eligió: se cierra.
+    type_text(&mut app, "view x");
+    assert!(names(&app).is_empty());
+}
+
+#[test]
+fn right_arrow_completes_the_selected_skill_and_up_down_choose() {
+    let mut app = skills_app();
+    type_text(&mut app, "/");
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.chat_input, "/deslop ");
+    let mut app = skills_app();
+    type_text(&mut app, "/");
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down); // tope
+    press(&mut app, KeyCode::Up);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.chat_input, "/flintstone ");
+}
+
+#[test]
+fn esc_closes_the_catalog_without_leaving_the_chat_and_typing_reopens_it() {
+    let mut app = skills_app();
+    type_text(&mut app, "/f");
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::Chat);
+    assert!(names(&app).is_empty());
+    type_text(&mut app, "l");
+    assert_eq!(names(&app), ["flintstone"]);
+}
+
+#[test]
+fn codex_uses_dollar_and_the_other_prefix_gets_a_hint() {
+    let mut app = skills_app();
+    app.chat_model = Some("codex/gpt-5".into());
+    type_text(&mut app, "$");
+    assert_eq!(names(&app), ["deslop"]);
+    assert!(draw(&app).contains("$deslop"));
+    let mut app = skills_app();
+    app.chat_model = Some("codex/gpt-5".into());
+    type_text(&mut app, "/");
+    assert!(names(&app).is_empty());
+    assert!(draw(&app).contains("las skills empiezan con $"));
 }

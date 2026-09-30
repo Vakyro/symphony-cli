@@ -93,6 +93,9 @@ pub enum MergePreflight {
 }
 
 /// Nombre de rama de un agente (IDEA §5.9): `symphony/<sesión>/agent-003`.
+/// Rama fija del chat general: una por proyecto, basada en la rama principal (ADR-0006).
+pub const CHAT_BRANCH: &str = "symphony/chat";
+
 pub fn agent_branch(session: &str, agent_number: u32) -> String {
     format!("symphony/{session}/agent-{agent_number:03}")
 }
@@ -194,6 +197,16 @@ impl Repo {
 
     pub fn head_commit(&self) -> Result<String, GitError> {
         self.text(["rev-parse", "HEAD"])
+    }
+
+    /// `git add -A` y commit con `message`. `None` si no había nada que guardar.
+    pub fn commit_all(&self, message: &str) -> Result<Option<String>, GitError> {
+        self.run(["add", "-A"])?;
+        if self.text(["status", "--porcelain"])?.is_empty() {
+            return Ok(None);
+        }
+        self.run(["commit", "-q", "-m", message])?;
+        self.head_commit().map(Some)
     }
 
     /// Rama actual, o `None` en detached HEAD.

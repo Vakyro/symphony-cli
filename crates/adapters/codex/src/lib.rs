@@ -244,6 +244,10 @@ impl ProviderAdapter for CodexAdapter {
                 .filter(|t| !t.trim().is_empty())
                 .map(|text| vec![AgentEvent::AssistantText { text }])
                 .unwrap_or_default(),
+            Some("turn.completed") => v["usage"]["input_tokens"]
+                .as_u64()
+                .map(|context_tokens| vec![AgentEvent::TurnUsage { context_tokens }])
+                .unwrap_or_default(),
             // `item.completed` de tipo error: avisos (p. ej. el de bypass-hook-trust), no fallas.
             Some("error") | Some("turn.failed") => {
                 let msg = s(&v, "message")

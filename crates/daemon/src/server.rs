@@ -176,6 +176,13 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         hook_cmd,
     );
 
+    match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
+        Ok(config) => runtime.set_chat_switch_tokens(config.chat.switch_at_tokens),
+        Err(e) => {
+            tracing::warn!(error = %e, "config.toml no se pudo leer; el chat no cambia por umbral")
+        }
+    }
+
     let state = Arc::new(State {
         started: Instant::now(),
         home: home.to_path_buf(),
@@ -328,6 +335,8 @@ async fn dispatch(req: Request, state: &State) -> Response {
         },
         "agent.create" | "agent.spawn" => agent_create(req, state).await,
         "agent.list" | "agents.list" => agent_list(req, state),
+        "chat.get" => chat_get(req, state),
+        "skills.list" => skills_list(&req),
         "agent.inspect" => agent_inspect(req, state).await,
         "agent.send" => agent_send(req, state).await,
         "agent.pause" => agent_pause(req, state).await,
@@ -337,6 +346,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.switch" => agent_switch(req, state).await,
         "agent.diff" => agent_diff(req, state).await,
         "agent.logs" => agent_logs(req, state).await,
+        "agent.export" => agent_export(req, state).await,
         "agent.attach" => agent_attach(req, state).await,
         "agent.activity" => agent_view(req, state, |c, a| {
             crate::views::activity(c, a, 200).map(|v| json!({ "items": v }))
@@ -399,6 +409,7 @@ async fn agent_create(req: Request, state: &State) -> Response {
         failover,
         context_mode,
         priority,
+        chat: p.get("chat").and_then(Value::as_bool).unwrap_or(false),
     };
 
     // En su propia tarea: si el request vence (REQUEST_TIMEOUT), la creación
@@ -426,6 +437,43 @@ async fn agent_create(req: Request, state: &State) -> Response {
         ),
         Err(e) => Response::error(req.id, e.code(), e.to_string()),
     }
+}
+
+/// El agente del chat del proyecto, si ya existe (P07.5.S7). No crea nada: abrir Symphony
+/// no debe dejar worktrees; el chat nace con el primer mensaje (`agent.create` con `chat`).
+fn chat_get(req: Request, state: &State) -> Response {
+    // `project_root` ya es la raíz del repo (la devuelve `project.status`).
+    let root = project_root_param(&req.params).display().to_string();
+    read_view(req, state, |c| {
+        let agent = repo::project_by_root(c, &root)
+            .ok()
+            .flatten()
+            .and_then(|p| repo::chat_agent(c, p.id).ok().flatten());
+        Ok(json!({ "agent_id": agent.map(|a| a.id.to_string()) }))
+    })
+}
+
+/// Catálogo de skills y comandos de un proveedor (`anthropic` u `openai`) para el autocompletado
+/// del chat. Lee del disco: no crea sesiones ni gasta cuota.
+fn skills_list(req: &Request) -> Response {
+    let provider = req
+        .params
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let root = project_root_param(&req.params);
+    let Some(home) = std::env::home_dir() else {
+        return Response::error(
+            req.id.clone(),
+            "no_home",
+            "no se encontró la carpeta del usuario",
+        );
+    };
+    let skills: Vec<Value> = crate::skills::catalog(provider, &home, Some(&root))
+        .iter()
+        .map(crate::skills::Skill::to_json)
+        .collect();
+    Response::ok(req.id.clone(), json!({ "skills": skills }))
 }
 
 fn agent_list(req: Request, state: &State) -> Response {
@@ -527,8 +575,23 @@ async fn agent_send(req: Request, state: &State) -> Response {
         Some(t) => t,
         None => return Response::error(req.id, "invalid_params", "falta `text` o `message`"),
     };
-    match state.runtime.send_message(agent_id, text).await {
-        Ok(()) => Response::ok(req.id, json!({ "ok": true })),
+    // Con el executor vivo el mensaje entra por stdin; si el turno ya terminó, se
+    // retoma la sesión del CLI (P07.5.S1).
+    let sent = if state.runtime.is_live(agent_id) {
+        state
+            .runtime
+            .send_message(agent_id, text)
+            .await
+            .map(|()| json!({ "ok": true }))
+    } else {
+        state
+            .runtime
+            .continue_session(agent_id, text)
+            .await
+            .map(|run| json!({ "ok": true, "resumed": true, "run_id": run.to_string() }))
+    };
+    match sent {
+        Ok(v) => Response::ok(req.id, v),
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }
 }
@@ -586,7 +649,12 @@ async fn agent_switch(req: Request, state: &State) -> Response {
         Some(m) => m,
         None => return Response::error(req.id, "invalid_params", "falta `model`"),
     };
-    match state.runtime.switch(agent_id, model).await {
+    let message = req.params.get("message").and_then(Value::as_str);
+    match state
+        .runtime
+        .switch_with_message(agent_id, model, message)
+        .await
+    {
         Ok(run_id) => Response::ok(
             req.id,
             json!({ "ok": true, "run_id": run_id.to_string(), "model": model }),
@@ -620,11 +688,73 @@ async fn agent_logs(req: Request, state: &State) -> Response {
         Ok(logs) => {
             let messages: Vec<Value> = logs
                 .into_iter()
-                .map(|(role, content)| json!({ "role": role, "content": content }))
+                .map(|(role, content, at)| json!({ "role": role, "content": content, "at": at }))
                 .collect();
             Response::ok(req.id, json!({ "messages": messages }))
         }
         Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+/// Exporta la conversación completa a `<proyecto>/.symphony/exports/<agente>-<fecha>.md`
+/// (`.symphony/` está en `.gitignore`: no ensucia el repo ni los commits del chat).
+async fn agent_export(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let logs = match state.runtime.logs(agent_id, None).await {
+        Ok(l) => l,
+        Err(e) => return Response::error(req.id, "agent_error", e.0),
+    };
+    let meta = match state.reader.lock() {
+        Ok(c) => (|| -> Result<_, String> {
+            let a = repo::get_agent(&c, agent_id).map_err(|e| e.to_string())?;
+            let task = repo::get_task(&c, a.task_id).map_err(|e| e.to_string())?;
+            let project = repo::get_project(&c, a.project_id).map_err(|e| e.to_string())?;
+            let tools = crate::views::activity(&c, &agent_id.to_string(), 100_000)
+                .map_err(|e| e.to_string())?;
+            Ok((a.number, task, project, tools))
+        })(),
+        Err(_) => Err("lector de la base no disponible".to_string()),
+    };
+    let (number, task, project, tools) = match meta {
+        Ok(m) => m,
+        Err(e) => return Response::error(req.id, "store_error", e),
+    };
+    let is_chat = task.code == repo::CHAT_TASK_CODE;
+    let label = if is_chat {
+        "chat general".to_string()
+    } else {
+        format!("agente #{number}")
+    };
+    let now = now_ms();
+    let md = crate::export::markdown(
+        &crate::export::Meta {
+            title: if is_chat { "Chat general" } else { &task.title },
+            project: &project.name,
+            agent: &label,
+        },
+        now,
+        &logs,
+        tools.as_array().map_or(&[][..], Vec::as_slice),
+    );
+    let dir = std::path::Path::new(&project.root_path)
+        .join(".symphony")
+        .join("exports");
+    let prefix = if is_chat {
+        "chat".to_string()
+    } else {
+        format!("agente-{number}")
+    };
+    let path = dir.join(crate::export::file_name(&prefix, now));
+    let written = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, md));
+    match written {
+        Ok(()) => Response::ok(
+            req.id,
+            json!({ "path": path.display().to_string(), "messages": logs.len() }),
+        ),
+        Err(e) => Response::error(req.id, "export_failed", format!("no se pudo escribir: {e}")),
     }
 }
 
