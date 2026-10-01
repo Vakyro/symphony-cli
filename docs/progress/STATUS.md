@@ -37,6 +37,7 @@
 - [x] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
+0. **Esperando a Leo (2026-10-01):** ADR-0008 (PROPUESTO) adelanta P11 (Kimi, Antigravity, Copilot) antes de P08–P10, porque el core ya es genérico y los 3 CLIs están instalados (`docs/research/cli-p11-preliminar.md`). Si Leo lo acepta: actualizar PLAN §8/P08–P11 y empezar P11.S1 (pruebas en vivo mínimas, requieren su permiso). Rama: `phase/p07-s10-replan`.
 1. **P07.S10:** revisar P08–P16 a partir de la propuesta «Chat agéntico con failover» (abajo) y de lo que Leo anote en `docs/research/uso-v0.1.md`; escribir el ADR de replanificación.
 1b. Coste real medido el 2026-09-30 (bitácora P07.5 § S9): un cambio de proveedor cuesta el arranque del CLI de destino (Claude ~27,5k, Codex ~18k tokens) más el handoff (~2,4k–2,9k); n = 1 y conversación corta. Falta: una conversación larga (≥ 100 mensajes) y entender por qué Codex «continuar» sube a 48k. Cambio menor sin aplicar: `scan_plugins` en `skills.rs` no necesita el parámetro `commands`.
 2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
