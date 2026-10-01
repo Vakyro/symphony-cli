@@ -2494,6 +2494,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "symphony-adapter-copilot"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "symphony-adapter-common",
+ "symphony-core",
+]
+
+[[package]]
 name = "symphony-adapter-kimi"
 version = "0.1.0"
 dependencies = [
@@ -2557,6 +2566,7 @@ dependencies = [
  "symphony-adapter-claude",
  "symphony-adapter-codex",
  "symphony-adapter-common",
+ "symphony-adapter-copilot",
  "symphony-adapter-kimi",
  "symphony-context",
  "symphony-core",

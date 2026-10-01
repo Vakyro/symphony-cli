@@ -16,6 +16,7 @@ members = [
     "crates/adapters/codex",
     "crates/adapters/kimi",
     "crates/adapters/antigravity",
+    "crates/adapters/copilot",
     "crates/testkit",
     "xtask",
 ]

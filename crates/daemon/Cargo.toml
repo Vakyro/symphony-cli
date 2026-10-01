@@ -19,6 +19,7 @@ symphony-adapter-antigravity = { path = "../adapters/antigravity" }
 symphony-adapter-claude = { path = "../adapters/claude" }
 symphony-adapter-codex = { path = "../adapters/codex" }
 symphony-adapter-common = { path = "../adapters/common" }
+symphony-adapter-copilot = { path = "../adapters/copilot" }
 symphony-adapter-kimi = { path = "../adapters/kimi" }
 symphony-context = { path = "../context" }
 symphony-core = { path = "../core" }

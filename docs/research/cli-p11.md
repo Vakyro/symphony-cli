@@ -10,7 +10,7 @@ OpenCode (`1.15.13`) también está instalado; queda fuera del alcance (ADR-0008
 
 | | Kimi Code 1.44.0 | Copilot CLI 1.0.60 | Antigravity `agy` 1.2.11 |
 |---|---|---|---|
-| Turno headless | `kimi --print --output-format stream-json` (prompt por stdin) | `copilot -p <t> --output-format json --no-ask-user` | `agy --print= --input-format stream-json --output-format stream-json` (prompt por stdin como JSON) |
+| Turno headless | `kimi --print --output-format stream-json` (prompt por stdin) | `copilot --output-format json --no-ask-user` (prompt por stdin) | `agy --print= --input-format stream-json --output-format stream-json` (prompt por stdin como JSON) |
 | Duración del turno mínimo | 20,9 s | 20,6 s | 10,1 s (modelo: 3,2 s) |
 | Formato | **un** JSON al final del turno (`role`/`content[]`: `think`, `text`); sin deltas | JSONL de eventos con `type` (`user.message`, `assistant.turn_start`, `assistant.message_delta`, `assistant.message`, `assistant.turn_end`, `result`…) | NDJSON con `event`: `init`, `step_update` (con `text_delta`), `result` |
 | **Id de sesión** | **solo en stderr**: `To resume this session: kimi -r <uuid>` | solo en el evento final `result.sessionId`; **o se fija antes con `--session-id <uuid>`** (verificado: el `result` devuelve el mismo UUID) | en el primer evento `init.conversation_id` |
@@ -44,6 +44,16 @@ OpenCode (`1.15.13`) también está instalado; queda fuera del alcance (ADR-0008
 - `--model` acepta el slug de `agy models` (`gemini-3.8-flash-low`, verificado en vivo).
 - `agy` se **actualizó solo** de 1.2.11 a 1.2.14 durante la sesión.
 - Fixtures: `fixtures/providers/antigravity/tools.jsonl` y `tools-denied.jsonl`.
+
+## Copilot: hallazgos de P11.S4 (2026-10-01)
+- **El prompt va por stdin sin `-p`:** con stdin entubado, `copilot --output-format json --no-ask-user` corre no interactivo y lee el prompt (el `user.message` recibido fue el texto + `\n`). `-p ""` y `-p -` no sirven (`-` se toma como texto).
+- **Id de sesión solo en el `result` final** (`sessionId`), no antes: el adapter lo emite como `SessionStarted` al final del turno, que basta porque `resume` solo hace falta después. `--session-id <uuid>` lo fija si el runtime lo pide; `--resume=<id>` (con `=`) retoma.
+- **Eventos:** `assistant.message` (`content`, `toolRequests`, `model`), `tool.execution_start{toolCallId,toolName,arguments}`, `tool.execution_complete{toolCallId,success,error{code,message},result.content}`, `result{sessionId,exitCode,usage.premiumRequests}`; además `subagent.*`, `session.*`, `assistant.reasoning*`. Sin tokens de uso. Herramientas vistas: `create`, `apply_patch` (los argumentos son el texto del parche), `powershell` (`bash` fuera de Windows), `report_intent`, `task`. Un comando de shell dice `<shellId: N completed with exit code C>`.
+- **Permisos en headless:** por defecto deniega las escrituras (`success:false`, `code:"denied"`; el archivo no se crea) y deja pasar comandos de solo lectura (`echo`, `Get-Command`). **`--allow-tool=write`** permite editar y mantiene el shell en solo lectura: `git --version` fue denegado y el modelo probó cuatro rodeos que también se denegaron. Es el equivalente de `acceptEdits`. `--allow-all-tools` lo permite todo.
+- **`--model` solo aceptó `auto`** en esta cuenta: `claude-haiku-4.5`, `claude-sonnet-4.5/4.6`, `gpt-5.2`, `gpt-5.4-mini`, `gpt-5-mini`, `gemini-3.5-flash` y `gpt-4.1` dan `Error: Model "x" from --model flag is not available.` por stderr (sin coste; falla antes de llamar al servicio). `copilot help config` documenta 17 ids; cuáles valen depende del plan. Con `auto`, Copilot cambia de modelo entre turnos (vimos `claude-haiku-4.5` y `gpt-5.4-mini`).
+- **Arranque lento:** `copilot --version` tarda 1,7–3,4 s (el shim de npm, ~2 s). Es 4–8 veces lo de los otros CLIs; el daemon detecta los proveedores en paralelo para que el arranque no sume.
+- `copilot.exe` nativo en `WinGet\Packages\GitHub.Copilot_*`; el adapter evita el shim `copilot.cmd`.
+- Fixtures: `fixtures/providers/copilot/{stdin,tools-denied,tools-write}.jsonl`.
 
 ## Hooks y Test C (`hooks_can_hold`)
 Sin verificar y no hace falta para el chat: el trait admite `supports_hooks() = false` y `hooks_can_hold() = None`. Se retoma si P08 vuelve. Los `--help` de los tres no mencionan hooks.

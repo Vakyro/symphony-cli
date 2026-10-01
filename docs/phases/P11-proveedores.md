@@ -5,7 +5,7 @@
 | Estado | EN CURSO (adelantada antes de P08–P10 por ADR-0008) |
 | Rama | phase/p11-proveedores |
 | Inicio / cierre | 2026-10-01 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S3) |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S4) |
 | Tag | p11-done (pendiente) |
 | Docs usados | STACK §18.4–§18.6, `docs/research/cli-p11.md`, ADR-0008 |
 
@@ -33,6 +33,14 @@
 - **Cómo se verificó:** `cargo xtask check` → 271 passed (10 nuevos). Live L3 `live_antigravity_remembers_after_a_message_past_the_turn` (`google/gemini-3.8-flash-low`): 2 runs, 1 conversación, recordó el dato (31,6 s).
 - **Pendiente / notas:** con `accept-edits` el agente no puede ejecutar comandos (decisión de Leo: ¿`skip_permissions` desde la config?); el texto llega entero al final del turno (no hay deltas utilizables); skills de Antigravity sin investigar; `parse_error` de cuota/auth sintético; el id de conversación no se puede fijar.
 
+### P11.S4 · Adapter Copilot — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-01
+- **Qué se hizo:** crate `symphony-adapter-copilot` (id de proveedor `github`, CLI `copilot`): prompt por stdin sin `-p`, `--resume=<id>`, id de sesión desde el `result`, herramientas (shell → comando; `create`/`apply_patch` → edición con la ruta del parche), permiso denegado → herramienta fallida, errores de stderr con `parse_stderr_line` (ADR-0009). Modelo único `github/auto` (lo único que aceptó `--model` en la cuenta de las pruebas). Permisos: `--allow-tool=write` por defecto (equivale a `acceptEdits`) y `allow_all_tools` opt-in. Registrado en `providers.rs`. Sin cambios en el core ni dependencias nuevas.
+- **También:** `providers::detect_all` ahora detecta los CLIs **en paralelo** (`std::thread::scope`, orden conservado). Con Copilot (`--version` de 1,7–3,4 s) el arranque del daemon habría pasado de ~0,5 s a ~5 s y los tests con daemon chocaban entre sí (ver LEARNINGS).
+- **Archivos clave:** `crates/adapters/copilot/`, `crates/daemon/src/providers.rs`, `fixtures/providers/copilot/`
+- **Cómo se verificó:** `cargo xtask check` → 281 passed (9 nuevos). Live L3 `live_copilot_remembers_after_a_message_past_the_turn` (`github/auto`): 2 runs, 1 sesión, recordó el dato (65 s).
+- **Pendiente / notas:** solo `auto` como modelo (un plan con más modelos no los ve; habría que sondear o leer config); no hay tokens de uso, así que el failover por umbral no aplica a Copilot; `FileModified` se anota al pedir la edición (si luego se deniega, el git status corrige); skills de Copilot sin investigar; `parse_error` de cuota/auth sintético.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -43,12 +51,14 @@
 | El runtime guarda el id de sesión dado por stderr y lo retoma | L2 `session_id_from_stderr_is_stored_and_resumed` | ✅ |
 | Kimi y Antigravity retoman su sesión y recuerdan lo dicho, con el daemon real | L3 `live_resume` (`SYMPHONY_LIVE=1`) | ✅ |
 | Adapter de Antigravity pasa la suite de contrato con salidas reales | `cargo nextest run -p symphony-adapter-antigravity` | ✅ 10/10 |
+| Adapter de Copilot pasa la suite de contrato con salidas reales | `cargo nextest run -p symphony-adapter-copilot` | ✅ 9/9 |
+| Copilot retoma su sesión y recuerda lo dicho, con el daemon real | L3 `live_resume` | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|
 | Antigravity en headless deniega el shell con `accept-edits` y se cuelga con `--sandbox` en Windows | un chat con Antigravity no ejecuta comandos salvo `skip_permissions` | `agy … --mode accept-edits` + `run_command` | decisión de Leo |
-| Copilot cambia de modelo al retomar con `auto` | rompe «modelo exacto» | `copilot --resume=<id> -p x` sin `--model` | S4: pasar siempre `--model` |
+| Copilot con `auto` puede cambiar de modelo entre turnos | no hay «modelo exacto»; además solo `auto` es seleccionable en esta cuenta | `copilot --resume=<id>` | sondear modelos por cuenta |
 
 ## Decisiones tomadas
 - ADR-0008: P11 antes de P08–P10.

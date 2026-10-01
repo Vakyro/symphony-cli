@@ -179,3 +179,12 @@ fn live_antigravity_remembers_after_a_message_past_the_turn() {
     }
     run_live("google/gemini-3.8-flash-low");
 }
+
+#[test]
+fn live_copilot_remembers_after_a_message_past_the_turn() {
+    if !live() {
+        eprintln!("omitido: SYMPHONY_LIVE != 1");
+        return;
+    }
+    run_live("github/auto");
+}
