@@ -10,7 +10,7 @@ OpenCode (`1.15.13`) también está instalado; queda fuera del alcance (ADR-0008
 
 | | Kimi Code 1.44.0 | Copilot CLI 1.0.60 | Antigravity `agy` 1.2.11 |
 |---|---|---|---|
-| Turno headless | `kimi --print -p <t> --output-format stream-json` | `copilot -p <t> --output-format json --no-ask-user` | `agy -p <t> --output-format stream-json` |
+| Turno headless | `kimi --print --output-format stream-json` (prompt por stdin) | `copilot -p <t> --output-format json --no-ask-user` | `agy --print= --input-format stream-json --output-format stream-json` (prompt por stdin como JSON) |
 | Duración del turno mínimo | 20,9 s | 20,6 s | 10,1 s (modelo: 3,2 s) |
 | Formato | **un** JSON al final del turno (`role`/`content[]`: `think`, `text`); sin deltas | JSONL de eventos con `type` (`user.message`, `assistant.turn_start`, `assistant.message_delta`, `assistant.message`, `assistant.turn_end`, `result`…) | NDJSON con `event`: `init`, `step_update` (con `text_delta`), `result` |
 | **Id de sesión** | **solo en stderr**: `To resume this session: kimi -r <uuid>` | solo en el evento final `result.sessionId`; **o se fija antes con `--session-id <uuid>`** (verificado: el `result` devuelve el mismo UUID) | en el primer evento `init.conversation_id` |
@@ -35,6 +35,15 @@ OpenCode (`1.15.13`) también está instalado; queda fuera del alcance (ADR-0008
 - **`--print` auto-aprueba las herramientas** (el `--help` lo dice) y Kimi no tiene sandbox: el agente puede ejecutar cualquier comando. Riesgo a decidir antes de ofrecerlo en el chat.
 - **Un JSON por mensaje**, no solo al final: `assistant` (`content` texto o lista `think`/`text`, más `tool_calls[].function{name,arguments}`) y `tool` (`tool_call_id`, `content`). Herramientas vistas: `WriteFile`, `Shell`, `ReadFile`. Un fallo llega como `<system>ERROR: …</system>` (`Command failed with exit code: 3.`, `` `x` does not exist.``). Sin tokens de uso ni evento de fin de turno.
 - Fixtures: `fixtures/providers/kimi/tools.jsonl` y `tools-error.jsonl`.
+
+## Antigravity: hallazgos de P11.S3 (2026-10-01)
+- **El prompt no puede ir por stdin con `--print`**: `--print` exige el prompt como valor. La salida es `--print= --input-format stream-json --output-format stream-json` y un mensaje por línea de stdin: **`{"event":"user","message":{"content":"…"}}`** (`message` es un objeto; `text` da «has no content»; otros eventos se ignoran con un aviso). Al cerrar stdin el proceso termina.
+- **Permisos en headless:** lo que pide permiso se **deniega solo**. Con el modo por defecto ni siquiera se puede escribir un archivo; el `result` llega como `SUCCESS` con `response` vacío y `denied_actions`. `--mode accept-edits` permite editar y deniega el shell (el paso `run_command` figura `DONE` aunque se haya denegado: solo `denied_actions` lo delata). `--dangerously-skip-permissions` permite todo y no tiene sandbox. **`--sandbox` se cuelga en Windows** al ejecutar un comando (hubo que cortarlo a los 180 s).
+- **Eventos:** `init{conversation_id,tools,permission_mode}`; `step_update{step_type: user_input|agent_response|tool|system_message, state: ACTIVE|DONE|ERROR, tool_name, tool_info.parameters, usage}`; `result{status, response, usage, denied_actions, error}`. Herramientas vistas: `write_to_file` (`TargetFile`), `run_command` (`CommandLine`), `manage_task`. Los `text_delta` llegan troceados por paso (a veces un `DONE` trae el texto entero, a veces `ACTIVE` + `DONE` con un salto de línea): el adapter usa `result.response`.
+- **Tokens:** el `result.usage` **suma** todos los pasos (44.631 de entrada en un turno de 2 pasos de ~22.000); el contexto real está en el `usage` del último paso `agent_response`. Abrir sesión cuesta ~22k tokens de entrada.
+- `--model` acepta el slug de `agy models` (`gemini-3.8-flash-low`, verificado en vivo).
+- `agy` se **actualizó solo** de 1.2.11 a 1.2.14 durante la sesión.
+- Fixtures: `fixtures/providers/antigravity/tools.jsonl` y `tools-denied.jsonl`.
 
 ## Hooks y Test C (`hooks_can_hold`)
 Sin verificar y no hace falta para el chat: el trait admite `supports_hooks() = false` y `hooks_can_hold() = None`. Se retoma si P08 vuelve. Los `--help` de los tres no mencionan hooks.

@@ -2453,6 +2453,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
+name = "symphony-adapter-antigravity"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "symphony-adapter-common",
+ "symphony-core",
+]
+
+[[package]]
 name = "symphony-adapter-claude"
 version = "0.1.0"
 dependencies = [
@@ -2544,6 +2553,7 @@ dependencies = [
  "proptest",
  "rusqlite",
  "serde_json",
+ "symphony-adapter-antigravity",
  "symphony-adapter-claude",
  "symphony-adapter-codex",
  "symphony-adapter-common",

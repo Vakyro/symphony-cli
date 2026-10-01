@@ -3,6 +3,7 @@
 //! proveedor en particular.
 
 use serde_json::{Value, json};
+use symphony_adapter_antigravity::AntigravityAdapter;
 use symphony_adapter_claude::ClaudeAdapter;
 use symphony_adapter_codex::CodexAdapter;
 use symphony_adapter_common::{AdapterError, ProviderAdapter};
@@ -11,12 +12,13 @@ use symphony_store::{StoreError, WriterHandle, repo};
 
 use std::sync::Arc;
 
-/// Adapters incluidos en esta versión (Antigravity y Copilot llegan en P11).
+/// Adapters incluidos en esta versión (Copilot llega en P11).
 pub fn builtin() -> Vec<Box<dyn ProviderAdapter>> {
     vec![
         Box::new(ClaudeAdapter::default()),
         Box::new(CodexAdapter::default()),
         Box::new(KimiAdapter::default()),
+        Box::new(AntigravityAdapter::default()),
     ]
 }
 
@@ -26,6 +28,7 @@ pub fn builtin_arc() -> Vec<Arc<dyn ProviderAdapter>> {
         Arc::new(ClaudeAdapter::default()),
         Arc::new(CodexAdapter::default()),
         Arc::new(KimiAdapter::default()),
+        Arc::new(AntigravityAdapter::default()),
     ]
 }
 

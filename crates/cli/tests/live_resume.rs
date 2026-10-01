@@ -161,3 +161,21 @@ fn live_codex_remembers_after_a_message_past_the_turn() {
     }
     run_live("openai/gpt-5.6-luna");
 }
+
+#[test]
+fn live_kimi_remembers_after_a_message_past_the_turn() {
+    if !live() {
+        eprintln!("omitido: SYMPHONY_LIVE != 1");
+        return;
+    }
+    run_live("moonshot/default");
+}
+
+#[test]
+fn live_antigravity_remembers_after_a_message_past_the_turn() {
+    if !live() {
+        eprintln!("omitido: SYMPHONY_LIVE != 1");
+        return;
+    }
+    run_live("google/gemini-3.8-flash-low");
+}
