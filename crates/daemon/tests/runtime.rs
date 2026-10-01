@@ -2068,3 +2068,30 @@ text = "Tarea completada con éxito: módulo users y tests agregados."
 
     e.writer.shutdown();
 }
+
+/// Un CLI que falla (login, cuota) antes de leer su prompt deja un `EPIPE` al escribirlo: no es un
+/// fallo de arranque; su salida y su código de salida mandan y el failover sigue su curso.
+#[tokio::test(flavor = "multi_thread")]
+async fn cli_that_quits_before_reading_its_prompt_still_fails_over() {
+    let first = "[[step]]\nkind = \"quota_exhausted\"\n";
+    let second = "[[step]]\nkind = \"edit\"\npath = \"b.txt\"\ncontent = \"b\n\"\n";
+    let e = env_with(&[("alpha", first), ("beta", second)], None).await;
+    let mut r = req(
+        &e,
+        "tarea con prompt enorme",
+        Execution::Exact("alpha/fast".into()),
+    );
+    // Mayor que el búfer de la tubería: la escritura sigue en curso cuando alpha ya salió.
+    r.description = Some("x".repeat(1_000_000));
+    e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs WHERE seq = 1"),
+        "QUOTA_EXHAUSTED"
+    );
+    assert_eq!(count(&e, "provider_failures"), 1);
+    assert_eq!(count(&e, "agent_runs"), 2);
+    e.writer.shutdown();
+}

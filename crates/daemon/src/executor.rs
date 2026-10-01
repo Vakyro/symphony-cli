@@ -202,11 +202,19 @@ impl Runtime {
             let mut proc = symphony_process::spawn(spec)
                 .await
                 .map_err(|e| e.to_string())?;
-            proc.write_stdin(&l.adapter.encode_prompt(&l.prompt))
-                .await
-                .map_err(|e| e.to_string())?;
+            // Un CLI que falla rápido (login, cuota) sale antes de leer su prompt: el `EPIPE` no es
+            // un fallo de arranque; `pump` recoge su salida y su código de salida reales.
+            let exited_early = |r: Result<(), symphony_process::ProcessError>| match r {
+                Err(symphony_process::ProcessError::Stdin(e))
+                    if e.kind() == std::io::ErrorKind::BrokenPipe =>
+                {
+                    Ok(())
+                }
+                other => other.map_err(|e| e.to_string()),
+            };
+            exited_early(proc.write_stdin(&l.adapter.encode_prompt(&l.prompt)).await)?;
             if l.adapter.close_stdin_after_prompt() {
-                proc.close_stdin().await.map_err(|e| e.to_string())?;
+                exited_early(proc.close_stdin().await)?;
             }
             Ok::<_, String>(proc)
         }
