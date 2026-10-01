@@ -29,6 +29,13 @@ OpenCode (`1.15.13`) también está instalado; queda fuera del alcance (ADR-0008
 5. Los tres respetan `AGENT ≠ MODEL`: el modelo se pasa por flag en cada llamada.
 6. **Coste de abrir sesión**: Antigravity gastó ~22k tokens de entrada solo en abrir (Codex ~18k, Claude ~27k, STATUS). Copilot no reporta tokens; Kimi tampoco.
 
+## Kimi: hallazgos de P11.S2 (2026-10-01)
+- **Prompt por stdin:** `kimi --print --output-format stream-json` lee el prompt hasta EOF (sin `-p`). Es lo que exige el contrato (el prompt nunca va como argumento).
+- **`-S <uuid>` crea la sesión con ese id** (verificado con un UUID nuevo) y la retoma si existe: sirve para `spawn` y para `resume`. El id sigue saliendo solo por stderr (`To resume this session: kimi -r <uuid>`); `--verbose` no lo mueve a stdout.
+- **`--print` auto-aprueba las herramientas** (el `--help` lo dice) y Kimi no tiene sandbox: el agente puede ejecutar cualquier comando. Riesgo a decidir antes de ofrecerlo en el chat.
+- **Un JSON por mensaje**, no solo al final: `assistant` (`content` texto o lista `think`/`text`, más `tool_calls[].function{name,arguments}`) y `tool` (`tool_call_id`, `content`). Herramientas vistas: `WriteFile`, `Shell`, `ReadFile`. Un fallo llega como `<system>ERROR: …</system>` (`Command failed with exit code: 3.`, `` `x` does not exist.``). Sin tokens de uso ni evento de fin de turno.
+- Fixtures: `fixtures/providers/kimi/tools.jsonl` y `tools-error.jsonl`.
+
 ## Hooks y Test C (`hooks_can_hold`)
 Sin verificar y no hace falta para el chat: el trait admite `supports_hooks() = false` y `hooks_can_hold() = None`. Se retoma si P08 vuelve. Los `--help` de los tres no mencionan hooks.
 
