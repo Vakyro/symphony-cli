@@ -4,10 +4,16 @@
 //!
 //! Cada llamada corre con `GIT_TERMINAL_PROMPT=0` (nunca pide credenciales)
 //! y `LC_ALL=C` (mensajes estables), sin pager ni colores.
+//!
+//! Con `GIT_OPTIONAL_LOCKS=0` un `status` o `diff` nunca reescribe el índice, y el único
+//! escritor (`commit_all`) corre en exclusiva por worktree: en Windows el lector que
+//! coincidía con él fallaba con «Permission denied» y en Linux chocaba con `index.lock`.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError, RwLock};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
@@ -129,6 +135,7 @@ where
     cmd.args(["-c", "color.ui=false", "-c", "core.quotepath=false"])
         .args(&args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_PAGER", "cat")
         .env("LC_ALL", "C")
         .stdin(Stdio::null());
@@ -177,11 +184,21 @@ impl Repo {
         &self.root
     }
 
+    /// Candado de lectura/escritura del índice de este worktree (compartido en todo el proceso).
+    fn index_lock(&self) -> Arc<RwLock<()>> {
+        static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<RwLock<()>>>>> =
+            LazyLock::new(Mutex::default);
+        let mut locks = LOCKS.lock().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(locks.entry(self.root.clone()).or_default())
+    }
+
     fn run<I, S>(&self, args: I) -> Result<Output, GitError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        let lock = self.index_lock();
+        let _shared = lock.read().unwrap_or_else(PoisonError::into_inner);
         git_cmd(Some(&self.root), args)
     }
 
@@ -201,12 +218,18 @@ impl Repo {
 
     /// `git add -A` y commit con `message`. `None` si no había nada que guardar.
     pub fn commit_all(&self, message: &str) -> Result<Option<String>, GitError> {
-        self.run(["add", "-A"])?;
-        if self.text(["status", "--porcelain"])?.is_empty() {
+        let lock = self.index_lock();
+        let _exclusive = lock.write().unwrap_or_else(PoisonError::into_inner);
+        let git = |args: &[&str]| git_cmd(Some(&self.root), args);
+        git(&["add", "-A"])?;
+        if git(&["status", "--porcelain"])?.stdout.is_empty() {
             return Ok(None);
         }
-        self.run(["commit", "-q", "-m", message])?;
-        self.head_commit().map(Some)
+        git(&["commit", "-q", "-m", message])?;
+        let head = git(&["rev-parse", "HEAD"])?;
+        Ok(Some(
+            String::from_utf8_lossy(&head.stdout).trim().to_string(),
+        ))
     }
 
     /// Rama actual, o `None` en detached HEAD.

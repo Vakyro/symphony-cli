@@ -209,3 +209,39 @@ fn merge_preflight_clean_and_conflict() {
     assert!(r.status().unwrap().is_empty());
     assert!(r.merge_preflight("main", "no-existe").is_err());
 }
+
+/// Un commit y varios `status`/`diff` del mismo worktree a la vez no se pisan el índice
+/// (en Windows el lector fallaba con «Permission denied», en Linux chocaba con `index.lock`).
+#[test]
+fn commit_all_and_concurrent_readers_do_not_collide_on_the_index() {
+    let (_dir, root) = repo();
+    let errors = std::sync::atomic::AtomicUsize::new(0);
+    let bump = || errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::thread::scope(|s| {
+        for _ in 0..3 {
+            s.spawn(|| {
+                let r = Repo::at(&root);
+                for _ in 0..25 {
+                    if r.status().is_err() || r.diff("HEAD").is_err() {
+                        bump();
+                    }
+                }
+            });
+        }
+        let r = Repo::at(&root);
+        for i in 0..15 {
+            std::fs::write(
+                root.join(format!("f{i}.txt")),
+                format!(
+                    "{i}
+"
+                ),
+            )
+            .unwrap();
+            if r.commit_all(&format!("c{i}")).is_err() {
+                bump();
+            }
+        }
+    });
+    assert_eq!(errors.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
