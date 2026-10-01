@@ -8,7 +8,7 @@
 **En curso por:** —
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (247 tests; los live se omiten sin `SYMPHONY_LIVE=1`). Un test del chat (`chat_switches_provider_mid_conversation_with_a_new_message`) falló una vez bajo carga y no se reprodujo (LEARNINGS P07.5).
+- `cargo xtask check`: ✅ (250 tests; los live se omiten sin `SYMPHONY_LIVE=1`). Los tests intermitentes del chat y de cuota (fallaban en Linux en 4 de 5 corridas del CI) tenían dos causas, ya corregidas (LEARNINGS P07.5): choque de git sobre el índice y `EPIPE` al escribir el prompt a un CLI que ya salió.
 - `cargo deny check`: ✅ (solo avisos de duplicados)
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny). La rama `phase/p07-tui` y el tag `v0.1.0` se pushean en P07.S8.
 - Tests conocidos en rojo: ninguno.
