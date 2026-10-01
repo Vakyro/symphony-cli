@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-09-30 · por claude-code/sonnet-5.5
-**Fase actual:** P07.5 · Chat general **cerrada** (tag `p075-done`, fusionada a `main`). Sigue P07.S10 (revisión de P08–P16, ADR-0007)
-**Paso actual:** P07.S10 · Replanificación. P08–P16 siguen provisionales
+**Fase actual:** P11 · Proveedores (adelantada por ADR-0008). P07.5 cerrada (`p075-done`); P07.S10 resuelta con ADR-0008 (P08–P10 diferidas)
+**Paso actual:** P11.S2 · adapter Kimi. P08–P16 siguen provisionales
 **Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
 **Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
@@ -37,7 +37,7 @@
 - [x] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
-0. **Esperando a Leo (2026-10-01):** ADR-0008 (PROPUESTO) adelanta P11 (Kimi, Antigravity, Copilot) antes de P08–P10, porque el core ya es genérico y los 3 CLIs están instalados (`docs/research/cli-p11-preliminar.md`). Si Leo lo acepta: actualizar PLAN §8/P08–P11 y empezar P11.S1 (pruebas en vivo mínimas, requieren su permiso). Rama: `phase/p07-s10-replan`.
+0. **P11.S1 ✅ (2026-10-01):** ADR-0008 aceptado; investigación en vivo de Kimi, Copilot y Antigravity en `docs/research/cli-p11.md` (bitácora `docs/phases/P11-proveedores.md`). Siguiente: **P11.S2 · adapter Kimi** en `phase/p11-proveedores` (crate `adapters/kimi`, fixtures ya en `fixtures/providers/kimi/`). Pendiente de Leo: ToS de los tres.
 1. **P07.S10:** revisar P08–P16 a partir de la propuesta «Chat agéntico con failover» (abajo) y de lo que Leo anote en `docs/research/uso-v0.1.md`; escribir el ADR de replanificación.
 1b. Coste real medido el 2026-09-30 (bitácora P07.5 § S9): un cambio de proveedor cuesta el arranque del CLI de destino (Claude ~27,5k, Codex ~18k tokens) más el handoff (~2,4k–2,9k); n = 1 y conversación corta. Falta: una conversación larga (≥ 100 mensajes) y entender por qué Codex «continuar» sube a 48k. Cambio menor sin aplicar: `scan_plugins` en `skills.rs` no necesita el parámetro `commands`.
 2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%

@@ -11,6 +11,9 @@ de evento o de hook.
 | `claude-code/hooks.jsonl` | Payloads de hooks de Claude Code (`--settings`) |
 | `codex/exec-stream.jsonl` | `codex exec --json` (codex-cli 0.154.0) |
 | `codex/hooks.jsonl` | Payloads de hooks de Codex (`-c hooks.*`) |
+| `kimi/stream.jsonl`, `kimi/stderr-session.txt`, `kimi/error-modelo.txt` | `kimi --print --output-format stream-json` (Kimi Code 1.44.0, 2026-10-01) |
+| `copilot/stream.jsonl`, `copilot/error-modelo.txt` | `copilot -p --output-format json` (Copilot CLI 1.0.60); se omiten las skills y el razonamiento opaco |
+| `antigravity/stream.jsonl`, `resume.jsonl`, `error-modelo.jsonl` | `agy -p --output-format stream-json` (1.2.11); `cwd` reemplazado por `<cwd>` |
 
 Los errores de rate limit y cuota que no aparecieron en vivo se prueban con las
 formas documentadas (`docs/research/cli-*.md`), marcadas como sintéticas en los tests.
