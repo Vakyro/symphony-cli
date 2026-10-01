@@ -19,7 +19,8 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, ModelInfo, ProcessSpec, ProviderAdapter,
-    ProviderError, ResumeRequest, SpawnRequest, ToolKind,
+    ProviderError, ResumeRequest, SpawnRequest, ToolKind, find_on_path, has_token, json_str,
+    looks_like_error,
 };
 use symphony_core::FailureType;
 
@@ -31,18 +32,6 @@ pub struct CopilotAdapter {
     pub binary: Option<PathBuf>,
     /// `true`: `--allow-all-tools` (el agente puede ejecutar cualquier comando).
     pub allow_all_tools: bool,
-}
-
-/// El ejecutable nativo (evita el shim `copilot.cmd` de npm, que rompe las comillas).
-fn find_copilot() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(format!("copilot{}", std::env::consts::EXE_SUFFIX)))
-        .find(|p| p.is_file())
-}
-
-fn s(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 fn tool_kind(name: &str) -> ToolKind {
@@ -57,7 +46,7 @@ fn tool_kind(name: &str) -> ToolKind {
 
 /// La ruta editada: `path` del argumento o la primera cabecera de un parche (`*** Add File: x`).
 fn edited_path(args: &Value) -> Option<String> {
-    s(args, "path").or_else(|| {
+    json_str(args, "path").or_else(|| {
         args.as_str()
             .or_else(|| args["input"].as_str())
             .and_then(|patch| {
@@ -72,7 +61,7 @@ fn edited_path(args: &Value) -> Option<String> {
 }
 
 fn message_events(data: &Value) -> Vec<AgentEvent> {
-    let text = s(data, "content").unwrap_or_default();
+    let text = json_str(data, "content").unwrap_or_default();
     if text.trim().is_empty() {
         Vec::new()
     } else {
@@ -81,17 +70,17 @@ fn message_events(data: &Value) -> Vec<AgentEvent> {
 }
 
 fn tool_start_events(data: &Value) -> Vec<AgentEvent> {
-    let Some(tool) = s(data, "toolName").filter(|t| !t.is_empty()) else {
+    let Some(tool) = json_str(data, "toolName").filter(|t| !t.is_empty()) else {
         return Vec::new();
     };
     let kind = tool_kind(&tool);
     let args = &data["arguments"];
     let mut out = vec![AgentEvent::ToolRequested {
-        tool_use_id: s(data, "toolCallId"),
+        tool_use_id: json_str(data, "toolCallId"),
         tool: tool.clone(),
         kind,
         command: if kind == ToolKind::Command {
-            s(args, "command")
+            json_str(args, "command")
         } else {
             None
         },
@@ -118,7 +107,7 @@ fn tool_complete_events(data: &Value) -> Vec<AgentEvent> {
             .ok()
     });
     vec![AgentEvent::ToolFinished {
-        tool_use_id: s(data, "toolCallId"),
+        tool_use_id: json_str(data, "toolCallId"),
         tool: "tool".into(),
         kind: if exit_code.is_some() {
             ToolKind::Command
@@ -134,7 +123,7 @@ impl CopilotAdapter {
     fn binary(&self) -> Result<PathBuf, AdapterError> {
         self.binary
             .clone()
-            .or_else(find_copilot)
+            .or_else(|| find_on_path("copilot"))
             .ok_or_else(|| AdapterError::NotInstalled("copilot".into()))
     }
 
@@ -270,12 +259,12 @@ impl ProviderAdapter for CopilotAdapter {
             Some("tool.execution_complete") => tool_complete_events(data),
             // El id de sesión solo llega aquí, al final del turno.
             Some("result") => vec![AgentEvent::SessionStarted {
-                cli_session_id: s(&v, "sessionId").filter(|id| !id.is_empty()),
+                cli_session_id: json_str(&v, "sessionId").filter(|id| !id.is_empty()),
                 model: None,
             }],
             // Forma esperada de un fallo del servicio; sin verificar en vivo.
-            Some("session.error") | Some("error") => s(data, "message")
-                .or_else(|| s(&v, "message"))
+            Some("session.error") | Some("error") => json_str(data, "message")
+                .or_else(|| json_str(&v, "message"))
                 .and_then(|m| self.parse_error(&m))
                 .map(|e| vec![AgentEvent::ProviderError(e)])
                 .unwrap_or_default(),
@@ -285,6 +274,9 @@ impl ProviderAdapter for CopilotAdapter {
 
     /// Los errores de arranque (`Error: Model "x" from --model flag is not available.`).
     fn parse_stderr_line(&self, line: &str) -> Vec<AgentEvent> {
+        if !looks_like_error(line) {
+            return Vec::new();
+        }
         self.parse_error(line)
             .map(|e| vec![AgentEvent::ProviderError(e)])
             .unwrap_or_default()
@@ -305,11 +297,11 @@ impl ProviderAdapter for CopilotAdapter {
                 (FailureType::DailyQuota, "quota", false)
             } else if lower.contains("rate limit")
                 || lower.contains("rate-limit")
-                || lower.contains("429")
+                || has_token(&lower, "429")
                 || lower.contains("too many requests")
             {
                 (FailureType::TempRateLimit, "rate_limit", true)
-            } else if lower.contains("401")
+            } else if has_token(&lower, "401")
                 || lower.contains("unauthorized")
                 || lower.contains("copilot login")
                 || lower.contains("not logged in")

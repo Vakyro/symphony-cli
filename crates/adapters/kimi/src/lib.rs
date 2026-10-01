@@ -15,7 +15,8 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, ModelInfo, ProcessSpec, ProviderAdapter,
-    ProviderError, ResumeRequest, SpawnRequest, ToolKind,
+    ProviderError, ResumeRequest, SpawnRequest, ToolKind, find_on_path, has_token, json_str,
+    looks_like_error,
 };
 use symphony_core::FailureType;
 
@@ -25,17 +26,6 @@ const DEFAULT_MODEL: &str = "default";
 #[derive(Debug, Clone, Default)]
 pub struct KimiAdapter {
     pub binary: Option<PathBuf>,
-}
-
-fn find_kimi() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(format!("kimi{}", std::env::consts::EXE_SUFFIX)))
-        .find(|p| p.is_file())
-}
-
-fn s(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 /// El contenido de un mensaje: un texto, o una lista de partes (`think`, `text`).
@@ -77,7 +67,7 @@ fn assistant_events(v: &Value) -> Vec<AgentEvent> {
     }
     for call in v["tool_calls"].as_array().into_iter().flatten() {
         let f = &call["function"];
-        let Some(tool) = s(f, "name").filter(|n| !n.is_empty()) else {
+        let Some(tool) = json_str(f, "name").filter(|n| !n.is_empty()) else {
             continue;
         };
         let args: Value = f["arguments"]
@@ -86,11 +76,11 @@ fn assistant_events(v: &Value) -> Vec<AgentEvent> {
             .unwrap_or(Value::Null);
         let kind = tool_kind(&tool);
         out.push(AgentEvent::ToolRequested {
-            tool_use_id: s(call, "id"),
+            tool_use_id: json_str(call, "id"),
             tool: tool.clone(),
             kind,
             command: if kind == ToolKind::Command {
-                s(&args, "command")
+                json_str(&args, "command")
             } else {
                 None
             },
@@ -99,7 +89,7 @@ fn assistant_events(v: &Value) -> Vec<AgentEvent> {
         if kind == ToolKind::Edit {
             out.push(AgentEvent::FileModified {
                 tool,
-                path: s(&args, "path"),
+                path: json_str(&args, "path"),
             });
         }
     }
@@ -120,7 +110,7 @@ fn tool_finished(v: &Value) -> Vec<AgentEvent> {
             .ok()
     });
     vec![AgentEvent::ToolFinished {
-        tool_use_id: s(v, "tool_call_id"),
+        tool_use_id: json_str(v, "tool_call_id"),
         tool: "tool".into(),
         kind: if is_command {
             ToolKind::Command
@@ -136,8 +126,18 @@ impl KimiAdapter {
     fn binary(&self) -> Result<PathBuf, AdapterError> {
         self.binary
             .clone()
-            .or_else(find_kimi)
+            .or_else(|| find_on_path("kimi"))
             .ok_or_else(|| AdapterError::NotInstalled("kimi".into()))
+    }
+
+    /// Una línea de texto plano → error clasificado, solo si parece un error (el resto es ruido).
+    fn plain_error(&self, line: &str) -> Vec<AgentEvent> {
+        if !(looks_like_error(line) || line.to_lowercase().contains("llm not set")) {
+            return Vec::new();
+        }
+        self.parse_error(line)
+            .map(|e| vec![AgentEvent::ProviderError(e)])
+            .unwrap_or_default()
     }
 
     fn base_spec(&self, req: &SpawnRequest) -> Result<ProcessSpec, AdapterError> {
@@ -250,10 +250,7 @@ impl ProviderAdapter for KimiAdapter {
     fn parse_stream_line(&self, line: &str) -> Vec<AgentEvent> {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             // Los errores de configuración salen como texto plano por stdout (`LLM not set`).
-            return self
-                .parse_error(line)
-                .map(|e| vec![AgentEvent::ProviderError(e)])
-                .unwrap_or_default();
+            return self.plain_error(line);
         };
         match v.get("role").and_then(Value::as_str) {
             Some("assistant") => assistant_events(&v),
@@ -270,9 +267,7 @@ impl ProviderAdapter for KimiAdapter {
                 model: None,
             }];
         }
-        self.parse_error(line)
-            .map(|e| vec![AgentEvent::ProviderError(e)])
-            .unwrap_or_default()
+        self.plain_error(line)
     }
 
     fn parse_hook(&self, _payload: &Value) -> Vec<AgentEvent> {
@@ -291,11 +286,11 @@ impl ProviderAdapter for KimiAdapter {
         {
             (FailureType::DailyQuota, "quota", false)
         } else if lower.contains("rate limit")
-            || lower.contains("429")
+            || has_token(&lower, "429")
             || lower.contains("too many requests")
         {
             (FailureType::TempRateLimit, "rate_limit", true)
-        } else if lower.contains("401")
+        } else if has_token(&lower, "401")
             || lower.contains("unauthorized")
             || lower.contains("kimi login")
             || lower.contains("not logged in")

@@ -52,14 +52,18 @@ fn pin(bin: &Path) -> std::io::Result<PathBuf> {
         // Si otro proceso de test ganó la carrera, su copia sirve igual.
         if std::fs::rename(&tmp, &dest).is_err() {
             let _ = std::fs::remove_file(&tmp);
+        } else if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&dest) {
+            // `copy` conserva la fecha del binario: sin esto, uno viejo se podaría al instante.
+            let _ = f.set_modified(SystemTime::now());
         }
     }
-    prune_old(&dir);
+    prune_old(&dir, &dest);
     dest.is_file().then_some(dest).ok_or_else(not_found)
 }
 
-/// Borra las copias de más de un día (nunca las recientes: otro test puede estar por lanzarlas).
-fn prune_old(dir: &Path) {
+/// Borra las copias de más de un día, salvo `keep` (nunca las recientes: otro test puede estar
+/// por lanzarlas).
+fn prune_old(dir: &Path, keep: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -70,7 +74,7 @@ fn prune_old(dir: &Path) {
             .ok()
             .and_then(|t| SystemTime::now().duration_since(t).ok())
             .is_some_and(|age| age > Duration::from_secs(24 * 3600));
-        if old {
+        if old && e.path() != keep {
             let _ = std::fs::remove_file(e.path());
         }
     }

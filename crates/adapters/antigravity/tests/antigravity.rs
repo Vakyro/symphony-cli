@@ -74,7 +74,7 @@ fn expected(line: &str) -> Vec<&'static str> {
             }
         }
         "result" => match v["result"]["status"].as_str().unwrap() {
-            "ERROR" => vec!["ProviderError"],
+            "ERROR" => vec!["ProviderError", "AssistantText"],
             _ => vec!["AssistantText"],
         },
         _ => vec![],
@@ -191,11 +191,45 @@ fn a_denied_turn_says_what_was_denied() {
 }
 
 #[test]
+fn an_unrecognised_error_is_not_lost() {
+    let line = r#"{"event":"result","result":{"status":"ERROR","response":"","error":"context deadline exceeded"}}"#;
+    let ev = adapter().parse_stream_line(line);
+    assert!(matches!(
+        &ev[..],
+        [AgentEvent::ProviderError(e), AgentEvent::AssistantText { text }]
+            if e.failure_type == FailureType::ProviderError && text.contains("context deadline exceeded")
+    ));
+}
+
+#[test]
+fn denied_actions_are_reported_even_with_a_response() {
+    let line = r#"{"event":"result","result":{"status":"SUCCESS","response":"listo","denied_actions":[{"action":"command"}]}}"#;
+    let ev = adapter().parse_stream_line(line);
+    assert!(matches!(
+        &ev[..],
+        [AgentEvent::AssistantText { text: a }, AgentEvent::AssistantText { text: b }]
+            if a == "listo" && b.contains("command")
+    ));
+}
+
+#[test]
+fn only_whole_tokens_count_as_status_codes() {
+    // «4290» y «a401b» no son un 429 ni un 401.
+    assert!(
+        adapter()
+            .parse_error("processed 4290 files in a401b")
+            .is_none()
+    );
+    assert!(adapter().parse_error("HTTP 429").is_some());
+}
+
+#[test]
 fn invalid_model_error_is_classified() {
     let last = lines("error-modelo.jsonl").pop().unwrap();
     assert!(matches!(
         &adapter().parse_stream_line(&last)[..],
-        [AgentEvent::ProviderError(e)] if e.failure_type == FailureType::ModelUnavailable
+        [AgentEvent::ProviderError(e), AgentEvent::AssistantText { .. }]
+            if e.failure_type == FailureType::ModelUnavailable
     ));
 }
 

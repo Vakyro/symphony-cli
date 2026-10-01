@@ -18,7 +18,7 @@ use std::process::{Command, Stdio};
 use serde_json::{Value, json};
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, ModelInfo, ProcessSpec, ProviderAdapter,
-    ProviderError, ResumeRequest, SpawnRequest, ToolKind,
+    ProviderError, ResumeRequest, SpawnRequest, ToolKind, find_on_path, has_token, json_str,
 };
 use symphony_core::FailureType;
 
@@ -27,17 +27,6 @@ pub struct AntigravityAdapter {
     pub binary: Option<PathBuf>,
     /// `true`: `--dangerously-skip-permissions` (el agente puede ejecutar cualquier comando).
     pub skip_permissions: bool,
-}
-
-fn find_agy() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(format!("agy{}", std::env::consts::EXE_SUFFIX)))
-        .find(|p| p.is_file())
-}
-
-fn s(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 fn tool_kind(name: &str) -> ToolKind {
@@ -63,14 +52,14 @@ fn step_id(step: &Value) -> Option<String> {
 
 fn param(step: &Value, keys: &[&str]) -> Option<String> {
     let p = &step["tool_info"]["parameters"];
-    keys.iter().find_map(|k| s(p, k))
+    keys.iter().find_map(|k| json_str(p, k))
 }
 
 fn step_events(step: &Value) -> Vec<AgentEvent> {
     let state = step.get("state").and_then(Value::as_str).unwrap_or("");
     match step.get("step_type").and_then(Value::as_str) {
         Some("tool") => {
-            let Some(tool) = s(step, "tool_name").filter(|t| !t.is_empty()) else {
+            let Some(tool) = json_str(step, "tool_name").filter(|t| !t.is_empty()) else {
                 return Vec::new();
             };
             let kind = tool_kind(&tool);
@@ -125,40 +114,52 @@ fn step_events(step: &Value) -> Vec<AgentEvent> {
 
 fn result_events(result: &Value, adapter: &AntigravityAdapter) -> Vec<AgentEvent> {
     if result.get("status").and_then(Value::as_str) == Some("ERROR") {
-        return s(result, "error")
-            .and_then(|e| adapter.parse_error(&e))
-            .map(|e| vec![AgentEvent::ProviderError(e)])
-            .unwrap_or_default();
+        let text = json_str(result, "error").unwrap_or_default();
+        // Un error que no se reconoce no puede perderse: el run saldría como terminado.
+        let error = adapter.parse_error(&text).unwrap_or_else(|| ProviderError {
+            failure_type: FailureType::ProviderError,
+            raw_code: Some("agy_error".into()),
+            message: symphony_core::redact(&text).chars().take(500).collect(),
+            retry_after_ms: None,
+            resets_at: None,
+            transient: false,
+        });
+        let note = format!("Antigravity falló: {}", error.message);
+        return vec![
+            AgentEvent::ProviderError(error),
+            AgentEvent::AssistantText { text: note },
+        ];
     }
-    let text = s(result, "response").unwrap_or_default();
+    let mut out = Vec::new();
+    let text = json_str(result, "response").unwrap_or_default();
     if !text.trim().is_empty() {
-        return vec![AgentEvent::AssistantText {
+        out.push(AgentEvent::AssistantText {
             text: text.trim_end().to_string(),
-        }];
+        });
     }
-    // `SUCCESS` sin respuesta y con acciones denegadas: el agente no pudo hacer lo pedido.
+    // Lo denegado se avisa siempre: el paso de la herramienta figura `DONE` aunque no se ejecutó.
     let denied: Vec<String> = result["denied_actions"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|d| s(d, "action"))
+        .filter_map(|d| json_str(d, "action"))
         .collect();
-    if denied.is_empty() {
-        return Vec::new();
+    if !denied.is_empty() {
+        out.push(AgentEvent::AssistantText {
+            text: format!(
+                "Antigravity denegó acciones sin permiso en modo headless ({}); no se ejecutaron.",
+                denied.join(", ")
+            ),
+        });
     }
-    vec![AgentEvent::AssistantText {
-        text: format!(
-            "Antigravity no pudo continuar: denegó acciones sin permiso en modo headless ({}).",
-            denied.join(", ")
-        ),
-    }]
+    out
 }
 
 impl AntigravityAdapter {
     fn binary(&self) -> Result<PathBuf, AdapterError> {
         self.binary
             .clone()
-            .or_else(find_agy)
+            .or_else(|| find_on_path("agy"))
             .ok_or_else(|| AdapterError::NotInstalled("agy".into()))
     }
 
@@ -287,7 +288,7 @@ impl ProviderAdapter for AntigravityAdapter {
         };
         match v.get("event").and_then(Value::as_str) {
             Some("init") => vec![AgentEvent::SessionStarted {
-                cli_session_id: s(&v, "conversation_id").filter(|id| !id.is_empty()),
+                cli_session_id: json_str(&v, "conversation_id").filter(|id| !id.is_empty()),
                 model: None,
             }],
             Some("step_update") => step_events(&v["step_update"]),
@@ -311,11 +312,11 @@ impl ProviderAdapter for AntigravityAdapter {
         } else if lower.contains("resource_exhausted") || lower.contains("quota") {
             (FailureType::DailyQuota, "quota", false)
         } else if lower.contains("rate limit")
-            || lower.contains("429")
+            || has_token(&lower, "429")
             || lower.contains("too many requests")
         {
             (FailureType::TempRateLimit, "rate_limit", true)
-        } else if lower.contains("401")
+        } else if has_token(&lower, "401")
             || lower.contains("unauthenticated")
             || lower.contains("unauthorized")
             || lower.contains("not logged in")

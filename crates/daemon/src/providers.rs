@@ -50,7 +50,16 @@ pub fn detect_all(adapters: &[Box<dyn ProviderAdapter>]) -> Vec<Detected> {
             .iter()
             .map(|a| scope.spawn(move || detect_one(a.as_ref())))
             .collect();
-        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        adapters
+            .iter()
+            .zip(handles)
+            .map(|(a, h)| {
+                h.join().unwrap_or_else(|_| {
+                    tracing::warn!(provider = a.provider_id(), "`detect` entró en pánico");
+                    describe(a.as_ref(), "ERROR", None, None)
+                })
+            })
+            .collect()
     })
 }
 
@@ -67,6 +76,15 @@ fn detect_one(a: &dyn ProviderAdapter) -> Detected {
             ("ERROR", None, None)
         }
     };
+    describe(a, setup_state, cli_path, cli_version)
+}
+
+fn describe(
+    a: &dyn ProviderAdapter,
+    setup_state: &str,
+    cli_path: Option<String>,
+    cli_version: Option<String>,
+) -> Detected {
     let models = if setup_state == "READY" {
         a.list_models()
             .into_iter()

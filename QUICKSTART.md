@@ -3,7 +3,7 @@
 ## 0. Requisitos previos
 
 - **Rust 1.95+** y Git instalados
-- **Claude Code** o **Codex** (o ambos) instalados y autenticados
+- Al menos uno de estos CLIs instalado y autenticado: **Claude Code**, **Codex**, **Kimi Code**, **Antigravity** (`agy`) o **GitHub Copilot CLI**
 - Windows, macOS o Linux
 
 Verifica:
@@ -11,6 +11,9 @@ Verifica:
 rustc --version
 claude --version    # si lo tienes
 codex --version     # si lo tienes
+kimi --version      # si lo tienes
+agy --version       # si lo tienes
+copilot --version   # si lo tienes
 ```
 
 ---
@@ -208,6 +211,21 @@ switch 1 codex/gpt-5.x
 
 ---
 
+### Proveedores y permisos
+
+| Proveedor | Id de modelo | Qué puede hacer el agente | Skills en el chat |
+|---|---|---|---|
+| Claude Code | `claude/haiku`, `sonnet`, `opus`, … | editar archivos | sí (`/skill`) |
+| Codex | `openai/gpt-5.6-luna`, … | editar dentro del worktree | sí (`$skill`) |
+| Kimi Code | `moonshot/default` (el modelo que tengas configurado en Kimi) | **todo, sin pedir permiso**: `--print` aprueba las herramientas y Kimi no tiene sandbox | no |
+| Antigravity | `google/gemini-3.8-flash-low`, `…-medium`, `…-high`, `gemini-3.1-pro-high/low` | editar archivos; **no ejecuta comandos** (en headless deniega lo que pide permiso) | no |
+| Copilot | `github/auto` (el único que aceptó `--model` en la cuenta de prueba) | editar archivos; comandos solo de lectura | no |
+
+- Un modelo que tu cuenta no tenga habilitado falla al instante con «not available» y Symphony pasa al siguiente según la política de failover.
+- Copilot con `auto` puede usar modelos distintos entre turnos, y no informa de tokens: el cambio por umbral de uso no le aplica.
+- Antigravity y Copilot pueden ejecutarlo todo si lo permites (`skip_permissions` / `allow_all_tools` en sus adapters), pero todavía no hay opción en `config.toml`.
+- Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.
+
 ### Skills en el chat
 Las skills que ya tienes instaladas en cada CLI funcionan en el chat (las de usuario y las de plugins; las de proyecto solo si están commiteadas en la rama base del chat):
 - Con un modelo de **Claude**: escribe `/nombre-de-la-skill lo que quieras` al inicio del mensaje.
@@ -394,10 +412,10 @@ Cuando Leo use v0.1 durante 2+ semanas y documente learnings:
 - ⏳ **P08**: Scheduler de 3+ agentes, DAG de tareas
 - ⏳ **P09**: Context Engine (handoff sin explicación)
 - ⏳ **P10**: Failover automático
-- ⏳ **P11**: Más proveedores (Kimi, Antigravity, Copilot)
+- ✅ **P11**: Más proveedores (Kimi, Antigravity, Copilot): ver «Proveedores y permisos»
 - ⏳ **P15**: GUI de escritorio (Tauri)
 
-Por ahora: **v0.1 = Claude Code + Codex + TUI + handoff**.
+Por ahora: **v0.1 + chat general + cinco proveedores (Claude Code, Codex, Kimi, Antigravity, Copilot) + handoff entre ellos**.
 
 ---
 

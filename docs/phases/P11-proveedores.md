@@ -110,3 +110,32 @@ Otras corridas: Claude → Kimi con una espera de 10 s cortó a los 12 s con 0/6
 
 ## Dependencias agregadas
 Ninguna externa (solo `symphony-testkit` como dev-dependency interna de `cli` y `tui`).
+
+### P11.S6 · Cierre — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-01
+- **Qué se hizo:** revisión de código del diff de la fase (`code-review` high), README y QUICKSTART actualizados (cinco proveedores, tabla de permisos y skills), `cargo deny` limpio, protocolo §4.6.
+
+#### Revisión de código del diff de la fase (`code-review`, nivel high, 10 hallazgos)
+**Corregidos (7), cada uno con test:**
+1. `pinned_bin` podaba al instante la copia de un binario sin recompilar hacía más de un día (la copia heredaba su fecha); ahora la copia se marca como nueva y `prune_old` respeta la suya. Test `a_binary_not_rebuilt_for_days_is_still_pinned` (falla con el código anterior).
+2. **Regresión mía de ADR-0009:** `parse_stderr_line` (Kimi, Copilot) pasaba cualquier línea de stderr por `parse_error`, que busca subcadenas sueltas (`429`, `401`, `quota`): un aviso inocuo podía cortar una corrida sana y disparar un failover. Ahora solo se clasifican las líneas que parecen un error (`Error…`, `fatal…`) y los códigos se buscan como palabra entera (`has_token`). Tests con ruido real (rutas, avisos, contadores).
+3. Antigravity: un `result` `ERROR` que no se reconocía se perdía y el run podía acabar como terminado; ahora emite un `ProviderError` genérico más un aviso con el texto redactado.
+4. Antigravity: las acciones denegadas solo se avisaban si la respuesta venía vacía; ahora se avisan siempre.
+5. `detect_all`: un pánico de un adapter hacía desaparecer al proveedor sin rastro; ahora queda `ERROR` y se registra.
+6. Duplicación: `find_on_path`, `json_str`, `has_token` y `looks_like_error` pasan a `symphony-adapter-common` y los tres adapters nuevos los usan (tests en `common/tests/helpers.rs`). El clasificador de errores completo sigue por adapter.
+
+**Aceptados como límite conocido (documentados):**
+- `FileModified` se emite al pedir la edición en Copilot y Kimi (el resultado no trae la ruta): el runtime solo lo usa como disparador de checkpoint y el handoff se arma con `git status`, así que una edición denegada no llega al siguiente proveedor. Antigravity la emite al terminar.
+- El tipo de herramienta del resultado (`ToolFinished`) se deduce del texto (Kimi y Copilot) o no se puede saber (Antigravity marca `DONE` una herramienta denegada): un comando denegado queda como «tool falló» sin comando y el siguiente comando puede heredar el pendiente. Arreglarlo exige que el parser guarde el estado entre líneas.
+- **Id de sesión de Kimi y Copilot solo al terminar el turno:** si se corta el proceso antes (stop, watchdog, caída), no queda `cli_session_id` y los mensajes siguientes caen en handoff. La alternativa (que el executor fije el id, opción 3 del ADR-0009) se descartó con la aprobación de Leo; se reabre si el uso real lo pide.
+- Kimi no tiene sandbox ni restricción (decisión de Leo pendiente; documentado en el QUICKSTART). `detect` no tiene límite de tiempo.
+
+## Estado final
+Symphony tiene ahora cinco proveedores con el mismo contrato: Claude Code, Codex, Kimi Code (`moonshot`), Antigravity (`google`) y Copilot (`github`). Los tres nuevos entran al chat, retoman su sesión y reciben un handoff: 20 pares dirigidos con `fake-agent` y 3 pares con CLIs reales (Claude→Kimi, Codex→Copilot, Antigravity→Claude) terminan una tarea cortada a media. Dos cambios al core, ambos con ADR: P11 antes de P08–P10 (ADR-0008) y `parse_stderr_line` (ADR-0009). Limitaciones conocidas: sin skills nativas de los tres en el chat; Kimi sin sandbox y sin restricción de comandos; Antigravity y Copilot editan pero no ejecutan comandos (opt-in solo desde el código); Copilot solo ofrece `auto`; los errores de cuota y auth son sintéticos; los ToS de los tres siguen sin revisar.
+
+## Notas para el siguiente agente
+- Cada CLI nuevo se graba en `fixtures/providers/<nombre>/`; los tests de adapter usan esas fixtures y la suite de contrato (`adapters/common/src/contract.rs`). Para añadir un proveedor: crate en `crates/adapters/`, registro en `daemon/src/providers.rs`, test live en `cli/tests/live_resume.rs` y fila en la matriz.
+- Los tres CLIs se actualizan solos: si el esquema de eventos cambia, vuelve a grabar las fixtures y compara con `docs/research/cli-p11.md`.
+- Los tests ejecutan copias fijas de `symphonyd` y `fake-agent` (`symphony_testkit::pinned_bin`); no vuelvas a lanzar los binarios de `target/debug` directamente desde un test.
+- Si algo falla en Windows con «Acceso denegado» al compilar, busca un `symphonyd.exe` huérfano antes de nada.
+- Pendientes que no son de esta fase: opciones de `config.toml` para permisos, ToS, skills de los tres, sondear los modelos habilitados de Copilot, y la revisión de P08–P16 con uso real (STATUS).

@@ -32,3 +32,27 @@ fn falls_back_to_the_original_when_it_cannot_copy() {
     let missing = std::env::temp_dir().join("no-existe").join("x.exe");
     assert_eq!(pinned_bin(&missing), missing);
 }
+
+#[test]
+fn a_binary_not_rebuilt_for_days_is_still_pinned() {
+    let dir = tempfile::tempdir().unwrap();
+    let debug = dir.path().join("debug");
+    std::fs::create_dir_all(&debug).unwrap();
+    let bin = debug.join("tool.exe");
+    std::fs::write(&bin, b"viejo").unwrap();
+    let three_days = std::time::Duration::from_secs(3 * 24 * 3600);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&bin)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - three_days)
+        .unwrap();
+
+    let pinned = pinned_bin(&bin);
+    assert_ne!(
+        pinned, bin,
+        "la copia no debe podarse por la fecha del original"
+    );
+    assert!(pinned.is_file());
+    assert_eq!(pinned_bin(&bin), pinned);
+}

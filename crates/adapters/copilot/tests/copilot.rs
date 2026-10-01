@@ -191,6 +191,19 @@ fn stderr_gives_the_unavailable_model_error() {
     ));
     assert!(a.parse_stderr_line("").is_empty());
     assert!(a.parse_stderr_line("ruido cualquiera").is_empty());
+    // Avisos y rutas con «quota», «429» o «401» no son errores (ADR-0009: no cortar corridas sanas).
+    for noise in [
+        "Loaded 4012 entries from /var/401/cache",
+        "warning: quota almost reached",
+        "429 items indexed",
+    ] {
+        assert!(a.parse_stderr_line(noise).is_empty(), "{noise}");
+    }
+    assert_eq!(
+        a.parse_stderr_line("Error: HTTP 429 too many requests")
+            .len(),
+        1
+    );
 }
 
 #[test]

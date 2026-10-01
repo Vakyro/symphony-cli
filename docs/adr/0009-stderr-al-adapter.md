@@ -33,5 +33,8 @@ PLAN P11 dice «sin cambios en el core: si un adapter necesita cambiar el core, 
 ## Respuesta de Leo (2026-10-01)
 Aprobó la opción 2.
 
+## Corrección posterior (revisión de P11.S6)
+La primera versión pasaba cualquier línea de stderr por `parse_error` y un aviso inocuo (una ruta con `401`, «quota» en un warning) podía cortar una corrida sana. Las implementaciones de Kimi y Copilot ahora solo clasifican líneas que parecen un error (`Error…`, `fatal…`) y buscan los códigos HTTP como palabra entera. Regla para futuros adapters: **stderr es ruido salvo que se demuestre lo contrario**.
+
 ## Implementación
 `parse_stderr_line` en `adapters/common`; `executor.rs` parte `handle_line` en parsear y `apply_events`; Kimi lo implementa. L2: `session_id_from_stderr_is_stored_and_resumed` (falla sin el cambio del executor, verificado). El `fake-agent` gana `--session-on stderr` (proveedor fake `fake-stderr`).
