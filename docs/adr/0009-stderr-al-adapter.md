@@ -1,8 +1,8 @@
 # ADR-0009 · El executor entrega stderr al adapter
 
-- **Estado:** PROPUESTO (pendiente de aprobación de Leo)
+- **Estado:** ACEPTADO
 - **Fecha:** 2026-10-01
-- **Autor:** claude-code/sonnet-5.5 · **Aprobado por:** —
+- **Autor:** claude-code/sonnet-5.5 · **Aprobado por:** Leo (2026-10-01, opción 2)
 - **Fase/paso:** P11.S2 (adapter Kimi)
 
 ## Contexto
@@ -30,5 +30,8 @@ PLAN P11 dice «sin cambios en el core: si un adapter necesita cambiar el core, 
 - Sin migración ni dependencias nuevas.
 - Si no se aprueba: el adapter de Kimi queda registrado pero sin `resume`; habría que sacarlo del selector del chat.
 
-## Pregunta para Leo
-¿Apruebas la opción 2? Si no, ¿prefieres la 3 (el executor fija el id)?
+## Respuesta de Leo (2026-10-01)
+Aprobó la opción 2.
+
+## Implementación
+`parse_stderr_line` en `adapters/common`; `executor.rs` parte `handle_line` en parsear y `apply_events`; Kimi lo implementa. L2: `session_id_from_stderr_is_stored_and_resumed` (falla sin el cambio del executor, verificado). El `fake-agent` gana `--session-on stderr` (proveedor fake `fake-stderr`).

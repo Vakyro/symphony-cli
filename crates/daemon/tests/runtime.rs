@@ -1783,6 +1783,47 @@ ms = 1500
     e.writer.shutdown();
 }
 
+/// ADR-0009: un CLI que da su id de sesión solo por stderr (Kimi) lo deja guardado y
+/// permite retomar la sesión con ese mismo id.
+#[tokio::test(flavor = "multi_thread")]
+async fn session_id_from_stderr_is_stored_and_resumed() {
+    let script = "[[step]]
+kind = \"say\"
+text = \"listo\"
+";
+    let e = env_with(&[("fake-stderr", script)], None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "id por stderr",
+            Execution::Exact("fake-stderr/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id;
+    let first: String = one(
+        &e,
+        &format!("SELECT cli_session_id FROM agent_runs WHERE agent_id = '{agent}'"),
+    );
+    assert!(
+        first.starts_with("fake-"),
+        "id de stderr sin guardar: {first}"
+    );
+
+    let run = e.runtime.continue_session(agent, "sigue").await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let second: String = one(
+        &e,
+        &format!("SELECT cli_session_id FROM agent_runs WHERE id = '{run}'"),
+    );
+    assert_eq!(second, first, "el run nuevo debe retomar la misma sesión");
+    e.writer.shutdown();
+}
+
 /// P07.5.S1: un mensaje después del turno retoma la sesión del CLI (mismo modelo y
 /// mismo session id, sin handoff) y reabre al agente `COMPLETED`.
 #[tokio::test(flavor = "multi_thread")]

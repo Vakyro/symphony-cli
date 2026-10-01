@@ -202,3 +202,20 @@ fn lists_one_provider_scoped_model() {
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "moonshot/default");
 }
+
+#[test]
+fn stderr_lines_give_the_session_id_and_errors() {
+    let a = adapter();
+    let stderr = lines("stderr-session.txt").remove(0);
+    assert!(matches!(
+        &a.parse_stderr_line(&stderr)[..],
+        [AgentEvent::SessionStarted { cli_session_id: Some(id), .. }]
+            if id == "0ef4ce57-f034-48b3-ba6d-8abd10c6b84a"
+    ));
+    assert_eq!(
+        names(&a.parse_stderr_line("Error 429: too many requests")),
+        ["ProviderError"]
+    );
+    assert!(a.parse_stderr_line("").is_empty());
+    assert!(a.parse_stderr_line("ruido cualquiera").is_empty());
+}

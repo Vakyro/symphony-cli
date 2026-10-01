@@ -18,12 +18,12 @@
 - **Cómo se verificó:** 7 turnos reales con exit 0; las fixtures no contienen rutas ni usuario.
 - **Pendiente / notas:** ToS de los tres (Leo); hooks/Test C no investigado (no hace falta para el chat); errores de cuota solo sintéticos; eventos de herramientas sin observar.
 
-### P11.S2 · Adapter Kimi — 🟡 (falta que el runtime lea el id de sesión, ADR-0009)
+### P11.S2 · Adapter Kimi — ✅ (live L3 pendiente de permiso)
 - **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-01
-- **Qué se hizo:** crate `symphony-adapter-kimi` (id de proveedor `moonshot`): `spawn`/`resume`/`attach` con `-S`, prompt por stdin, eventos de texto y herramientas (Shell → comando, `WriteFile`/`StrReplaceFile` → edición), `parse_error`, modelo `moonshot/default` (sin `-m`; los modelos salen de la config de Kimi). Registrado en `providers.rs`. Sin dependencias nuevas.
-- **Archivos clave:** `crates/adapters/kimi/{src/lib.rs,tests/kimi.rs}`, `crates/daemon/src/providers.rs`, `fixtures/providers/kimi/`
-- **Cómo se verificó:** `cargo xtask check` → 257 passed (7 nuevos: suite de contrato con fixtures reales, eventos de herramientas, specs, modelo por defecto).
-- **Pendiente / notas:** el id de sesión solo sale por stderr y el executor descarta stderr → **sin ADR-0009 un chat con Kimi no puede retomar la sesión**; skills de Kimi (prefijo y catálogo) sin investigar; live L3 sin correr (necesita el cambio anterior); `parse_error` de cuota/auth es sintético.
+- **Qué se hizo:** crate `symphony-adapter-kimi` (id de proveedor `moonshot`): `spawn`/`resume`/`attach` con `-S`, prompt por stdin, eventos de texto y herramientas (Shell → comando, `WriteFile`/`StrReplaceFile` → edición), `parse_error`, modelo `moonshot/default` (sin `-m`; los modelos salen de la config de Kimi). Registrado en `providers.rs`. **ADR-0009:** el trait gana `parse_stderr_line` (por defecto vacío) y el executor lo aplica; Kimi saca de ahí su id de sesión. Sin dependencias nuevas.
+- **Archivos clave:** `crates/adapters/kimi/`, `crates/adapters/common/src/lib.rs`, `crates/daemon/src/{executor,providers}.rs`, `crates/testkit/` (`--session-on stderr`), `fixtures/providers/kimi/`
+- **Cómo se verificó:** `cargo xtask check` → 259 passed. L2 `session_id_from_stderr_is_stored_and_resumed` (falla sin el cambio del executor).
+- **Pendiente / notas:** live L3 de Kimi con el runtime real (consume cuota; falta permiso de Leo); skills de Kimi (prefijo y catálogo) sin investigar; `parse_error` de cuota/auth es sintético; decisión de Leo sobre Kimi sin sandbox (`--print` auto-aprueba herramientas).
 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
@@ -31,16 +31,17 @@
 | Turno headless estructurado en Kimi, Copilot y Antigravity | live mínimo | ✅ |
 | `resume` conserva contexto en los tres | live: «¿qué palabra te pedí?» → `ok` | ✅ |
 | Copilot acepta `--session-id` para un UUID nuevo | live | ✅ |
-| Adapter de Kimi pasa la suite de contrato con salidas reales | `cargo nextest run -p symphony-adapter-kimi` | ✅ 7/7 |
+| Adapter de Kimi pasa la suite de contrato con salidas reales | `cargo nextest run -p symphony-adapter-kimi` | ✅ 8/8 |
+| El runtime guarda el id de sesión dado por stderr y lo retoma | L2 `session_id_from_stderr_is_stored_and_resumed` | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|
-| Kimi da el id de sesión solo por stderr y el executor lo descarta | sin id no hay `resume` en el chat | `kimi --print -p x` | ADR-0009 |
 | Copilot cambia de modelo al retomar con `auto` | rompe «modelo exacto» | `copilot --resume=<id> -p x` sin `--model` | S4: pasar siempre `--model` |
 
 ## Decisiones tomadas
 - ADR-0008: P11 antes de P08–P10.
+- ADR-0009: el executor entrega stderr al adapter (`parse_stderr_line`).
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |

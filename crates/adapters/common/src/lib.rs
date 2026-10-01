@@ -237,6 +237,11 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// Una línea de stdout del CLI → eventos. Nunca falla: lo que no entiende lo ignora.
     fn parse_stream_line(&self, line: &str) -> Vec<AgentEvent>;
+    /// Una línea de stderr del CLI → eventos (ADR-0009). Por defecto, ninguno: solo la
+    /// implementan los CLIs que dan por stderr algo que Symphony necesita (id de sesión, errores).
+    fn parse_stderr_line(&self, _line: &str) -> Vec<AgentEvent> {
+        Vec::new()
+    }
     /// El payload JSON de un hook → eventos.
     fn parse_hook(&self, payload: &Value) -> Vec<AgentEvent>;
     /// Texto de error (stderr, mensaje de fallo) → error clasificado, si lo reconoce.

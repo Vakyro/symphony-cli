@@ -6,7 +6,7 @@
 //!   deltas, ni uso de tokens, ni evento de fin de turno: el turno termina al salir el proceso.
 //! - `-S <id>` crea la sesión con ese id o la retoma si existe; sirve para `spawn` y `resume`.
 //! - El id de sesión solo sale por **stderr** (`To resume this session: kimi -r <id>`): ver
-//!   [`session_from_stderr`].
+//!   [`session_from_stderr`] y `parse_stderr_line` (ADR-0009).
 //! - Symphony no lee `~/.kimi`: el login y la config de modelos son cosa del CLI.
 
 use std::path::{Path, PathBuf};
@@ -260,6 +260,19 @@ impl ProviderAdapter for KimiAdapter {
             Some("tool") => tool_finished(&v),
             _ => Vec::new(),
         }
+    }
+
+    /// El id de sesión (`To resume this session: kimi -r <id>`) y los errores de stderr.
+    fn parse_stderr_line(&self, line: &str) -> Vec<AgentEvent> {
+        if let Some(id) = session_from_stderr(line) {
+            return vec![AgentEvent::SessionStarted {
+                cli_session_id: Some(id),
+                model: None,
+            }];
+        }
+        self.parse_error(line)
+            .map(|e| vec![AgentEvent::ProviderError(e)])
+            .unwrap_or_default()
     }
 
     fn parse_hook(&self, _payload: &Value) -> Vec<AgentEvent> {

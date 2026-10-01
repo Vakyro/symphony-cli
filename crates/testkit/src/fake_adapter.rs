@@ -11,6 +11,9 @@ use symphony_adapter_common::{
 };
 use symphony_core::FailureType;
 
+/// Proveedor fake cuyo id de sesión sale por stderr y no por el stream.
+pub const STDERR_SESSION_PROVIDER: &str = "fake-stderr";
+
 #[derive(Debug, Clone)]
 pub struct FakeAdapter {
     /// Binario `fake-agent`.
@@ -105,6 +108,10 @@ impl ProviderAdapter for FakeAdapter {
             .args(["--stdin", "stream"])
             .cwd(&req.worktree)
             .with_stdin();
+        // Simula a Kimi: el id de sesión solo sale por stderr (ADR-0009).
+        if self.provider == STDERR_SESSION_PROVIDER {
+            spec = spec.args(["--session-on", "stderr"]);
+        }
         if let Some(id) = &req.session_id {
             spec = spec.args(["--session-id", id]);
         }
@@ -223,6 +230,17 @@ impl ProviderAdapter for FakeAdapter {
             (Some("result"), _) => vec![AgentEvent::TurnFinished { last_message: None }],
             _ => Vec::new(),
         }
+    }
+
+    fn parse_stderr_line(&self, line: &str) -> Vec<AgentEvent> {
+        line.strip_prefix("FAKE_SESSION ")
+            .map(|id| {
+                vec![AgentEvent::SessionStarted {
+                    cli_session_id: Some(id.trim().to_string()),
+                    model: None,
+                }]
+            })
+            .unwrap_or_default()
     }
 
     fn parse_hook(&self, payload: &Value) -> Vec<AgentEvent> {
