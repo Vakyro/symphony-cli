@@ -7,9 +7,9 @@
 ![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-blue)
 ![Licencia MIT](https://img.shields.io/badge/licencia-MIT-green)
 
-**v0.1.0 disponible.** MVP funcional con Claude Code + Codex, TUI, worktrees, handoff y recovery.
+**v0.1.0 disponible, y el chat general (P07.5) ya está en `main`.** Abres `symphony` en cualquier carpeta, conversas con Claude Code o Codex y puedes pasar de uno a otro a mitad de conversación sin repetir nada. Incluye TUI, worktrees, handoff y recovery.
 
-Symphony es un runtime local, escrito en Rust, que coordina los CLIs oficiales de IA para código (**Claude Code, Codex, Antigravity, Kimi Code y Copilot**) desde una sola terminal.
+Symphony es un runtime local, escrito en Rust, que coordina los CLIs oficiales de IA para código desde una sola terminal. Hoy funcionan **Claude Code y Codex**; Antigravity, Kimi Code y Copilot están en el roadmap.
 
 **El problema.** Si usas varios de estos CLIs, los tienes en terminales separadas. Cuando a uno se le acaba la cuota, abres otro y le vuelves a explicar todo: la tarea, qué archivos tocaste, qué faltaba. Y si corres tres agentes a la vez, cada uno lanza sus builds y tests y la computadora se traba.
 
@@ -23,9 +23,21 @@ MODELO  = quien lo ejecuta ahora mismo            → se puede cambiar
 Si Claude se queda sin cuota a media tarea, Symphony le pasa el mismo agente a Codex con un checkpoint que se fue construyendo mientras trabajaba. Codex continúa desde ahí sin que le vuelvas a explicar nada.
 
 > [!NOTE]
-> **v0.1.0 está listo.** Descarga o compila, abre `symphony` y crea un agente. El roadmap está en [`docs/progress/STATUS.md`](docs/progress/STATUS.md) y el detalle completo en [`PLAN.md`](PLAN.md).
+> **v0.1.0 y el chat general están listos.** Compila o instala, abre `symphony` y conversa. El roadmap está en [`docs/progress/STATUS.md`](docs/progress/STATUS.md) y el detalle completo en [`PLAN.md`](PLAN.md).
 
 ---
+
+## El chat
+
+La vista inicial de `symphony` es un chat agéntico, como el de Claude Code o Codex, con la ventaja de que el contexto no se queda atado a un proveedor.
+
+- **Cambia de proveedor a mitad de conversación.** Elige otro modelo al enviar un mensaje y el nuevo proveedor recibe la conversación, el `git status` y el diff del worktree. Si un proveedor se queda sin cuota, el chat pasa solo al siguiente. También hay una política opcional por umbral de tokens, apagada por defecto.
+- **Tu trabajo queda en git.** El chat vive en su propio worktree, en la rama `symphony/chat`, con un commit por turno cuando hubo cambios.
+- **Skills nativas.** `/skill` en Claude y `$skill` en Codex funcionan dentro del chat, con autocompletado al escribir `/` o `$`. Una skill escrita para un proveedor no se traduce al otro, y lo que una skill deja en el contexto de la sesión no viaja en un cambio.
+- **Copiar y exportar.** `Ctrl+Y` copia la respuesta, `F2` activa el modo de selección y `Ctrl+E` exporta la conversación completa a Markdown en `.symphony/exports/`.
+- **Se abre desde cualquier carpeta** una vez instalado con `cargo install` (ver [`QUICKSTART.md`](QUICKSTART.md)).
+
+**Qué cuesta cambiar de proveedor.** En una prueba real (una sola corrida, modelos baratos, conversación corta), el proveedor de destino leyó unos 20,7k tokens al pasar de Claude a Codex y unos 31,1k al volver a Claude. El handoff de Symphony aportó solo 2,4k–2,9k; el resto es el arranque propio de cada CLI. Son cifras de tamaño de contexto, no de dinero ni de cuota, y falta medir conversaciones largas. Detalle en [`docs/phases/P07.5-chat.md`](docs/phases/P07.5-chat.md).
 
 ## ¿Funciona la idea?
 
@@ -47,10 +59,11 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
  symphonyd (daemon)
  ├── Estado ........ SQLite + Git + object store (BLAKE3 + zstd)
  ├── Event bus ..... hooks de cada CLI normalizados a un solo stream
- ├── Scheduler ..... clases de operación 0–4 + límites del SO (Job Objects / cgroups)
  ├── Checkpoints ... incrementales, escritos antes de fallar, no después
- ├── Context engine  arma el handoff para el siguiente modelo
- └── Adapters ...... Claude Code · Codex · Antigravity · Kimi · Copilot
+ ├── Handoff ....... arma el prompt para el siguiente modelo (con la conversación)
+ ├── Adapters ...... Claude Code · Codex  (Antigravity · Kimi · Copilot: planeados)
+ ├── Scheduler ..... planeado (P08): clases de operación 0–4 + límites del SO
+ └── Context engine  planeado (P09): handoff comprimido y MCP de contexto
         │
         ▼
  CLIs oficiales, cada uno en su propio worktree y con su propio login
@@ -76,7 +89,8 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
 | P00 · Arranque | Repo, workspace, CI, reglas de calidad | ✅ p00-done |
 | P01 · Spike | Evidencia de hooks, handoff y consumo con Claude Code + Codex | ✅ p01-done |
 | P02–P07 · Core → **v0.1** | Daemon, SQLite, worktrees, adapters, checkpoints, handoff, TUI | ✅ **v0.1.0** |
-| P07.S10 | Uso real 2+ semanas, replanificación de P08–P16 con evidencia | 🟡 en curso |
+| P07.5 · Chat general | Chat como vista inicial, cambio de proveedor sin perder contexto, skills, exportar | ✅ p075-done |
+| P07.S10 | Replanificación de P08–P16 con lo aprendido en el uso (ADR-0007) | 🟡 en curso |
 | P08 · Multiagente | Scheduler de recursos, DAG, validación | ⏳ (diferido a P07.S10) |
 | P09 · Context engine | Handoff comprimido, MCP de contexto | ⏳ |
 | P10 · Failover → **v0.5** | Salud de proveedores, failover automático, profiles | ⏳ |
@@ -94,11 +108,14 @@ TL;DR:
 ```bash
 git clone https://github.com/Vakyro/symphony-cli.git
 cd symphony-cli
-cargo build -p symphony-cli -p symphony-daemon --release
+cargo install --path crates/cli --locked
+cargo install --path crates/daemon --locked
 
 cd /tu/proyecto
-./target/release/symphony
+symphony
 ```
+
+Necesitas Claude Code o Codex instalado y con sesión iniciada; Symphony no toca tus credenciales.
 
 ## Compilar
 
