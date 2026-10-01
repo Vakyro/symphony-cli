@@ -19,5 +19,6 @@ tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 
 [dev-dependencies]
 insta.workspace = true
+symphony-testkit = { path = "../testkit" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

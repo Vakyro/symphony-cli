@@ -27,7 +27,9 @@ pub fn build(package: &str, bin: &str) -> PathBuf {
         .status()
         .unwrap();
     assert!(status.success(), "no se pudo construir {bin}");
-    target_dir().join(format!("{bin}{}", std::env::consts::EXE_SUFFIX))
+    symphony_testkit::pinned_bin(
+        &target_dir().join(format!("{bin}{}", std::env::consts::EXE_SUFFIX)),
+    )
 }
 
 pub fn git(dir: &Path, args: &[&str]) {

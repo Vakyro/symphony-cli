@@ -2524,6 +2524,7 @@ dependencies = [
  "symphony-core",
  "symphony-protocol",
  "symphony-store",
+ "symphony-testkit",
  "symphony-tui",
  "tempfile",
  "thiserror 2.0.21",
@@ -2667,6 +2668,7 @@ dependencies = [
  "ratatui",
  "serde_json",
  "symphony-protocol",
+ "symphony-testkit",
  "tempfile",
  "tokio",
 ]

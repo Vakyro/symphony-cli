@@ -1,0 +1,34 @@
+//! `pinned_bin`: la copia fija de un binario de test (ver `symphony_testkit::pinned_bin`).
+// Código de test: CONSTRAINTS C3 permite unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use symphony_testkit::pinned_bin;
+
+#[test]
+fn copies_once_and_leaves_the_original_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let debug = dir.path().join("debug");
+    std::fs::create_dir_all(&debug).unwrap();
+    let bin = debug.join("tool.exe");
+    std::fs::write(&bin, b"v1").unwrap();
+
+    let a = pinned_bin(&bin);
+    let b = pinned_bin(&bin);
+    assert_eq!(a, b, "la misma versión comparte copia");
+    assert_ne!(a, bin);
+    assert_eq!(a.parent().unwrap(), dir.path().join("test-bins"));
+    assert_eq!(std::fs::read(&a).unwrap(), b"v1");
+
+    // El original se puede reemplazar aunque la copia siga en uso.
+    std::fs::write(&bin, b"version 2").unwrap();
+    let c = pinned_bin(&bin);
+    assert_ne!(c, a, "otra versión, otra copia");
+    assert_eq!(std::fs::read(&c).unwrap(), b"version 2");
+    assert_eq!(std::fs::read(&a).unwrap(), b"v1");
+}
+
+#[test]
+fn falls_back_to_the_original_when_it_cannot_copy() {
+    let missing = std::env::temp_dir().join("no-existe").join("x.exe");
+    assert_eq!(pinned_bin(&missing), missing);
+}

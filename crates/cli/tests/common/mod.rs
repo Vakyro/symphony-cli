@@ -18,8 +18,10 @@ pub fn symphonyd() -> PathBuf {
                 .status()
                 .expect("cargo build symphonyd");
             assert!(status.success(), "no se pudo construir symphonyd");
-            PathBuf::from(env!("CARGO_BIN_EXE_symphony"))
-                .with_file_name(format!("symphonyd{}", std::env::consts::EXE_SUFFIX))
+            symphony_testkit::pinned_bin(
+                &PathBuf::from(env!("CARGO_BIN_EXE_symphony"))
+                    .with_file_name(format!("symphonyd{}", std::env::consts::EXE_SUFFIX)),
+            )
         })
         .clone()
 }
@@ -41,8 +43,10 @@ pub fn fake_agent() -> PathBuf {
                 .status()
                 .expect("cargo build fake-agent");
             assert!(status.success(), "no se pudo construir fake-agent");
-            PathBuf::from(env!("CARGO_BIN_EXE_symphony"))
-                .with_file_name(format!("fake-agent{}", std::env::consts::EXE_SUFFIX))
+            symphony_testkit::pinned_bin(
+                &PathBuf::from(env!("CARGO_BIN_EXE_symphony"))
+                    .with_file_name(format!("fake-agent{}", std::env::consts::EXE_SUFFIX)),
+            )
         })
         .clone()
 }

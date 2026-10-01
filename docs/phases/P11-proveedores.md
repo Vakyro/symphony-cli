@@ -5,7 +5,7 @@
 | Estado | EN CURSO (adelantada antes de P08–P10 por ADR-0008) |
 | Rama | phase/p11-proveedores |
 | Inicio / cierre | 2026-10-01 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S4) |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S5) |
 | Tag | p11-done (pendiente) |
 | Docs usados | STACK §18.4–§18.6, `docs/research/cli-p11.md`, ADR-0008 |
 
@@ -41,6 +41,14 @@
 - **Cómo se verificó:** `cargo xtask check` → 281 passed (9 nuevos). Live L3 `live_copilot_remembers_after_a_message_past_the_turn` (`github/auto`): 2 runs, 1 sesión, recordó el dato (65 s).
 - **Pendiente / notas:** solo `auto` como modelo (un plan con más modelos no los ve; habría que sondear o leer config); no hay tokens de uso, así que el failover por umbral no aplica a Copilot; `FileModified` se anota al pedir la edición (si luego se deniega, el git status corrige); skills de Copilot sin investigar; `parse_error` de cuota/auth sintético.
 
+### P11.S5 · Matriz de handoff — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-01
+- **Qué se hizo:** forced kill cruzado (Test D) en dos capas. **L2:** `handoff_matrix_from_<proveedor>` (5 tests, 4 destinos cada uno = 20 pares dirigidos) con `fake-agent` bajo los ids reales (`anthropic`, `openai`, `moonshot`, `google`, `github`): A edita dos archivos, anuncia el siguiente paso y se cuelga; el watchdog lo mata sin cleanup (`NO_HEARTBEAT`); B continúa solo con el handoff. Se verifica el estado, los dos runs, el handoff `CONTINUED`, que el prompt de B lleve el objetivo, el «qué seguía» y los archivos de A, y los 4 archivos finales en el worktree. **L3:** `live_handoff_*` con CLIs reales: A recibe una tarea de 6 archivos encadenados (cada uno se crea leyendo el anterior), `symphony switch` lo corta al crear su primer archivo (termina su árbol de procesos) y B la termina.
+- **Archivos clave:** `crates/daemon/tests/runtime.rs` (matriz L2), `crates/cli/tests/live_handoff.rs` (L3)
+- **Cómo se verificó:** `cargo xtask check` → 291 passed, tres corridas seguidas. Live L3 (2026-10-01): ver la matriz.
+- **También:** `symphony_testkit::pinned_bin` y los helpers de test de cli, tui, daemon y testkit ahora ejecutan una copia fija de `symphonyd` y `fake-agent` (ver «Desviaciones» y LEARNINGS): resuelve la carrera de «Acceso denegado» que ya existía.
+- **Pendiente / notas:** el corte live es un `switch` (el runtime termina el proceso), no un crash externo del CLI; n = 1 por par; los 17 pares live restantes no se probaron.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -53,6 +61,30 @@
 | Adapter de Antigravity pasa la suite de contrato con salidas reales | `cargo nextest run -p symphony-adapter-antigravity` | ✅ 10/10 |
 | Adapter de Copilot pasa la suite de contrato con salidas reales | `cargo nextest run -p symphony-adapter-copilot` | ✅ 9/9 |
 | Copilot retoma su sesión y recuerda lo dicho, con el daemon real | L3 `live_resume` | ✅ |
+| Los 20 pares dirigidos entre los 5 proveedores sobreviven a un forced kill con `fake-agent` | `cargo nextest run -p symphony-daemon handoff_matrix` | ✅ |
+| Claude→Kimi, Codex→Copilot y Antigravity→Claude terminan una tarea cortada a media | L3 `live_handoff` | ✅ |
+
+## Matriz de handoff (P11.S5)
+
+**L2 · `fake-agent`, 20 pares dirigidos: ✅ todos** (origen en filas, destino en columnas; cada par: A muere por `NO_HEARTBEAT`, B termina con solo el handoff).
+
+| A \ B | Claude | Codex | Kimi | Antigravity | Copilot |
+|---|---|---|---|---|---|
+| **Claude** | — | ✅ | ✅ | ✅ | ✅ |
+| **Codex** | ✅ | — | ✅ | ✅ | ✅ |
+| **Kimi** | ✅ | ✅ | — | ✅ | ✅ |
+| **Antigravity** | ✅ | ✅ | ✅ | — | ✅ |
+| **Copilot** | ✅ | ✅ | ✅ | ✅ | — |
+
+**L3 · CLIs reales (2026-10-01, `SYMPHONY_LIVE=1`).** Tarea: 6 archivos `n1.txt`…`n6.txt` encadenados (cada uno se crea leyendo el anterior). A se corta al crear su primer archivo (o a los 45 s); B recibe solo el handoff. Resultado esperado: `n1`…`n6` con 1…6.
+
+| Par | Corte (A) | B terminó en | Total | Resultado |
+|---|---|---|---|---|
+| Claude `haiku` → Kimi `default` | 19 s, 1/6 archivos | 52 s | 72 s | ✅ 1…6 |
+| Codex `gpt-5.6-luna` → Copilot `auto` | 34 s, 1/6 | 26 s | 61 s | ✅ 1…6 |
+| Antigravity `gemini-3.8-flash-low` → Claude `haiku` | 33 s, 1/6 | 35 s | 68 s | ✅ 1…6 |
+
+Otras corridas: Claude → Kimi con una espera de 10 s cortó a los 12 s con 0/6 archivos (B partió solo del objetivo y también terminó los 6 en 33 s); Antigravity → Claude cortó a los 12 s con 1/6 y B terminó los 6 en 28 s (esa corrida falló solo por una aserción mía sobre el id del proveedor, ya corregida). Los tiempos dependen de la red y del arranque de cada CLI (~27k tokens de contexto al abrir una sesión en Claude, ~22k en Antigravity).
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
@@ -70,5 +102,11 @@
 | PLAN P11.S1 | tres archivos `cli-*.md` | uno solo, `cli-p11.md` | contrato común |
 | PLAN P11.S1 | mini Test C por CLI | no hecho | el chat no lo necesita (ADR-0008 §2) |
 
+## Desviaciones (S5)
+| Documento y sección | Qué dice | Qué se hizo | Por qué |
+|---|---|---|---|
+| PLAN P11.S5 | «forced kill cruzado» | el live corta con `switch` (el runtime termina el árbol de procesos de A) | un crash externo del CLI real no se puede provocar de forma fiable; el efecto sobre el handoff es el mismo |
+| Infraestructura de tests | — | `pinned_bin` en `symphony-testkit` + dev-dependency de `symphony-testkit` en `cli` y `tui` | los tests ejecutaban `target/debug/symphonyd.exe` y otros lo recompilaban: «Acceso denegado» en Windows |
+
 ## Dependencias agregadas
-Ninguna.
+Ninguna externa (solo `symphony-testkit` como dev-dependency interna de `cli` y `tui`).
