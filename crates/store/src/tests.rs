@@ -25,6 +25,17 @@ const PHASE1_TABLES: [&str; 19] = [
     "recovery_items",
 ];
 
+/// Tablas que añade la migración 002 (salud, uso y routing).
+const PHASE4_TABLES: [&str; 7] = [
+    "provider_accounts",
+    "provider_health",
+    "usage_records",
+    "profiles",
+    "profile_models",
+    "routing_decisions",
+    "routing_candidates",
+];
+
 /// Proyecto, sesión, dos tasks, un proveedor y un modelo.
 fn seeded() -> Connection {
     let conn = open_in_memory().unwrap();
@@ -75,7 +86,7 @@ fn migrations_are_valid() {
 }
 
 #[test]
-fn file_db_has_phase1_schema_and_pragmas() {
+fn file_db_has_the_schema_and_pragmas() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("data").join("symphony.db");
     let conn = open(&path).unwrap();
@@ -87,7 +98,11 @@ fn file_db_has_phase1_schema_and_pragmas() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    let mut expected: Vec<String> = PHASE1_TABLES.iter().map(|s| s.to_string()).collect();
+    let mut expected: Vec<String> = PHASE1_TABLES
+        .iter()
+        .chain(PHASE4_TABLES.iter())
+        .map(|s| s.to_string())
+        .collect();
     tables.sort();
     expected.sort();
     assert_eq!(tables, expected);
@@ -103,7 +118,7 @@ fn file_db_has_phase1_schema_and_pragmas() {
         })
         .unwrap()
     };
-    assert_eq!(pragma("user_version"), "1");
+    assert_eq!(pragma("user_version"), "2");
     assert_eq!(pragma("journal_mode"), "wal");
     assert_eq!(pragma("foreign_keys"), "1");
     assert_eq!(pragma("synchronous"), "1"); // NORMAL
@@ -121,8 +136,126 @@ fn file_db_has_phase1_schema_and_pragmas() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        1
+        2
     );
+}
+
+/// Una base de v0.1 (migración 001) con datos reales pasa a la 002 sin perder nada y con las
+/// FKs nuevas: las tablas hijas siguen enlazadas y la integridad referencial sigue activa.
+#[test]
+fn migration_002_keeps_v01_data_and_adds_the_pending_foreign_keys() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    MIGRATIONS.to_version(&mut conn, 1).unwrap();
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p1','demo','/repo','main',0);
+         INSERT INTO sessions (id, project_id, status, started_at) VALUES ('s1','p1','ACTIVE',0);
+         INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at) VALUES ('t1','p1','T-1','WORK','uno','RUNNING',0,0);
+         INSERT INTO providers (id, display_name, cli_name, adapter_mode, setup_state) VALUES ('anthropic','Claude','claude','CLI','READY'), ('openai','Codex','codex','CLI','READY');
+         INSERT INTO models (id, provider_id, cli_model_id, display_name, discovered_at) VALUES ('claude/sonnet','anthropic','sonnet','Sonnet',0), ('openai/sol','openai','sol','Sol',0);
+         INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_model_id, failover_policy, context_mode, created_at, updated_at)
+             VALUES ('a1','p1','s1','t1',1,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0);
+         INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, end_reason, started_at, ended_at)
+             VALUES ('r1','a1',1,'anthropic','claude/sonnet','HANDED_OFF','QUOTA_EXHAUSTED',0,5);
+         INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, started_at)
+             VALUES ('r2','a1',2,'openai','openai/sol','RUNNING',6);
+         INSERT INTO provider_failures (id, provider_id, model_id, run_id, failure_type, message, occurred_at)
+             VALUES ('f1','anthropic','claude/sonnet','r1','DAILY_QUOTA','sin cuota',5);
+         INSERT INTO executor_changes (id, agent_id, from_run_id, to_run_id, reason, failure_id, occurred_at)
+             VALUES ('c1','a1','r1','r2','FAILOVER','f1',6);
+         INSERT INTO messages (id, agent_id, run_id, role, content, created_at) VALUES ('m1','a1','r2','USER','hola',7);",
+    )
+    .unwrap();
+
+    MIGRATIONS.to_latest(&mut conn).unwrap();
+
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(count("SELECT COUNT(*) FROM agents"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM agent_runs"), 2);
+    assert_eq!(count("SELECT COUNT(*) FROM provider_failures"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM executor_changes"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM messages"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM pragma_foreign_key_check"), 0);
+
+    // Las filas antiguas conservan sus datos y quedan con la cuenta «default».
+    let (account, reason): (String, String) = conn
+        .query_row(
+            "SELECT account_id, end_reason FROM agent_runs WHERE id='r1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (account.as_str(), reason.as_str()),
+        ("acct-anthropic", "QUOTA_EXHAUSTED")
+    );
+    assert_eq!(count("SELECT COUNT(*) FROM provider_accounts"), 2);
+    assert_eq!(count("SELECT COUNT(*) FROM profiles WHERE builtin = 1"), 7);
+
+    // Las FKs nuevas existen (y las de las hijas siguen apuntando a las tablas reconstruidas).
+    let fk_targets = |table: &str| -> Vec<String> {
+        conn.prepare(&format!(
+            "SELECT \"table\" FROM pragma_foreign_key_list('{table}')"
+        ))
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    assert!(fk_targets("agent_runs").contains(&"provider_accounts".to_string()));
+    assert!(fk_targets("agent_runs").contains(&"routing_decisions".to_string()));
+    assert!(fk_targets("agents").contains(&"profiles".to_string()));
+    assert!(fk_targets("provider_failures").contains(&"provider_accounts".to_string()));
+    assert!(fk_targets("messages").contains(&"agents".to_string()));
+
+    // La integridad referencial sigue activa y los índices únicos parciales se recrearon.
+    assert!(
+        conn.execute(
+            "INSERT INTO messages (id, agent_id, role, content, created_at) VALUES ('bad','nadie','USER','x',0)",
+            []
+        )
+        .is_err()
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, started_at) VALUES ('r3','a1',3,'openai','openai/sol','RUNNING',9)",
+            []
+        )
+        .is_err(),
+        "un solo run abierto por agente"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_profile_id, failover_policy, context_mode, created_at, updated_at)
+             VALUES ('a2','p1','s1','t1',2,'READY','PROFILE','@no-existe','ANY','BALANCED',0,0)",
+            []
+        )
+        .is_err(),
+        "un profile inexistente se rechaza"
+    );
+}
+
+#[test]
+fn provider_health_never_stores_a_quota_percentage_without_certainty() {
+    let conn = seeded();
+    let ins = |certainty: &str, remaining: &str, id: &str| {
+        conn.execute(
+            &format!(
+                "INSERT INTO provider_health (id, provider_id, state, quota_certainty, quota_remaining, updated_at)
+                 VALUES ('{id}','anthropic','HEALTHY','{certainty}',{remaining},0)"
+            ),
+            [],
+        )
+    };
+    assert!(ins("KNOWN", "0.4", "h1").is_ok());
+    assert!(ins("ESTIMATED", "0.4", "h2").is_err());
+    assert!(ins("UNKNOWN", "0.4", "h3").is_err());
+    // Una sola fila por alcance: el nivel proveedor (model_id NULL) también es único.
+    assert!(ins("UNKNOWN", "NULL", "h4").is_err());
+    conn.execute("DELETE FROM provider_health", []).unwrap();
+    assert!(ins("UNKNOWN", "NULL", "h5").is_ok());
+    assert!(ins("UNKNOWN", "NULL", "h6").is_err());
 }
 
 #[test]
