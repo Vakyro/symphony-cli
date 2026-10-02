@@ -13,6 +13,7 @@
 | 2026-09-24 | **P08–P16 son provisionales.** Nuevo gate **P07.S10 · Replanificación** tras v0.1: uso real ≥ 2 semanas con 2 proveedores, y luego revisión de P08–P16 con ADR | El detalle de P08–P16 se escribió sin evidencia de uso; el spike y el uso diario lo van a cambiar. Evita construir 5 adapters y una GUI sobre supuestos |
 | 2026-09-28 | Nueva fase **P07.5 · Chat general** antes de P08 (ADR-0006, aceptado): chat agéntico en la vista inicial, con worktree propio pre-main y cambio de proveedor sin perder contexto. P08–P10 quedan diferidas y pendientes de rediseño | El uso real de v0.1 mostró que el valor está en un chat simple con continuidad entre proveedores, no en orquestar varios agentes. El chat reutiliza casi todo P05–P07 |
 | 2026-10-01 | **P11 se adelanta** tras P07.S10; P09 y P10 se recortan al chat (ADR-0008, aceptado). Orden: P07.S10 → P11 → P10 recortada → P09 recortada → P08 | El core ya es genérico y los 3 CLIs están instalados; el chat no usa P08–P10 |
+| 2026-10-01 | **P07.S10 cerrada por ADR-0010:** P08–P10 dejan de ser provisionales y se ejecutan completas en el orden **P10 → P09 → P08**; se levanta el gate de tiempo de ADR-0007 §3 por instrucción de Leo | P11 ya cerró con cinco proveedores; Leo pidió hacer lo diferido. Cada fase empieza con un párrafo de diseño en su bitácora y cierra con revisión, CI, merge y tag |
 
 ---
 
@@ -413,17 +414,17 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 | P06 | Agent runtime, checkpoints y handoff | Forced-kill test: un agente sobrevive a su modelo | `p06-done` |
 | P07 | TUI y release v0.1 | Journey A completo en TUI + gate de replanificación (P07.S10) | `p07-done`, `v0.1.0` |
 | P07.5 | Chat general | Chat como vista inicial; un chat empieza en Claude, cambia a Codex y sigue sin reexplicar | `p075-done` |
-| P08 ⚠️ | Runtime multiagente | Scheduler, DAG, validación y merge; benchmark de 3 agentes | `p08-done` |
-| P09 ⚠️ | Context Engine | Compresión reversible, handoff por niveles y MCP de contexto | `p09-done` |
-| P10 ⚠️ | Salud, failover y routing | Failover automático, profiles y `/explain-route` | `p10-done`, `v0.5.0` |
-| P11 ⚠️ | Proveedores restantes | Kimi, Antigravity y Copilot | `p11-done` |
+| P08 | Runtime multiagente | Scheduler, DAG, validación y merge; benchmark de 3 agentes | `p08-done` |
+| P09 | Context Engine | Compresión reversible, handoff por niveles y MCP de contexto | `p09-done` |
+| P10 | Salud, failover y routing | Failover automático, profiles y `/explain-route` | `p10-done`, `v0.5.0` |
+| P11 | Proveedores restantes | Kimi, Antigravity y Copilot | `p11-done` |
 | P12 ⚠️ | Plugins | Host de plugins aislados y un plugin de ejemplo | `p12-done` |
 | P13 ⚠️ | Endurecimiento y pre-release | Seguridad, fuzzing, recovery, benchmarks, docs, instaladores | `p13-done`, `v0.9.0` |
 | P14 ⚠️ | Sugerencias y experimentos | Sugerencias de modelo por reglas; experimentos ML con gate | `p14-done` |
 | P15 ⚠️ | GUI de escritorio | Tauri + SolidJS sobre la misma API | `p15-done` |
 | P16 ⚠️ | Validación final | Todas las vistas y journeys probados, benchmark principal, v1.0 | `p16-done`, `v1.0.0` |
 
-⚠️ **Provisional.** P07.5 se añadió por ADR-0006 (aceptado). P08–P16 describen la dirección, no un contrato. Se revisan en P07.S10 con evidencia de uso real (criterio de contenido, ADR-0007), tras cerrar P07.5, y cualquier cambio queda en un ADR. Hasta entonces, un agente no invierte trabajo en esas fases (ni crea sus crates, tablas o vistas) y el MVP se queda en 2 proveedores: Claude Code y Codex.
+⚠️ **Provisional (P12–P16).** P07.5 se añadió por ADR-0006 y P11 se adelantó por ADR-0008. **ADR-0010 cierra P07.S10:** P08–P10 se ejecutan completas en el orden **P10 → P09 → P08**. P12–P16 describen la dirección, no un contrato, y se revisan cuando se llegue a ellas; cualquier cambio queda en un ADR.
 
 ---
 
@@ -917,7 +918,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 ## P08 · Runtime multiagente
 
 **Objetivo:** 3 agentes en paralelo sin que la máquina se trabe.
-**Prerrequisito:** P07.5 cerrada, P11 cerrada (ADR-0008) y ADR de replanificación de P07.S10 aprobado. **Rediseño pendiente** por ADR-0006: el destino de integración pasa a ser la rama del chat y se reevalúa el alcance. Si el ADR cambió esta fase, gana el ADR (§1.2).
+**Prerrequisito:** P07.5, P11, P10 y P09 cerradas (ADR-0010). **Rediseño por ADR-0006/0010:** el destino de integración es la rama del chat (`main ← symphony/chat ← agentes`); chat → `main` es un merge aparte con review agent. La decisión «phase + conditions» frente a los 12 estados se toma en P08.S1 con datos del scheduler. Si un ADR cambió esta fase, gana el ADR (§1.2).
 **Docs:** IDEA §5.4, §5.9–§5.11; STACK §7.2, §8, §23, §25.2; DB §3.B, §3.F, §3.H, §6 (Fase 2); FLOW §9, §10, §14, §15, Journeys B y D; ADR-0003.
 **Tecnologías:** `tokio::sync::Semaphore`, BinaryHeap, sysinfo, Job Objects / cgroups v2 / process groups, notify (en P09), cargo-llvm-cov.
 **Skills:** `test-driven-development`, `performance-optimization`, `deprecation-and-migration`, `the-council` (si el benchmark falla).

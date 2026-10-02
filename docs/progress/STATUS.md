@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-01 · por claude-code/sonnet-5.5
-**Fase actual:** P11 · Proveedores **cerrada** (tag `p11-done`, fusionada a `main`). P07.5 cerrada (`p075-done`). Sigue lo que Leo decida: revisión de P08–P16 con uso real (P07.S10, ADR-0007/0008) o los pendientes de P11
-**Paso actual:** (ninguno abierto). P08–P16 siguen provisionales; P08–P10 diferidas por ADR-0008
+**Fase actual:** P10 · Salud, failover y routing (ADR-0010: P10 → P09 → P08, completas). P11 cerrada (`p11-done`); P07.S10 cerrada por ADR-0010
+**Paso actual:** P10.S1 · migración 004. P12–P16 siguen provisionales
 **Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
 **Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
@@ -23,7 +23,7 @@
 - [x] P07.S7 Snapshots y E2E (terminal real ✅ Leo; Journey A live con Claude Code ✅ 17 s)
 - [x] P07.S8 Release v0.1.0 (tag `v0.1.0`, CHANGELOG, build release: daemon idle 16.5 MB)
 - [x] P07.S9 Cierre (revisión de código: 1 hallazgo corregido, `spawn src/main.rs …` ya no se toma como modelo; `health` no corrido)
-- [ ] P07.S10 Replanificación (gate por criterio de contenido, ADR-0007: cumplido para el chat; la revisión de P08–P16 va tras cerrar P07.5)
+- [x] P07.S10 Replanificación (cerrada por ADR-0010: P10 → P09 → P08 completas)
 
 ## Progreso de P07.5
 - [x] P07.5.S1 Continuar la sesión después del turno (`continue_session`)
@@ -93,4 +93,7 @@ Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y val
 | P07 | ✅ (S10 pendiente, diferido por Leo) | p07-done, v0.1.0 |
 | P07.5 | ✅ | p075-done |
 | P11 (adelantada por ADR-0008) | ✅ | p11-done |
-| P08–P10, P12–P16 | ⏳ (provisionales; P08–P10 con rediseño pendiente) | |
+| P10 | 🟡 en curso | |
+| P09 | ⏳ (tras P10) | |
+| P08 | ⏳ (tras P09) | |
+| P12–P16 | ⏳ (provisionales) | |
