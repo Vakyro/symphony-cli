@@ -44,28 +44,30 @@ const RETRY_AFTER_MAX_MS: u64 = 7 * 24 * 3600 * 1000;
 
 /// La espera que un mensaje de error pide («Retry-After: 30», «try again in 5 minutes»,
 /// «retry after 1h 30m»), en milisegundos. Solo duraciones relativas: una hora de reloj
-/// («try again at 5 PM») depende de la zona horaria y no se interpreta.
+/// («try again at 5 PM») o una fecha («retry after 2026-10-03T05:00:00Z») no se interpretan.
+/// Un número sin unidad vale segundos solo detrás de `Retry-After`, que es su semántica HTTP.
 pub fn parse_retry_after_ms(text: &str) -> Option<u64> {
     let lower = text.to_lowercase();
-    const KEYS: [&str; 6] = [
-        "retry-after",
-        "retry after",
-        "retry in",
-        "try again in",
-        "try again after",
-        "resets in",
+    const KEYS: [(&str, bool); 6] = [
+        ("retry-after", true),
+        ("retry after", false),
+        ("retry in", false),
+        ("try again in", false),
+        ("try again after", false),
+        ("resets in", false),
     ];
-    KEYS.iter().find_map(|key| {
+    KEYS.iter().find_map(|(key, bare_ok)| {
         let at = lower.find(key)?;
-        parse_duration_prefix(&lower[at + key.len()..])
+        parse_duration_prefix(&lower[at + key.len()..], *bare_ok)
     })
 }
 
-/// «30», «30s», «5 minutes», «1h 30m», «2 minutes and 30 seconds». Sin unidad, segundos.
-fn parse_duration_prefix(s: &str) -> Option<u64> {
+/// «30s», «5 minutes», «1h 30m», «2 minutes and 30 seconds». Solo el primer término puede ir
+/// sin unidad (y solo con `bare_ok`); un número seguido de `-`, `:` o `t` es parte de una fecha.
+fn parse_duration_prefix(s: &str, bare_ok: bool) -> Option<u64> {
     let mut rest = s.trim_start_matches([' ', ':', '=', '~']);
     let mut total_ms = 0.0_f64;
-    let mut parsed = false;
+    let mut terms = 0;
     loop {
         let digits = rest
             .find(|c: char| !(c.is_ascii_digit() || c == '.'))
@@ -73,27 +75,32 @@ fn parse_duration_prefix(s: &str) -> Option<u64> {
         let Ok(n) = rest[..digits].parse::<f64>() else {
             break;
         };
-        rest = rest[digits..].trim_start();
-        let unit_len = rest
+        let after_number = &rest[digits..];
+        if after_number.starts_with(['-', ':', '/']) {
+            return None; // fecha u hora de reloj
+        }
+        let after_number = after_number.trim_start();
+        let unit_len = after_number
             .find(|c: char| !c.is_ascii_alphabetic())
-            .unwrap_or(rest.len());
-        let (unit, after) = rest.split_at(unit_len);
+            .unwrap_or(after_number.len());
+        let (unit, after) = after_number.split_at(unit_len);
         let factor = match unit {
             "ms" | "msec" | "millisecond" | "milliseconds" => 1.0,
-            "" | "s" | "sec" | "secs" | "second" | "seconds" => 1000.0,
+            "s" | "sec" | "secs" | "second" | "seconds" => 1000.0,
             "m" | "min" | "mins" | "minute" | "minutes" => 60_000.0,
             "h" | "hr" | "hrs" | "hour" | "hours" => 3_600_000.0,
             "d" | "day" | "days" => 86_400_000.0,
+            "" if terms == 0 && bare_ok => 1000.0,
             _ => break,
         };
         total_ms += n * factor;
-        parsed = true;
+        terms += 1;
         rest = after.trim_start_matches([' ', ',']);
         if let Some(r) = rest.strip_prefix("and ") {
             rest = r.trim_start();
         }
     }
-    (parsed && total_ms.is_finite() && total_ms >= 0.0)
+    (terms > 0 && total_ms.is_finite() && total_ms >= 0.0)
         .then(|| (total_ms.round() as u64).min(RETRY_AFTER_MAX_MS))
 }
 

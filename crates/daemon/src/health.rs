@@ -94,13 +94,16 @@ pub fn on_failure(
     } else {
         None
     };
+    // El llamador ya guardó este fallo en `provider_failures`: lo que cuenta es lo anterior
+    // (la máquina de estados suma el actual).
     let recent = db::recent_failure_count(
         conn,
         provider,
         scope,
         err.failure_type,
         now - RECENT_FAILURES_MS,
-    )?;
+    )?
+    .saturating_sub(1);
     let event = HealthEvent::Failure {
         kind: err.failure_type,
         retry_after_at: err
@@ -171,13 +174,15 @@ pub fn on_quota(
     now: i64,
 ) -> Result<(), RepoError> {
     let windows = db::latest_quota_windows(conn, provider)?;
+    if windows.is_empty() {
+        return Ok(());
+    }
+    // Una ventana que ya se reinició no cuenta; si todas se reiniciaron, la cuota está entera.
     let tightest = windows
         .into_iter()
         .filter(|(_, _, reset)| reset.is_none_or(|t| epoch_ms(t) > now))
         .max_by(|a, b| a.1.total_cmp(&b.1));
-    let Some((_, used, reset)) = tightest else {
-        return Ok(());
-    };
+    let (used, reset) = tightest.map_or((0.0, None), |(_, used, reset)| (used, reset));
     let event = HealthEvent::Quota {
         used_fraction: used,
         reset_at: reset.map(epoch_ms),
@@ -187,7 +192,9 @@ pub fn on_quota(
     db::put_health(conn, provider, None, &next)
 }
 
-/// Tokens de contexto que el CLI informó al terminar un turno (`REPORTED`).
+/// Tokens de contexto que el CLI informó al terminar un turno (`REPORTED`). El contexto de cada
+/// turno incluye al del anterior: sumarlos contaría varias veces lo mismo, así que cada run
+/// guarda una sola fila con su pico de contexto (un mínimo del consumo, nunca un múltiplo).
 pub fn on_usage(
     conn: &Connection,
     run: RunId,
@@ -195,18 +202,7 @@ pub fn on_usage(
     now: i64,
 ) -> Result<(), RepoError> {
     let (provider_id, model_id) = db::run_scope(conn, run)?;
-    db::insert_usage(
-        conn,
-        &db::NewUsage {
-            run_id: run,
-            provider_id,
-            model_id,
-            tokens_in: Some(context_tokens),
-            tokens_out: None,
-            source: UsageSource::Reported,
-        },
-        now,
-    )
+    db::upsert_reported_usage(conn, run, &provider_id, &model_id, context_tokens, now)
 }
 
 /// Estimación de cuota para un proveedor con presupuesto en la config: tokens usados en la

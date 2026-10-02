@@ -90,10 +90,10 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
 | P01 · Spike | Evidencia de hooks, handoff y consumo con Claude Code + Codex | ✅ p01-done |
 | P02–P07 · Core → **v0.1** | Daemon, SQLite, worktrees, adapters, checkpoints, handoff, TUI | ✅ **v0.1.0** |
 | P07.5 · Chat general | Chat como vista inicial, cambio de proveedor sin perder contexto, skills, exportar | ✅ p075-done |
-| P07.S10 | Replanificación de P08–P16 con lo aprendido en el uso (ADR-0007, ADR-0008: P11 se adelantó) | 🟡 P08–P10 siguen diferidas |
-| P08 · Multiagente | Scheduler de recursos, DAG, validación | ⏳ (diferido a P07.S10) |
-| P09 · Context engine | Handoff comprimido, MCP de contexto | ⏳ |
-| P10 · Failover → **v0.5** | Salud de proveedores, failover automático, profiles | ⏳ |
+| P07.S10 | Replanificación de P08–P16 con lo aprendido en el uso (ADR-0007, ADR-0008, ADR-0010: P10 → P09 → P08) | ✅ cerrada |
+| P08 · Multiagente | Scheduler de recursos, DAG, validación | ⏳ (tras P09) |
+| P09 · Context engine | Handoff comprimido, MCP de contexto | 🟡 en curso |
+| P10 · Failover → **v0.5** | Salud de proveedores, failover con router, profiles y `explain-route` | ✅ **v0.5.0** |
 | P11 · Más proveedores | Kimi, Antigravity y Copilot con el mismo contrato; matriz de handoff entre los cinco | ✅ p11-done |
 | P12–P13 → **v0.9** | Plugins, endurecimiento | ⏳ |
 | P14–P16 → **v1.0** | Sugerencias de modelo, GUI (Tauri), validación final | ⏳ |

@@ -72,3 +72,29 @@ fn retry_after_ignores_what_is_not_a_relative_duration() {
         Some(7 * 86_400_000)
     );
 }
+
+#[test]
+fn retry_after_rejects_dates_clock_times_and_stray_numbers() {
+    // Un número suelto es segundos solo detrás de `Retry-After`.
+    assert_eq!(parse_retry_after_ms("Retry-After: 30"), Some(30_000));
+    assert_eq!(parse_retry_after_ms("retry after 30"), None);
+    // Una fecha ISO o una hora no son una duración.
+    assert_eq!(
+        parse_retry_after_ms("Retry after 2026-10-03T05:00:00Z"),
+        None
+    );
+    assert_eq!(
+        parse_retry_after_ms("Retry-After: 2026-10-03T05:00:00Z"),
+        None
+    );
+    assert_eq!(parse_retry_after_ms("try again in 5:30"), None);
+    // Un número que sobra después de una duración no se suma.
+    assert_eq!(
+        parse_retry_after_ms("try again in 5 minutes, 3"),
+        Some(300_000)
+    );
+    assert_eq!(
+        parse_retry_after_ms("Retry-After: 120, then 3"),
+        Some(120_000)
+    );
+}

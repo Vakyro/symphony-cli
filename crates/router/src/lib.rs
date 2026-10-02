@@ -154,10 +154,17 @@ fn health_reject(h: &Health, now: i64) -> Option<RejectReason> {
 /// una estimación con presupuesto que ya la marcó `QUOTA_LOW`. Un aviso del proveedor sin cifra
 /// (`QUOTA_LOW` con certeza `UNKNOWN`) no descarta a nadie: solo penaliza el puntaje.
 fn in_reserve(c: &Candidate, now: i64) -> bool {
+    let state = c.health.effective_state(now);
+    // Un proveedor que se está sondeando tras agotarse, o cuya ventana ya se reinició, no tiene
+    // una cuota vigente: el número guardado es viejo y no puede bloquearlo para siempre.
+    let fresh = c.health.reset_at.is_none_or(|t| t > now);
+    if state == ProviderState::Probing || !fresh {
+        return false;
+    }
     let known_low = c.health.certainty == QuotaCertainty::Known
         && c.health.remaining.is_some_and(|r| r <= unit(c.reserve));
-    let estimated_low = c.health.certainty == QuotaCertainty::Estimated
-        && c.health.effective_state(now) == ProviderState::QuotaLow;
+    let estimated_low =
+        c.health.certainty == QuotaCertainty::Estimated && state == ProviderState::QuotaLow;
     known_low || estimated_low
 }
 
@@ -301,16 +308,36 @@ fn reject_text(r: RejectReason) -> &'static str {
     }
 }
 
-fn factor_label(name: &str, positive: bool) -> &'static str {
-    match (name, positive) {
-        ("fit", _) => "buen ajuste con el profile",
-        ("context", _) => "holgura de contexto",
-        ("health", _) => "proveedor sano",
-        ("quota", _) => "margen de cuota",
-        ("scarcity", _) => "cuota escasa",
-        ("failures", _) => "fallos recientes",
-        ("load", _) => "carga actual del proveedor",
-        ("speed", _) => "velocidad",
+/// El texto de un factor, sin afirmar lo que no se sabe: un proveedor sin señales no es «sano»,
+/// y un factor positivo no se llama «con avisos». El estado es el peor del proveedor y del modelo.
+fn factor_label(name: &str, positive: bool, c: &Candidate, now: i64) -> &'static str {
+    let provider = c.health.effective_state(now);
+    let model = c.model_health.as_ref().map(|h| h.effective_state(now));
+    let state = match (provider, model) {
+        (p, Some(m)) if health_factor(m) < health_factor(p) => m,
+        (p, _) => p,
+    };
+    let h = &c.health;
+    match name {
+        "fit" => "buen ajuste con el profile",
+        "context" => "holgura de contexto",
+        "health" => match (state, positive) {
+            (ProviderState::Healthy, _) => "proveedor sano",
+            (ProviderState::Unknown, _) => "sin señales de problemas del proveedor",
+            (_, true) => "proveedor utilizable pese a sus avisos",
+            (_, false) => "proveedor con avisos",
+        },
+        "quota" => match h.certainty {
+            QuotaCertainty::Known => "margen de cuota",
+            _ => "sin límite de cuota conocido",
+        },
+        "scarcity" => match h.certainty {
+            QuotaCertainty::Known => "cuota escasa",
+            _ => "cuota que no se conoce",
+        },
+        "failures" => "fallos recientes",
+        "load" => "carga actual del proveedor",
+        "speed" => "velocidad",
         _ => "otro factor",
     }
 }
@@ -358,12 +385,14 @@ fn explain(
             if let Some(e) = evaluated.iter().find(|e| e.model_id == id) {
                 let mut sorted = e.factors.clone();
                 sorted.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()).then_with(|| a.0.cmp(b.0)));
-                for (f, v) in sorted.iter().filter(|(_, v)| v.abs() >= EXPLAIN_MIN) {
-                    out.push(format!(
-                        "{} {}",
-                        if *v > 0.0 { "+" } else { "-" },
-                        factor_label(f, *v > 0.0)
-                    ));
+                if let Some(c) = by_id(id) {
+                    for (f, v) in sorted.iter().filter(|(_, v)| v.abs() >= EXPLAIN_MIN) {
+                        out.push(format!(
+                            "{} {}",
+                            if *v > 0.0 { "+" } else { "-" },
+                            factor_label(f, *v > 0.0, c, req.now)
+                        ));
+                    }
                 }
             }
             // Lo que se deja descansar a propósito (FLOW §8.4).

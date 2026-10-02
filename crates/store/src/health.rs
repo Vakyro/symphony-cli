@@ -230,6 +230,38 @@ pub fn insert_usage(conn: &Connection, u: &NewUsage, now: i64) -> Result<(), Rep
     Ok(())
 }
 
+/// Una sola fila `REPORTED` por run, con el mayor valor visto (los turnos se solapan).
+pub fn upsert_reported_usage(
+    conn: &Connection,
+    run: RunId,
+    provider_id: &str,
+    model_id: &str,
+    tokens_in: u64,
+    now: i64,
+) -> Result<(), RepoError> {
+    let tokens = i64::try_from(tokens_in).unwrap_or(i64::MAX);
+    let updated = conn.execute(
+        "UPDATE usage_records SET tokens_in = MAX(COALESCE(tokens_in, 0), ?2), recorded_at = ?3
+         WHERE run_id = ?1 AND source = 'REPORTED'",
+        params![run.to_string(), tokens, now],
+    )?;
+    if updated == 0 {
+        insert_usage(
+            conn,
+            &NewUsage {
+                run_id: run,
+                provider_id: provider_id.to_string(),
+                model_id: model_id.to_string(),
+                tokens_in: Some(tokens_in),
+                tokens_out: None,
+                source: UsageSource::Reported,
+            },
+            now,
+        )?;
+    }
+    Ok(())
+}
+
 pub fn run_has_reported_usage(conn: &Connection, run: RunId) -> Result<bool, RepoError> {
     Ok(conn
         .query_row(

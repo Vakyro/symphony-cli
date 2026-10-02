@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA |
 | Rama | phase/p10-salud-failover |
 | Inicio / cierre | 2026-10-01 / — |
 | Agentes que trabajaron | claude-code/sonnet-5.5 |
-| Tag | p10-done, v0.5.0 (pendientes) |
+| Tag | p10-done, v0.5.0 |
 | Docs usados | IDEA §5.7, §5.8; STACK §19, §20; DB §3.D, §3.E, §6; FLOW §8, §12, §13; ADR-0010 |
 
 ## Diseño (antes de escribir código, ADR-0010 §3)
@@ -57,6 +57,30 @@
 - **Archivos clave:** `crates/daemon/src/{routing,executor,runtime,server}.rs`, `crates/tui/src/{app,ui}.rs`, `crates/cli/src/main.rs`
 - **Cómo se verificó:** `cargo xtask check` → 365 passed. **Journey C con cada política** sobre `fake-agent`: `failover_any_goes_to_the_best_other_provider_and_records_why`, `failover_none_leaves_the_agent_waiting…`, `failover_same_provider_does_not_leave_a_provider_that_is_exhausted`; reserva (`an_automatic_failover_never_spends_the_reserve_of_another_provider`); spawn por profile que salta un proveedor agotado; un profile sin candidatos explica por qué y conserva la tarea; un modelo exacto se obedece aun con cuota baja; el cambio manual y el cambio por profile quedan registrados; 5 tests nuevos de la TUI con snapshots (picker, Explain Route) y el flujo de creación por profile.
 - **Pendiente / notas:** el failover usa el profile del agente o `routing.default_profile`; `needed_context` (tamaño del handoff) aún no se pasa al router; «checkpoint obsoleto» (FLOW §13.3) no se avisa todavía.
+
+### P10.S6 · Cierre — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-02
+- **Qué se hizo:** prueba real del router con los cinco CLIs instalados (`symphony spawn --profile @fast` en una base temporal: eligió Gemini 3.8 Flash (Low), 15 candidatos explicados), benchmark del router, revisión de código (`code-review` high), README, QUICKSTART (profiles, salud, `explain-route`, `usage` y la configuración real, que estaba desactualizada), STATUS.
+
+#### Revisión de código del diff de la fase (10 hallazgos, los 10 corregidos con test)
+1. **Contador de fallos recientes duplicado:** el llamador ya guardaba el fallo antes de contar y la máquina sumaba otro: un solo fallo de red dejaba al proveedor `OFFLINE` y dos 429 lo dejaban `THROTTLED`. Ahora se cuenta lo anterior. Tests `the_current_failure_is_not_counted_twice` y `a_provider_is_throttled_after_three_rate_limits_not_two`.
+2. **Una cuota vieja bloqueaba para siempre:** `in_reserve` ignoraba el sondeo y los reinicios (un proveedor agotado con restante 0 nunca volvía a probarse). Ahora un proveedor en `PROBING` o con la ventana reiniciada no cae en la reserva, y un `QUOTA_LOW` cuya ventana se reinició pasa a `UNKNOWN`. Tests en `core` y en el router.
+3. **`on_quota` salía sin actualizar cuando todas las ventanas ya se habían reiniciado:** ahora cuenta como cuota entera.
+4. **Un éxito levantaba un `EXHAUSTED` con reinicio futuro** (cuota al 100 % informada en el mismo turno que terminó bien): ahora se conserva hasta el reinicio.
+5. **El uso no se registraba en runs que terminan por failover, parada o caída:** `on_run_finished` en esos cierres.
+6. **El uso `REPORTED` se acumulaba por turno** (el contexto de cada turno incluye al anterior: ~5× de sobreconteo): una fila por run con su pico de contexto (un mínimo del consumo, nunca un múltiplo).
+7. **Una cuota al 100 % pisaba un `AUTH_ERROR`** y al reiniciarse limpiaba el fallo de login: la cuota solo se anota; el login no se levanta solo.
+8. **`retry_after` aceptaba números sueltos y fechas** («retry after 2026-10-03T05:00:00Z» → 2026 s): un número sin unidad solo vale tras `Retry-After` y solo en el primer término; fechas y horas se rechazan.
+9. **Un fallo fatal que coincidía con una parada del usuario se perdía:** se registra en la misma escritura que cierra el run.
+10. **«+ proveedor con avisos» como razón de elección:** el texto ahora depende del signo y del peor estado entre proveedor y modelo («proveedor utilizable pese a sus avisos»).
+
+## Estado final
+P10 está cerrada: la salud de cada proveedor y modelo sigue a lo que pasa en los runs (un 429 no es «agotado», el login no se levanta solo, la cuota se muestra `KNOWN`/`ESTIMATED`/`UNKNOWN` sin inventar porcentajes), y un router determinista (8–23 µs) elige el modelo para los profiles y para el failover según la política del agente, con cada decisión guardada y explicable (`symphony explain-route`, pantalla Explain Route). Spawn y cambio por profile, Model Picker con salud, `symphony usage`. Pendiente: pasar el tamaño del handoff al router (`needed_context`), el aviso de «checkpoint obsoleto» (FLOW §13.3) y los textos reales de cuota de Kimi, Antigravity y Copilot (hoy sintéticos).
+
+## Notas para el siguiente agente
+- La numeración de migraciones sigue el orden de ejecución: `002_health.sql` (P10), la siguiente será `003`.
+- `routing::traits` (puntajes iniciales por familia de modelo) son heurísticas editables en `profile_models`, no verdades.
+- La máquina de salud es pura (`core::health`); lo que la conecta con los runs está en `daemon::health` (recorder para errores no fatales, cuota y uso; executor para el fallo fatal y los cierres de run).
 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |

@@ -89,6 +89,12 @@ impl Health {
         match event {
             HealthEvent::Reset => return Health::unknown(now),
             HealthEvent::Success => {
+                // Un `EXHAUSTED` con hora de reinicio en el futuro no se levanta por un éxito:
+                // pudo venir de una cuota al 100 % informada en el mismo turno que terminó bien.
+                if self.state == ProviderState::Exhausted && self.reset_at.is_some_and(|t| t > now)
+                {
+                    return self.clone();
+                }
                 next.retry_after_at = None;
                 next.evidence = None;
                 // Si estaba agotado y funciona, la ventana se reinició: el número viejo ya no vale.
@@ -222,7 +228,9 @@ impl Health {
                         | ProviderState::Offline
                         | ProviderState::AuthError
                 );
-                if remaining <= 1e-9 {
+                if self.state == ProviderState::AuthError {
+                    // Un login rechazado no se levanta solo: la cuota solo se anota.
+                } else if remaining <= 1e-9 {
                     next.state = ProviderState::Exhausted;
                     next.retry_after_at = next.reset_at;
                     next.evidence = Some("quota 100% used".into());
@@ -253,6 +261,8 @@ impl Health {
             {
                 Probing
             }
+            // La ventana de la que salió el aviso ya se reinició: ya no se sabe cuánto queda.
+            QuotaLow if self.reset_at.is_some_and(|t| t <= now) => Unknown,
             Exhausted => {
                 let reset_passed = self.reset_at.is_some_and(|t| t <= now)
                     || self.retry_after_at.is_some_and(|t| t <= now);
@@ -495,6 +505,56 @@ mod tests {
             NOW + 1,
         );
         assert_eq!(est.state, ProviderState::RateLimited);
+    }
+
+    #[test]
+    fn a_success_does_not_lift_an_exhaustion_whose_reset_is_still_ahead() {
+        // Cuota al 100 % informada en el mismo turno que terminó bien.
+        let h = Health::unknown(NOW).apply(
+            &HealthEvent::Quota {
+                used_fraction: 1.0,
+                reset_at: Some(NOW + 3_600_000),
+                reserve: 0.2,
+            },
+            NOW,
+        );
+        assert_eq!(h.state, ProviderState::Exhausted);
+        let after = h.apply(&HealthEvent::Success, NOW + 1);
+        assert_eq!(after.state, ProviderState::Exhausted);
+        assert_eq!(after.reset_at, Some(NOW + 3_600_000));
+        // Pasado el reinicio, sí se levanta.
+        let later = h.apply(&HealthEvent::Success, NOW + 3_600_001);
+        assert_eq!(later.state, ProviderState::Healthy);
+    }
+
+    #[test]
+    fn a_quota_report_never_lifts_a_login_failure() {
+        let auth = Health::unknown(NOW).apply(&fail(FailureType::Auth, 0), NOW);
+        let q = |used: f64| HealthEvent::Quota {
+            used_fraction: used,
+            reset_at: Some(NOW + 1000),
+            reserve: 0.2,
+        };
+        for used in [0.1, 0.9, 1.0] {
+            let h = auth.apply(&q(used), NOW + 1);
+            assert_eq!(h.state, ProviderState::AuthError, "{used}");
+            assert_eq!(h.effective_state(NOW + 10_000), ProviderState::AuthError);
+        }
+    }
+
+    #[test]
+    fn a_low_quota_warning_is_forgotten_once_its_window_resets() {
+        let low = Health::unknown(NOW).apply(
+            &HealthEvent::Quota {
+                used_fraction: 0.9,
+                reset_at: Some(NOW + 5000),
+                reserve: 0.2,
+            },
+            NOW,
+        );
+        assert_eq!(low.state, ProviderState::QuotaLow);
+        assert_eq!(low.effective_state(NOW + 4999), ProviderState::QuotaLow);
+        assert_eq!(low.effective_state(NOW + 5000), ProviderState::Unknown);
     }
 
     #[test]

@@ -335,14 +335,32 @@ impl Runtime {
             _ => None,
         };
         match (stopped, fatal) {
-            (Some((status, end, done, kind)), _) => {
+            (Some((status, end, done, kind)), fatal) => {
                 let run = l.run_id;
                 let (agent, project) = (l.agent_id, l.project_id);
+                let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
+                let health_cfg = self.bus.health_config();
                 let _ = self
                     .writer
                     .write(Box::new(move |t| {
                         let now = now_ms();
                         repo::close_run(t, run, status, end, code, now)?;
+                        // Un fallo de cuota o de login que llegó justo antes de la parada no se
+                        // pierde: el recorder lo dejó para el failover, que ya no va a correr.
+                        if let Some(err) = &fatal {
+                            crate::health::record_failure_row(
+                                t,
+                                ProviderFailureId::new(),
+                                Some(run),
+                                &provider,
+                                Some(&model),
+                                err,
+                                now,
+                            )?;
+                            crate::health::on_failure(t, &provider, Some(&model), err, now)?;
+                        }
+                        // Lo gastado hasta aquí cuenta aunque el run no haya terminado bien.
+                        crate::health::on_run_finished(t, run, &health_cfg, now)?;
                         match kind {
                             StopKind::User => {
                                 if status == RunStatus::HandedOff {
@@ -537,11 +555,13 @@ impl Runtime {
     async fn finish_failed(&self, l: &Launch, status: RunStatus, code: Option<i32>, reason: &str) {
         let (project, agent, run, reason) =
             (l.project_id, l.agent_id, l.run_id, reason.to_string());
+        let health_cfg = self.bus.health_config();
         let result = self
             .writer
             .write(Box::new(move |t| {
                 let now = now_ms();
                 repo::close_run(t, run, status, RunEndReason::Crash, code, now)?;
+                crate::health::on_run_finished(t, run, &health_cfg, now)?;
                 repo::set_handoff_outcome(t, run, "FAILED_TO_CONTINUE")?;
                 repo::set_agent_state(t, agent, AgentState::Failed, Some(&reason), now)?;
                 repo::open_recovery_item(
@@ -730,12 +750,14 @@ impl Runtime {
             l.agent_id,
             next.is_none().then(|| pending.clone()).flatten(),
         );
+        let health_cfg = self.bus.health_config();
         let closed = self
             .writer
             .write(Box::new(move |t| {
                 let now = now_ms();
                 repo::close_run(t, run, status, end, code, now)?;
                 repo::set_handoff_outcome(t, run, "CONTINUED")?;
+                crate::health::on_run_finished(t, run, &health_cfg, now)?;
                 if let Some(p) = &wait_decision {
                     p.save(t, agent_id, None, now)?;
                 }

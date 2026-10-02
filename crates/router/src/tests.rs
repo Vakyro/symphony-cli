@@ -412,7 +412,12 @@ proptest! {
         let d = route(&cands, &r);
         if let Some(id) = &d.selected {
             let c = cands.iter().find(|c| &c.model_id == id).unwrap();
-            let in_reserve = c.health.certainty == QuotaCertainty::Known && c.health.remaining.is_some_and(|x| x <= 0.2);
+            // Una cuota vieja (ventana reiniciada, o proveedor en sondeo) no bloquea.
+            let current = c.health.reset_at.is_none_or(|r| r > NOW)
+                && c.health.effective_state(NOW) != ProviderState::Probing;
+            let in_reserve = current
+                && c.health.certainty == QuotaCertainty::Known
+                && c.health.remaining.is_some_and(|x| x <= 0.2);
             prop_assert!(!in_reserve);
         }
     }
@@ -449,4 +454,62 @@ fn routing_twenty_candidates_is_fast_enough_to_run_on_every_event() {
         "1000 decisiones de 20 candidatos tardaron {:?}",
         start.elapsed()
     );
+}
+
+#[test]
+fn an_exhausted_provider_that_is_being_probed_is_not_stuck_in_the_reserve() {
+    // Agotado con cuota informada en 0: pasado el reinicio se sondea y debe poder elegirse.
+    let mut c = cand("a/m", "a", "A");
+    c.health = Health {
+        state: ProviderState::Exhausted,
+        certainty: QuotaCertainty::Known,
+        remaining: Some(0.0),
+        reset_at: Some(NOW + 1000),
+        retry_after_at: Some(NOW + 1000),
+        ..Health::unknown(NOW)
+    };
+    let before = route(&[c.clone()], &req(&[]));
+    assert_eq!(rejected(&before, "a/m"), Some(RejectReason::Exhausted));
+    let mut after = req(&[]);
+    after.now = NOW + 2000;
+    let d = route(&[c.clone()], &after);
+    assert_eq!(
+        d.selected.as_deref(),
+        Some("a/m"),
+        "se sondea, no queda en la reserva"
+    );
+
+    // Lo mismo con un aviso de cuota baja cuya ventana ya se reinició.
+    let mut low = cand("b/m", "b", "B");
+    low.health = Health {
+        state: ProviderState::QuotaLow,
+        certainty: QuotaCertainty::Known,
+        remaining: Some(0.1),
+        reset_at: Some(NOW + 1000),
+        ..Health::unknown(NOW)
+    };
+    assert_eq!(
+        rejected(&route(&[low.clone()], &req(&[])), "b/m"),
+        Some(RejectReason::Reserve)
+    );
+    assert_eq!(route(&[low], &after).selected.as_deref(), Some("b/m"));
+}
+
+#[test]
+fn a_degraded_winner_is_not_explained_as_a_healthy_provider() {
+    let mut degraded = cand("a/m", "a", "A");
+    degraded.health = Health {
+        state: ProviderState::Degraded,
+        retry_after_at: Some(NOW + 60_000),
+        ..Health::unknown(NOW)
+    };
+    let d = route(&[degraded], &req(&[]));
+    assert!(
+        d.explanation
+            .contains("+ proveedor utilizable pese a sus avisos"),
+        "{}",
+        d.explanation
+    );
+    assert!(!d.explanation.contains("+ proveedor con avisos"));
+    assert!(!d.explanation.contains("+ proveedor sano"));
 }

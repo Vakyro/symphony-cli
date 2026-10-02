@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-01 · por claude-code/sonnet-5.5
-**Fase actual:** P10 · Salud, failover y routing (ADR-0010: P10 → P09 → P08, completas). P11 cerrada (`p11-done`); P07.S10 cerrada por ADR-0010
-**Paso actual:** P10.S1 · migración 004. P12–P16 siguen provisionales
+**Fase actual:** P09 · Context Engine (ADR-0010: P10 → P09 → P08, completas). P10 cerrada (`p10-done`, `v0.5.0`); P11 cerrada; P07.S10 cerrada por ADR-0010
+**Paso actual:** P09.S1 · migración 003. P12–P16 siguen provisionales
 **Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
 **Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
@@ -93,7 +93,7 @@ Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y val
 | P07 | ✅ (S10 pendiente, diferido por Leo) | p07-done, v0.1.0 |
 | P07.5 | ✅ | p075-done |
 | P11 (adelantada por ADR-0008) | ✅ | p11-done |
-| P10 | 🟡 en curso | |
-| P09 | ⏳ (tras P10) | |
+| P10 | ✅ | p10-done, v0.5.0 |
+| P09 | 🟡 en curso | |
 | P08 | ⏳ (tras P09) | |
 | P12–P16 | ⏳ (provisionales) | |

@@ -211,6 +211,24 @@ switch 1 codex/gpt-5.x
 
 ---
 
+### Profiles, salud y failover
+
+En vez de un modelo exacto puedes pedir un **profile** (`@code`, `@debug`, `@fast`, `@reasoning`, `@docs`, `@review`, `@conserve`): Symphony elige entre los modelos que se pueden usar **ahora**.
+
+```bash
+symphony spawn "Arreglar el login" --profile @fast     # el router elige el modelo
+symphony switch 1 --profile @reasoning                 # cambia a lo mejor para razonar
+symphony explain-route 1                               # por qué se eligió, con cada candidato
+```
+
+En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con `?` (o `:explain-route`) ves la explicación.
+
+- **Un modelo exacto nunca se sustituye en silencio**: si lo eliges tú, se obedece (aunque su cuota esté baja). Solo se cambia por failover, si no está disponible y la política del agente lo permite (`none` · `same-provider` · `any`).
+- **El router descarta** lo que no sirve y dice por qué: proveedor sin sesión (`AUTH`), cuota agotada (`EXHAUSTED`), en espera tras un límite temporal (`COOLDOWN`), contexto o herramientas insuficientes, o dentro de la **reserva** de cuota (los profiles automáticos no gastan el último 20 %; tú sí, a mano).
+- **Un 429 no es «cuota agotada»**: es un límite temporal (`RATE_LIMITED`), con su espera, y el proveedor vuelve a probarse solo cuando pasa (`PROBING`).
+- **La cuota nunca se inventa**: se muestra `KNOWN` (el CLI la informa: Claude y Codex), `ESTIMATED` (solo si le das un presupuesto en la config) o `UNKNOWN` («restante desconocido»).
+- `symphony providers` y la pantalla de Proveedores (`p`) muestran la salud y la cuota de cada uno; `symphony usage` el uso de tokens (informado frente a estimado).
+
 ### Proveedores y permisos
 
 | Proveedor | Id de modelo | Qué puede hacer el agente | Skills en el chat |
@@ -363,20 +381,28 @@ symphony merge 1
 Edita `~/.symphony/config.toml`:
 
 ```toml
+[routing]
+# Profile (o modelo) por defecto, y qué hacer si un proveedor falla: NONE · SAME_PROVIDER · ANY
+default_profile = "@code"
+failover = "ANY"
+
 [providers]
-# Modelo favorito para "decide_later" (sin especificar)
-default_model = "claude/sonnet"
+# Fracción de cuota que los profiles automáticos no gastan (0.0–1.0)
+quota_reserve = 0.20
 
-# Cuántos agentes en paralelo
-max_concurrent_agents = 3
+# Ajustes por proveedor (opcional). Con un presupuesto, Symphony estima tu cuota por tokens
+# usados (siempre como «estimada», nunca como porcentaje exacto).
+[providers.limits.github]
+reserve = 0.30
+window_hours = 720
+window_tokens = 5000000
 
-[scheduler]
-# Segundos entre checks de salud
-health_check_interval = 5
-
-# Si un agente tarda más de esto, aviso
-warning_timeout_secs = 300
+[chat]
+# Apagado por defecto: si el último turno llegó a estos tokens, el chat pasa al siguiente proveedor.
+# switch_at_tokens = 150000
 ```
+
+El archivo completo, con sus comentarios, se crea la primera vez en `~/.symphony/config.toml`; `symphony` rechaza claves desconocidas y te dice cuál.
 
 ---
 
