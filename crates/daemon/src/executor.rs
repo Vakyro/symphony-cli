@@ -884,6 +884,7 @@ impl Runtime {
                     h.tokens_raw_estimate,
                     h.tokens_sent,
                     h.build_ms,
+                    h.items,
                 );
                 (h.prompt, handoff, Some(change_row), Some(separator))
             }
@@ -895,7 +896,7 @@ impl Runtime {
                 let tokens = symphony_context::handoff::estimate_tokens(&objective);
                 (
                     objective,
-                    (None, agent.context_mode, tokens, tokens, 0),
+                    (None, agent.context_mode, tokens, tokens, 0, Vec::new()),
                     None,
                     None,
                 )
@@ -926,7 +927,7 @@ impl Runtime {
                 if let Some(p) = &route {
                     p.save(t, agent_id, Some(run), now)?;
                 }
-                let (checkpoint_id, mode, raw, sent, build_ms) = handoff;
+                let (checkpoint_id, mode, raw, sent, build_ms, items) = handoff;
                 repo::insert_handoff(
                     t,
                     &repo::NewHandoff {
@@ -938,6 +939,7 @@ impl Runtime {
                         tokens_raw_estimate: raw,
                         tokens_sent: sent,
                         build_ms,
+                        items,
                     },
                     now,
                 )?;

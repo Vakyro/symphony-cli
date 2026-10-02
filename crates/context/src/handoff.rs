@@ -1,9 +1,66 @@
-//! Handoff assembler v1 (IDEA §5.6 a, ADR-0004): el prompt de arranque de un
+//! Handoff assembler v2 (IDEA §5.6 a, ADR-0004, P09.S6): el prompt de arranque de un
 //! executor nuevo, armado con una plantilla fija desde el último checkpoint más
 //! el git vivo del worktree (H2: git manda). Sin LLM y sin E/S: el daemon junta
-//! los datos y esta función solo los ordena y recorta según el modo.
+//! los datos y esta función solo los ordena, comprime y recorta según el modo.
+//!
+//! Además del prompt devuelve **qué entró y con qué fidelidad** ([`Item`]): la tabla
+//! `handoff_items` y `symphony context inspect` salen de ahí.
 
 use symphony_core::ContextMode;
+
+use crate::compress::{Compressor, Hint, compress};
+
+/// Qué tan fiel al original es una parte del prompt (`handoff_items.fidelity`, 0–5).
+pub mod fidelity {
+    /// No entró: solo se dice que existe.
+    pub const OMITTED: u8 = 0;
+    /// Solo una referencia `ctx://` al original.
+    pub const REFERENCE: u8 = 1;
+    /// Esqueleto estructural (AST, P09.S4).
+    pub const SKELETON: u8 = 2;
+    /// Resumen determinista (compresor); el original sigue en su `ctx://`.
+    pub const COMPRESSED: u8 = 3;
+    /// El original recortado por tamaño.
+    pub const CLIPPED: u8 = 4;
+    /// El original completo.
+    pub const FULL: u8 = 5;
+}
+
+/// Sección del prompt (`handoff_items.section`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Objective,
+    Plan,
+    Decisions,
+    Failures,
+    Code,
+    Diff,
+    References,
+}
+
+impl Section {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Objective => "OBJECTIVE",
+            Self::Plan => "PLAN",
+            Self::Decisions => "DECISIONS",
+            Self::Failures => "FAILURES",
+            Self::Code => "CODE",
+            Self::Diff => "DIFF",
+            Self::References => "REFERENCES",
+        }
+    }
+}
+
+/// Una parte del prompt y cómo quedó.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Item {
+    pub section: Section,
+    /// Archivo o `ctx://` al que se refiere, si aplica.
+    pub path: Option<String>,
+    pub fidelity: u8,
+    pub tokens: i64,
+}
 
 /// Último comando que corrió el executor anterior.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +118,7 @@ pub struct HandoffInput {
 pub struct Handoff {
     pub prompt: String,
     pub tokens_sent: i64,
+    pub items: Vec<Item>,
 }
 
 /// Estimación determinista de tokens (~4 caracteres por token).
@@ -92,18 +150,20 @@ fn conversation_limits(mode: ContextMode) -> Option<(usize, usize)> {
 
 /// La conversación como texto: los mensajes más recientes que caben en el presupuesto
 /// (siempre al menos el último), con aviso de cuántos anteriores se omitieron.
-fn render_conversation(messages: &[ChatMessage], mode: ContextMode) -> String {
+fn render_conversation(messages: &[ChatMessage], mode: ContextMode) -> (String, u8) {
     let (total, each) = match conversation_limits(mode) {
         Some((t, e)) => (Some(t), Some(e)),
         None => (None, None),
     };
     let mut kept: Vec<String> = Vec::new();
     let mut used = 0usize;
+    let mut clipped = false;
     for m in messages.iter().rev() {
         let who = match m.speaker {
             Speaker::User => "Usuario",
             Speaker::Assistant => "Asistente",
         };
+        clipped |= is_clipped(m.text.trim(), each);
         let line = format!("**{who}:** {}", clip(m.text.trim(), each, None));
         let len = line.chars().count();
         if total.is_some_and(|t| !kept.is_empty() && used + len > t) {
@@ -119,7 +179,44 @@ fn render_conversation(messages: &[ChatMessage], mode: ContextMode) -> String {
         out.push_str(&format!("[… {omitted} mensajes anteriores omitidos]\n\n"));
     }
     out.push_str(&kept.join("\n\n"));
-    out
+    let f = if omitted > 0 || clipped {
+        fidelity::CLIPPED
+    } else {
+        fidelity::FULL
+    };
+    (out, f)
+}
+
+fn is_clipped(text: &str, max: Option<usize>) -> bool {
+    max.is_some_and(|m| text.chars().count() > m)
+}
+
+/// El diff para el prompt: en `BALANCED`/`AGGRESSIVE` primero se reduce (archivos, +/−, lockfiles
+/// fuera, hunks largos recortados) si eso es más corto que el original con su aviso; después se
+/// recorta al límite del modo.
+fn render_diff(diff: &str, max: Option<usize>, uri: Option<&str>, reduce: bool) -> (String, u8) {
+    let mut text = diff.to_string();
+    let mut f = fidelity::FULL;
+    if reduce {
+        let c = compress(diff, Hint::Diff);
+        if c.compressor == Compressor::GitDiff {
+            let note = match uri {
+                Some(u) => {
+                    format!("[resumen determinista del diff; el original completo está en {u}]")
+                }
+                None => "[resumen determinista del diff]".to_string(),
+            };
+            let candidate = format!("{}\n{note}", c.text);
+            if candidate.len() < diff.len() {
+                text = candidate;
+                f = fidelity::COMPRESSED;
+            }
+        }
+    }
+    if is_clipped(&text, max) {
+        f = f.min(fidelity::CLIPPED);
+    }
+    (clip(&text, max, uri), f)
 }
 
 /// Recorta a `max` caracteres y avisa cuánto se omitió y dónde está el original.
@@ -179,41 +276,76 @@ pub fn assemble(input: &HandoffInput, mode: ContextMode) -> Handoff {
         }
     };
 
+    let mut items: Vec<Item> = Vec::new();
     let mut budget = files_total;
     let new_files: Vec<String> = input
         .new_files
         .iter()
-        .map(|f| match &f.content {
-            None => format!(
-                "--- {} (archivo nuevo, binario o ilegible: no se incluye)",
-                f.path
-            ),
-            Some(body) => {
-                let room = match (file_max, budget) {
-                    (Some(each), Some(left)) => Some(each.min(left)),
-                    _ => None,
-                };
-                let shown = clip(body, room, None);
-                if let (Some(left), Some(room)) = (budget.as_mut(), room) {
-                    *left -= room.min(body.chars().count());
+        .map(|f| {
+            let (text, fid) = match &f.content {
+                None => (
+                    format!(
+                        "--- {} (archivo nuevo, binario o ilegible: no se incluye)",
+                        f.path
+                    ),
+                    fidelity::OMITTED,
+                ),
+                Some(body) => {
+                    let room = match (file_max, budget) {
+                        (Some(each), Some(left)) => Some(each.min(left)),
+                        _ => None,
+                    };
+                    let shown = clip(body, room, None);
+                    if let (Some(left), Some(room)) = (budget.as_mut(), room) {
+                        *left -= room.min(body.chars().count());
+                    }
+                    let fid = if is_clipped(body, room) {
+                        fidelity::CLIPPED
+                    } else {
+                        fidelity::FULL
+                    };
+                    (
+                        format!("--- {} (archivo nuevo)\n{}", f.path, shown.trim_end()),
+                        fid,
+                    )
                 }
-                format!("--- {} (archivo nuevo)\n{}", f.path, shown.trim_end())
-            }
+            };
+            items.push(Item {
+                section: Section::Code,
+                path: Some(f.path.clone()),
+                fidelity: fid,
+                tokens: estimate_tokens(&text),
+            });
+            text
         })
         .collect();
 
     let conversation = if input.conversation.is_empty() {
         String::new()
     } else {
+        let (rendered, fid) = render_conversation(&input.conversation, mode);
+        items.push(Item {
+            section: Section::Decisions,
+            path: None,
+            fidelity: fid,
+            tokens: estimate_tokens(&rendered),
+        });
         format!(
             "## Conversación hasta ahora (lo más reciente al final)
 {}
 El último mensaje del usuario puede estar sin responder o a medias: revisa el worktree y continúa desde ahí.
 
 ",
-            render_conversation(&input.conversation, mode)
+            rendered
         )
     };
+
+    let (diff, diff_fidelity) = render_diff(
+        &input.diff,
+        diff_max,
+        input.diff_uri.as_deref(),
+        !matches!(mode, ContextMode::Raw | ContextMode::Safe),
+    );
 
     let prompt = format!(
         "Retomas una tarea de código que otro executor dejó a medias. {reason}
@@ -264,16 +396,60 @@ Continúa hasta terminar el objetivo. Si algo del estado de arriba contradice lo
         } else {
             input.git_status.trim_end()
         },
-        diff = or_none(&clip(&input.diff, diff_max, input.diff_uri.as_deref())),
+        diff = or_none(&diff),
         new_files = if new_files.is_empty() {
             "(ninguno)".to_string()
         } else {
             new_files.join("\n\n")
         },
     );
+    let tokens = |text: &str| estimate_tokens(text);
+    let mut head = vec![
+        Item {
+            section: Section::Objective,
+            path: None,
+            fidelity: fidelity::FULL,
+            tokens: tokens(&input.objective),
+        },
+        Item {
+            section: Section::Plan,
+            path: None,
+            fidelity: fidelity::FULL,
+            tokens: tokens(&format!(
+                "{}{}{}",
+                opt(input.plan_tail.as_deref()),
+                opt(input.current_step.as_deref()),
+                opt(input.next_step.as_deref())
+            )),
+        },
+        Item {
+            section: Section::Failures,
+            path: None,
+            fidelity: fidelity::FULL,
+            tokens: tokens(&format!("{last_command}{}", bullets(&input.failures))),
+        },
+        Item {
+            section: Section::Diff,
+            path: None,
+            fidelity: diff_fidelity,
+            tokens: tokens(&diff),
+        },
+    ];
+    if diff_fidelity < fidelity::FULL
+        && let Some(uri) = &input.diff_uri
+    {
+        head.push(Item {
+            section: Section::References,
+            path: Some(uri.clone()),
+            fidelity: fidelity::REFERENCE,
+            tokens: tokens(uri),
+        });
+    }
+    head.append(&mut items);
     Handoff {
         tokens_sent: estimate_tokens(&prompt),
         prompt,
+        items: head,
     }
 }
 
@@ -455,6 +631,112 @@ mod tests {
                 t(ContextMode::Aggressive)
             );
         }
+    }
+
+    /// Un diff realista: un cambio de verdad, un lockfile enorme y un archivo generado largo.
+    fn big_diff() -> String {
+        let mut d = String::from(
+            "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -1,3 +1,4 @@\n export function rotate(t) {\n+  revoke(t);\n   return issue();\n }\n",
+        );
+        d.push_str("diff --git a/package-lock.json b/package-lock.json\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1,1 +1,3000 @@\n");
+        for i in 0..3000 {
+            d.push_str(&format!("+    \"dep{i}\": \"1.0.{i}\",\n"));
+        }
+        d
+    }
+
+    #[test]
+    fn balanced_reduces_the_diff_and_points_to_the_original() {
+        let mut input = fixed();
+        input.diff = big_diff();
+        let safe = assemble(&input, ContextMode::Safe);
+        let balanced = assemble(&input, ContextMode::Balanced);
+        assert!(
+            balanced.prompt.contains("+  revoke(t);"),
+            "el cambio real sigue"
+        );
+        assert!(
+            balanced
+                .prompt
+                .contains("package-lock.json — generado o lockfile")
+        );
+        assert!(!balanced.prompt.contains("dep2999"));
+        assert!(balanced.prompt.contains(
+            "[resumen determinista del diff; el original completo está en ctx://diff/AGENT/abc]"
+        ));
+        assert!(balanced.tokens_sent * 3 < safe.tokens_sent);
+        let diff_item = |h: &Handoff| {
+            h.items
+                .iter()
+                .find(|i| i.section == Section::Diff)
+                .unwrap()
+                .fidelity
+        };
+        assert_eq!(diff_item(&balanced), fidelity::COMPRESSED);
+        assert_eq!(diff_item(&safe), fidelity::FULL);
+        assert!(
+            balanced
+                .items
+                .iter()
+                .any(|i| i.section == Section::References
+                    && i.path.as_deref() == Some("ctx://diff/AGENT/abc"))
+        );
+        assert!(!safe.items.iter().any(|i| i.section == Section::References));
+    }
+
+    #[test]
+    fn raw_omits_nothing_and_modes_are_monotonic_with_a_realistic_checkpoint() {
+        let mut input = fixed();
+        input.diff = big_diff();
+        input.conversation = chat(60, 1_500);
+        input.new_files = (0..6)
+            .map(|i| NewFile {
+                path: format!("src/n{i}.ts"),
+                content: Some(format!("export const n{i} = {};\n", "1".repeat(30_000))),
+            })
+            .collect();
+        let t = |m| assemble(&input, m);
+        let (raw, safe, balanced, aggressive) = (
+            t(ContextMode::Raw),
+            t(ContextMode::Safe),
+            t(ContextMode::Balanced),
+            t(ContextMode::Aggressive),
+        );
+        assert!(raw.tokens_sent >= safe.tokens_sent);
+        assert!(safe.tokens_sent >= balanced.tokens_sent);
+        assert!(balanced.tokens_sent >= aggressive.tokens_sent);
+        assert!(raw.tokens_sent > aggressive.tokens_sent);
+        // RAW: todo entra completo, nada se resume ni se recorta.
+        assert!(raw.prompt.contains("dep2999"));
+        assert!(!raw.prompt.contains("omitidos") && !raw.prompt.contains("resumen determinista"));
+        assert!(
+            raw.items.iter().all(|i| i.fidelity == fidelity::FULL),
+            "{:?}",
+            raw.items
+        );
+        // Los demás nunca dicen más fidelidad que RAW y siempre listan las mismas secciones.
+        for h in [&safe, &balanced, &aggressive] {
+            assert!(h.items.iter().all(|i| i.fidelity <= fidelity::FULL));
+            assert!(h.items.iter().any(|i| i.fidelity < fidelity::FULL));
+        }
+        // La suma de los items no pasa lo enviado (la plantilla fija es lo que falta).
+        for h in [&raw, &safe, &balanced, &aggressive] {
+            assert!(h.items.iter().map(|i| i.tokens).sum::<i64>() <= h.tokens_sent);
+        }
+    }
+
+    #[test]
+    fn items_describe_the_sections_of_a_small_checkpoint() {
+        let h = assemble(&fixed(), ContextMode::Balanced);
+        let sections: Vec<&str> = h.items.iter().map(|i| i.section.as_str()).collect();
+        assert_eq!(
+            sections,
+            ["OBJECTIVE", "PLAN", "FAILURES", "DIFF", "CODE", "CODE"]
+        );
+        let png = h.items.last().unwrap();
+        assert_eq!(png.path.as_deref(), Some("fixtures/logo.png"));
+        assert_eq!(png.fidelity, fidelity::OMITTED);
+        assert!(h.items[..5].iter().all(|i| i.fidelity == fidelity::FULL));
     }
 
     #[test]

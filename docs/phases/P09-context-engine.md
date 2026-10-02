@@ -33,6 +33,12 @@
 `context::compress`: `LogCollapser` (ANSI y líneas `` fuera, repeticiones «×N», recorte del medio; las líneas de error/panic/Traceback **siempre** se conservan), `TestSummaryCompressor` (cargo, vitest/jest, pytest → «896 pruebas: 895 pasaron, 1 falló» + nombres de fallos), `JsonStructuralCompressor` (esquema, conteos, rangos, ejemplos, campos opcionales marcados «solo en N de M»), `Deduplicator` (bloques/líneas largas repetidos → «igual a la línea N»), `GitDiffReducer` (lista de archivos con +/−, lockfiles y generados en una línea, hunks largos recortados). `compress()` elige por contenido (o por `Hint`) y **nunca infla**. El daemon guarda la versión comprimida junto al objeto (`set_compression`, desde 2 KB) y el original sigue en su blob. Etiquetas en DB: TestSummary→`LOG_COLLAPSE`, GitDiff→`DEDUP` (el CHECK solo admite cinco). Verificado: unit con corpus sintético por formato, proptest «no entra en pánico y no infla», proptest «la línea de error sobrevive al colapso», bench 1 MB de log ≈ 30 ms.
 Desvío: el corpus dorado se genera en los tests en vez de `fixtures/context/` + snapshots (más corto de mantener y las aserciones son más precisas que un snapshot de texto comprimido).
 
+### P09.S6 · Handoff assembler v2 (hecho)
+`handoff::assemble` ahora devuelve, además del prompt, los **items** (sección, archivo o `ctx://`, fidelidad 0–5, tokens). Fidelidad: 5 completo · 4 recortado por tamaño · 3 resumen determinista · 2 esqueleto (AST, S4) · 1 solo referencia · 0 omitido. Cambios de comportamiento: en `BALANCED` y `AGGRESSIVE` el diff pasa primero por `GitDiffReducer` (archivos con +/−, lockfiles y generados en una línea, hunks largos recortados) y solo se usa si, con su aviso «el original completo está en ctx://…», es más corto que el original; `RAW` y `SAFE` no resumen nada. Lo comprimido se calcula en el momento: el original nunca se toca. Los archivos nuevos y la conversación **no** se comprimen (colapsar líneas parecidas de código o de chat perdería contenido): solo se recortan, como en v1.
+Persistencia: `handoff_items` se llena en cada cambio de executor (`repo::insert_handoff` con `NewHandoffItem`; id `HandoffItemId`). Comandos: `symphony context inspect <agente>` (tabla de secciones con fidelidad), `context stats` (compresión por compresor, coste de handoffs por modo, recuperaciones y misses) y `context raw <ctx://…>` (el original; la dirección se valida con `CtxUri` y se busca en la base, nunca se abre una ruta). Protocolo: `context.inspect`, `context.stats`, `context.raw`.
+Verificado: `raw_omits_nothing_and_modes_are_monotonic_with_a_realistic_checkpoint` (raw ≥ safe ≥ balanced ≥ aggressive en tokens con un diff de 3.000 líneas de lockfile, 60 mensajes y 6 archivos nuevos; RAW sin un solo recorte y todo a fidelidad 5), `balanced_reduces_the_diff_and_points_to_the_original`, snapshots v1 sin cambios (un diff pequeño no se resume), L2 del daemon (`handoff_items` tras un switch), CLI de punta a punta contra un daemon real.
+Desvío: `/context inspect|stats|raw` del PLAN son subcomandos `symphony context …` (la TUI no tiene todavía un punto de entrada de comandos con barra).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -40,6 +46,7 @@ Desvío: el corpus dorado se genera en los tests en vez de `fixtures/context/` +
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|
+| (corregido en S6) La poda de checkpoints borraba diffs con chunks indexados y fallaba por la clave foránea: el checkpoint siguiente no se guardaba | Perdía checkpoints en agentes con muchos cambios; lo cazó `checkpoints_stay_monotonic_and_consistent` | 38+ checkpoints con diffs indexados | `prune_checkpoints` borra antes chunks y recuperaciones y anula `handoff_items.object_id`; test de regresión en `crates/store/tests/context.rs` |
 
 ## Decisiones tomadas
 - ADR-0010: P10 → P09 → P08 completas.

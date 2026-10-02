@@ -28,6 +28,7 @@ pub struct PreparedHandoff {
     pub tokens_sent: i64,
     pub tokens_raw_estimate: i64,
     pub build_ms: i64,
+    pub items: Vec<repo::NewHandoffItem>,
 }
 
 /// Git vivo del worktree.
@@ -226,5 +227,15 @@ pub async fn prepare(
         tokens_sent: built.tokens_sent,
         tokens_raw_estimate: raw,
         build_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+        items: built
+            .items
+            .into_iter()
+            .map(|i| repo::NewHandoffItem {
+                section: i.section.as_str(),
+                path: i.path,
+                fidelity: i.fidelity,
+                tokens: i.tokens,
+            })
+            .collect(),
     })
 }

@@ -379,6 +379,9 @@ async fn dispatch(req: Request, state: &State) -> Response {
                 .map(|d| json!({ "agent_id": agent, "decisions": d }))
                 .map_err(rusqlite::Error::from)
         }),
+        "context.inspect" => agent_view(req, state, crate::context_views::inspect),
+        "context.stats" => read_view(req, state, crate::context_views::stats),
+        "context.raw" => context_raw(req, state),
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
@@ -863,6 +866,24 @@ fn read_view(
     match res {
         Ok(v) => Response::ok(req.id, v),
         Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+/// El original de un objeto de contexto por su `ctx://`.
+fn context_raw(req: Request, state: &State) -> Response {
+    let Some(uri) = req.params.get("uri").and_then(Value::as_str) else {
+        return Response::error(req.id, "invalid_params", "falta `uri`");
+    };
+    let objects = symphony_object_store::ObjectStore::new(
+        symphony_core::SymphonyHome::at(&state.home).objects_dir(),
+    );
+    let out = match state.reader.lock() {
+        Ok(c) => crate::context_views::raw(&c, &objects, uri),
+        Err(_) => Err("lector de la base no disponible".to_string()),
+    };
+    match out {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "context_not_found", e),
     }
 }
 

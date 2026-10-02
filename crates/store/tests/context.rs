@@ -166,3 +166,57 @@ fn retrievals_are_counted_with_their_misses() {
         "la operación la valida el CHECK"
     );
 }
+
+/// Regresión: al podar checkpoints se borran los diffs sin uso; sus chunks, su índice y sus
+/// recuperaciones tienen que irse con ellos (antes la poda fallaba por la clave foránea y el
+/// checkpoint siguiente no se guardaba).
+#[test]
+fn pruning_an_orphan_diff_takes_its_chunks_and_retrievals_with_it() {
+    use symphony_core::AgentId;
+    let (conn, _, _, run) = seeded();
+    let agent = AgentId::new();
+    conn.execute(
+        "INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at) VALUES ('t2','p1','T-2','WORK','dos','RUNNING',0,0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_model_id, failover_policy, context_mode, created_at, updated_at)
+         VALUES (?1,'p1','s1','t2',2,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0)",
+        [agent.to_string()],
+    )
+    .unwrap();
+    let diff = ContextObjectId::new();
+    conn.execute(
+        "INSERT INTO context_objects (id, uri, project_id, agent_id, kind, blob_hash, created_at)
+         VALUES (?1, 'ctx://diff/viejo', 'p1', ?2, 'GIT_DIFF', 'h1', 0)",
+        rusqlite::params![diff.to_string(), agent.to_string()],
+    )
+    .unwrap();
+    ctx::replace_chunks(&conn, diff, &[chunk(0, "cambio unico en el diff viejo")]).unwrap();
+    ctx::record_retrieval(
+        &conn,
+        run,
+        &diff.to_string(),
+        "SEARCH",
+        Some("viejo"),
+        Some(5),
+        true,
+        1,
+    )
+    .unwrap();
+
+    let hashes = symphony_store::repo::prune_checkpoints(&conn, agent, 5).unwrap();
+    assert_eq!(hashes, ["h1"]);
+    assert!(
+        ctx::object_by_uri(&conn, "ctx://diff/viejo")
+            .unwrap()
+            .is_none()
+    );
+    let q = symphony_context::chunk::fts_query("viejo").unwrap();
+    assert!(ctx::search(&conn, "p1", &q, None, 5).unwrap().is_empty());
+    let chunks: i64 = conn
+        .query_row("SELECT COUNT(*) FROM context_chunks", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(chunks, 0);
+}

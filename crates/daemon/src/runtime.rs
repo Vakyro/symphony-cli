@@ -676,6 +676,7 @@ impl Runtime {
                     tokens_raw_estimate: tokens,
                     tokens_sent: tokens,
                     build_ms: 0,
+                    items: Vec::new(),
                 }
             }),
             decision: pending,

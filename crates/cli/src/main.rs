@@ -114,6 +114,11 @@ enum Cmd {
         /// ID o número del agente.
         agent: String,
     },
+    /// Context engine: qué entró al último handoff, estadísticas y el original de un objeto.
+    Context {
+        #[command(subcommand)]
+        action: ContextCmd,
+    },
     /// Muestra el git diff del worktree del agente contra su commit base.
     Diff {
         /// ID o número del agente.
@@ -152,6 +157,22 @@ enum Cmd {
 enum ProvidersCmd {
     /// Vuelve a detectar los CLIs instalados.
     Refresh,
+}
+
+#[derive(Subcommand)]
+enum ContextCmd {
+    /// Qué entró al último handoff de un agente y con qué fidelidad.
+    Inspect {
+        /// ID o número del agente.
+        agent: String,
+    },
+    /// Compresión, coste de los handoffs y recuperaciones.
+    Stats,
+    /// El original completo de un objeto de contexto (`ctx://…`).
+    Raw {
+        /// Dirección `ctx://`.
+        uri: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -333,6 +354,24 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
             let mut conn = client::connect_or_start(home).await?;
             let res = client::call(&mut conn, "route.explain", json!({ "agent": agent })).await?;
             print_route(&res);
+        }
+        Some(Cmd::Context { action }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            match action {
+                ContextCmd::Inspect { agent } => {
+                    let res = client::call(&mut conn, "context.inspect", json!({ "agent": agent }))
+                        .await?;
+                    print_context_inspect(&res);
+                }
+                ContextCmd::Stats => {
+                    let res = client::call(&mut conn, "context.stats", json!({})).await?;
+                    print_context_stats(&res);
+                }
+                ContextCmd::Raw { uri } => {
+                    let res = client::call(&mut conn, "context.raw", json!({ "uri": uri })).await?;
+                    print!("{}", res["text"].as_str().unwrap_or(""));
+                }
+            }
         }
         Some(Cmd::Diff { agent }) => {
             let mut conn = client::connect_or_start(home).await?;
@@ -622,6 +661,86 @@ fn print_route(v: &Value) {
             );
         }
     }
+}
+
+fn print_context_inspect(v: &Value) {
+    let h = &v["handoff"];
+    if h.is_null() {
+        println!("El agente no tiene handoffs.");
+        return;
+    }
+    println!(
+        "Handoff {} · modo {} · {} tokens enviados de {} en RAW · {} ms",
+        h["id"].as_str().unwrap_or("?"),
+        h["mode"].as_str().unwrap_or("?"),
+        h["tokens_sent"],
+        h["tokens_raw_estimate"],
+        h["build_ms"]
+    );
+    let items = v["items"].as_array().cloned().unwrap_or_default();
+    if items.is_empty() {
+        println!("(primer arranque: solo el objetivo, sin detalle por sección)");
+        return;
+    }
+    println!(
+        "{:<11} {:<10} {:>8}  ORIGEN",
+        "SECCIÓN", "FIDELIDAD", "TOKENS"
+    );
+    for i in items {
+        let fidelity = match i["fidelity"].as_i64() {
+            Some(5) => "completo",
+            Some(4) => "recortado",
+            Some(3) => "resumen",
+            Some(2) => "esqueleto",
+            Some(1) => "referencia",
+            Some(0) => "omitido",
+            _ => "?",
+        };
+        println!(
+            "{:<11} {:<10} {:>8}  {}",
+            i["section"].as_str().unwrap_or("?"),
+            fidelity,
+            i["tokens"],
+            i["path"].as_str().unwrap_or("")
+        );
+    }
+}
+
+fn print_context_stats(v: &Value) {
+    println!(
+        "{} objetos de contexto, {} chunks buscables.",
+        v["objects"], v["chunks"]
+    );
+    let empty = Vec::new();
+    let comp = v["compression"].as_array().unwrap_or(&empty);
+    if comp.is_empty() {
+        println!("Sin objetos comprimidos todavía.");
+    }
+    for c in comp {
+        println!(
+            "  {:<13} {:>5} objetos · {} → {} tokens",
+            c["compressor"].as_str().unwrap_or("?"),
+            c["objects"],
+            c["tokens_original"],
+            c["tokens_compressed"]
+        );
+    }
+    for h in v["handoffs"].as_array().unwrap_or(&empty) {
+        println!(
+            "  handoffs {:<10} {:>4} · {} tokens enviados de {} en RAW · {} necesitaron recuperar · {} no continuaron",
+            h["mode"].as_str().unwrap_or("?"),
+            h["handoffs"],
+            h["tokens_sent"],
+            h["tokens_raw"],
+            h["needed_retrieval"],
+            h["failed_to_continue"]
+        );
+    }
+    let r = &v["retrievals"];
+    println!(
+        "  recuperaciones: {} ({} sin resultado) · {} tokens devueltos",
+        r["total"], r["misses"], r["tokens_returned"]
+    );
 }
 
 fn print_usage(v: &Value) {

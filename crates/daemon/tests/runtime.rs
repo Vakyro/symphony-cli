@@ -1189,6 +1189,13 @@ command = ["git", "no-such-subcommand"]
         assert!(p.contains(want), "falta {want:?} en:\n{p}");
     }
     assert_eq!(h.tokens_sent, symphony_context::handoff::estimate_tokens(p));
+    let sections: Vec<&str> = h.items.iter().map(|i| i.section).collect();
+    for want in ["OBJECTIVE", "PLAN", "FAILURES", "DIFF", "CODE", "DECISIONS"] {
+        assert!(
+            sections.contains(&want),
+            "falta la sección {want}: {sections:?}"
+        );
+    }
     // Nada se recortó: lo que costaría en RAW es lo que se envió.
     assert!(h.tokens_raw_estimate >= h.tokens_sent, "{h:?}");
     e.writer.shutdown();
@@ -1298,6 +1305,14 @@ segundo",
         1,
         "el prompt del handoff anterior no debe entrar a la conversación:\n{p}"
     );
+    // El cambio de executor dejó su handoff con el detalle de lo que entró y su fidelidad.
+    assert!(
+        count(
+            &e,
+            "handoff_items WHERE section = 'OBJECTIVE' AND fidelity = 5"
+        ) >= 1
+    );
+    assert!(count(&e, "handoff_items WHERE section = 'DECISIONS'") >= 1);
     e.writer.shutdown();
 }
 

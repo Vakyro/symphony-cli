@@ -19,6 +19,7 @@ Commands:
   kill           Termina forzosamente el executor y cancela el agente
   switch         Cambia el modelo del agente a uno exacto y reinicia el executor
   explain-route  Por qué se eligió el modelo de un agente: decisiones de routing y candidatos evaluados
+  context        Context engine: qué entró al último handoff, estadísticas y el original de un objeto
   diff           Muestra el git diff del worktree del agente contra su commit base
   logs           Muestra el historial de mensajes/conversación del agente
   attach         Abre la sesión del agente en el CLI oficial (Claude Code, Codex) en una terminal nueva

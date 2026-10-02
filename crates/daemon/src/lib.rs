@@ -4,6 +4,7 @@ pub mod attach;
 pub mod bus;
 pub mod checkpoint;
 pub mod context_index;
+pub mod context_views;
 pub mod executor;
 pub mod export;
 pub mod handoff;
