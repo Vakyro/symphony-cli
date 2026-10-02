@@ -501,11 +501,15 @@ async fn invalid_requests_are_rejected_before_touching_anything() {
 
     let err = e
         .runtime
-        .create_agent(req(&e, "Con profile", Execution::Profile("@code".into())))
+        .create_agent(req(
+            &e,
+            "Con profile",
+            Execution::Profile("@inexistente".into()),
+        ))
         .await
         .unwrap_err();
     assert!(
-        matches!(err, CreateError::ProfilesNotSupported { .. }),
+        matches!(&err, CreateError::UnknownProfile { profile, .. } if profile == "@inexistente"),
         "{err:?}"
     );
 
@@ -2283,6 +2287,613 @@ async fn handoff_matrix_from_google() {
 #[tokio::test(flavor = "multi_thread")]
 async fn handoff_matrix_from_github() {
     handoff_matrix_from("github").await;
+}
+
+/// P10.S2: la salud del proveedor sigue a lo que pasa en sus runs.
+fn health_of(e: &Env, provider: &str) -> (String, String, Option<f64>, Option<i64>, Option<i64>) {
+    symphony_store::open_reader(&e.db)
+        .unwrap()
+        .query_row(
+            "SELECT state, quota_certainty, quota_remaining, retry_after_at, reset_at
+             FROM provider_health WHERE provider_id = ?1 AND model_id IS NULL",
+            [provider],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap()
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_429_rate_limits_the_provider_and_never_exhausts_it() {
+    // Un 429 y el CLI se cuelga: el watchdog lo mata y no hay éxito que limpie el estado.
+    let script =
+        "[[step]]\nkind = \"rate_limit\"\nretry_after_ms = 30\n[[step]]\nkind = \"hang\"\n";
+    let e = env_with_watchdog(
+        &[("alpha", script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+    e.runtime
+        .create_agent(req(&e, "limitado", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let (state, certainty, remaining, retry_after, reset) = health_of(&e, "alpha");
+    assert_eq!(state, "RATE_LIMITED", "un 429 no es «agotado»");
+    assert_eq!(
+        (certainty.as_str(), remaining, reset),
+        ("UNKNOWN", None, None)
+    );
+    assert!(retry_after.is_some(), "con la espera que pidió el CLI");
+    // Queda anotado como fallo temporal, con la cuenta `default`.
+    assert_eq!(
+        one::<String>(
+            &e,
+            "SELECT failure_type || '|' || account_id FROM provider_failures"
+        ),
+        "TEMP_RATE_LIMIT|acct-alpha"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exhausted_quota_marks_the_provider_and_the_replacement_stays_healthy() {
+    let reset_secs = now_secs() + 3600;
+    let first = format!("[[step]]\nkind = \"quota_exhausted\"\nresets_at = {reset_secs}\n");
+    let second = "[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+    let e = env_with(&[("alpha", first.as_str()), ("beta", second)], None).await;
+    e.runtime
+        .create_agent(req(&e, "agotado", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let (state, _, _, _, reset) = health_of(&e, "alpha");
+    assert_eq!(state, "EXHAUSTED");
+    assert_eq!(
+        reset,
+        Some(reset_secs * 1000),
+        "la base guarda milisegundos"
+    );
+    assert_eq!(
+        health_of(&e, "beta").0,
+        "HEALTHY",
+        "el reemplazo terminó bien"
+    );
+    assert_eq!(
+        one::<String>(&e, "SELECT failure_type FROM provider_failures"),
+        "DAILY_QUOTA"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_known_quota_report_below_the_reserve_marks_quota_low_with_a_real_percentage() {
+    let script = format!(
+        "[[step]]\nkind = \"quota\"\nwindow = \"five_hour\"\nused_fraction = 0.3\nresets_at = {r}\n\
+         [[step]]\nkind = \"quota\"\nwindow = \"seven_day\"\nused_fraction = 0.9\nresets_at = {r}\n\
+         [[step]]\nkind = \"say\"\ntext = \"listo\"\n",
+        r = now_secs() + 7200
+    );
+    let e = env_with(&[("alpha", script.as_str())], None).await;
+    e.runtime
+        .create_agent(req(&e, "cuota", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let (state, certainty, remaining, _, _) = health_of(&e, "alpha");
+    // Manda la ventana más apretada (0.9 usado → 0.1 restante ≤ reserva 0.20); un éxito no la borra.
+    assert_eq!(state, "QUOTA_LOW");
+    assert_eq!(certainty, "KNOWN");
+    assert!((remaining.unwrap() - 0.1).abs() < 1e-9, "{remaining:?}");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn usage_is_reported_when_the_cli_gives_it_and_estimated_when_it_does_not() {
+    let reported =
+        "[[step]]\nkind = \"usage\"\ntokens = 4321\n[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+    let silent = "[[step]]\nkind = \"say\"\ntext = \"respuesta de unas cuantas palabras\"\n";
+    let e = env_with(&[("alpha", reported), ("beta", silent)], None).await;
+    for (title, model) in [("con uso", "alpha/fast"), ("sin uso", "beta/fast")] {
+        e.runtime
+            .create_agent(req(&e, title, Execution::Exact(model.into())))
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+    }
+    e.writer.handle().flush().await.unwrap();
+
+    let usage = |provider: &str| -> (String, i64) {
+        symphony_store::open_reader(&e.db)
+            .unwrap()
+            .query_row(
+                "SELECT source, COALESCE(tokens_in, 0) FROM usage_records WHERE provider_id = ?1",
+                [provider],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    };
+    assert_eq!(usage("alpha"), ("REPORTED".into(), 4321));
+    let (source, tokens_in) = usage("beta");
+    assert_eq!(source, "ESTIMATED");
+    assert!(tokens_in > 0, "se estima a partir del prompt enviado");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_token_budget_in_the_config_gives_an_estimated_quota_never_a_percentage() {
+    let heavy =
+        "[[step]]\nkind = \"usage\"\ntokens = 900\n[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+    let e = env_with(&[("alpha", heavy), ("beta", heavy)], None).await;
+    // Solo alpha tiene presupuesto: 1000 tokens por ventana de una hora, reserva 0.20.
+    let mut cfg = symphony_daemon::health::HealthConfig::default();
+    cfg.budgets.insert("alpha".into(), (1, 1000));
+    e.bus.set_health_config(cfg);
+    for (title, model) in [
+        ("con presupuesto", "alpha/fast"),
+        ("sin presupuesto", "beta/fast"),
+    ] {
+        e.runtime
+            .create_agent(req(&e, title, Execution::Exact(model.into())))
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+    }
+    e.writer.handle().flush().await.unwrap();
+
+    let (state, certainty, remaining, _, _) = health_of(&e, "alpha");
+    assert_eq!(certainty, "ESTIMATED");
+    assert_eq!(
+        remaining, None,
+        "una estimación nunca se muestra como porcentaje"
+    );
+    assert_eq!(state, "QUOTA_LOW", "900 de 1000 con reserva 0.20");
+    let (state, certainty, remaining, _, _) = health_of(&e, "beta");
+    assert_eq!(
+        (state.as_str(), certainty.as_str(), remaining),
+        ("HEALTHY", "UNKNOWN", None)
+    );
+    e.writer.shutdown();
+}
+
+/// P10.S5: routing por profiles y failover con el router.
+async fn set_health(
+    e: &Env,
+    provider: &str,
+    state: &str,
+    certainty: &str,
+    remaining: Option<f64>,
+    reset_in_ms: Option<i64>,
+) {
+    let (provider, state, certainty) = (
+        provider.to_string(),
+        state.to_string(),
+        certainty.to_string(),
+    );
+    e.writer
+        .handle()
+        .write(Box::new(move |t| {
+            let now = now_secs() * 1000;
+            let h = symphony_core::Health {
+                state: state.parse().unwrap(),
+                certainty: certainty.parse().unwrap(),
+                remaining,
+                retry_after_at: None,
+                reset_at: reset_in_ms.map(|ms| now + ms),
+                evidence: Some("test".into()),
+                updated_at: now,
+            };
+            symphony_store::health::put_health(t, &provider, None, &h)?;
+            Ok(())
+        }))
+        .await
+        .unwrap();
+}
+
+const SAY: &str = "[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+const QUOTA: &str = "[[step]]\nkind = \"quota_exhausted\"\n";
+
+fn rejections(e: &Env, agent: &str) -> Vec<(String, Option<String>)> {
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    conn.prepare(
+        "SELECT c.model_id, c.reject_reason FROM routing_candidates c
+         JOIN routing_decisions d ON d.id = c.decision_id
+         WHERE d.agent_id = ?1 AND d.id = (SELECT id FROM routing_decisions WHERE agent_id = ?1 ORDER BY decided_at DESC, id DESC LIMIT 1)
+         ORDER BY c.model_id",
+    )
+    .unwrap()
+    .query_map([agent], |r| Ok((r.get(0)?, r.get(1)?)))
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_profile_spawn_skips_the_exhausted_provider_and_records_the_decision() {
+    let e = env_with(&[("alpha", SAY), ("beta", SAY)], None).await;
+    set_health(&e, "alpha", "EXHAUSTED", "UNKNOWN", None, Some(3_600_000)).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "con profile", Execution::Profile("@code".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id.to_string();
+
+    // El modelo vive en el run; el agente solo recuerda el profile (AGENT ≠ MODEL).
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT execution_mode || '|' || requested_profile_id || '|' || COALESCE(requested_model_id, 'null') FROM agents WHERE id = '{agent}'"
+            )
+        ),
+        "PROFILE|@code|null"
+    );
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT provider_id FROM agent_runs WHERE agent_id = '{agent}'")
+        ),
+        "beta"
+    );
+    // La decisión queda guardada, atada al run, con el motivo de cada descarte.
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT d.trigger || '|' || d.profile_id FROM routing_decisions d JOIN agent_runs r ON r.routing_decision_id = d.id WHERE d.agent_id = '{agent}'"
+            )
+        ),
+        "SPAWN|@code"
+    );
+    let rej = rejections(&e, &agent);
+    assert!(
+        rej.iter()
+            .filter(|(m, _)| m.starts_with("alpha/"))
+            .all(|(_, r)| r.as_deref() == Some("EXHAUSTED")),
+        "{rej:?}"
+    );
+    assert!(
+        rej.iter()
+            .filter(|(m, _)| m.starts_with("beta/"))
+            .any(|(_, r)| r.is_none()),
+        "{rej:?}"
+    );
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT account_id FROM agent_runs WHERE agent_id = '{agent}'")
+        ),
+        "acct-beta"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_profile_with_no_eligible_model_explains_why_and_keeps_the_task() {
+    let e = env_with(&[("alpha", SAY)], None).await;
+    set_health(&e, "alpha", "AUTH_ERROR", "UNKNOWN", None, None).await;
+    let err = e
+        .runtime
+        .create_agent(req(&e, "sin nadie", Execution::Profile("@fast".into())))
+        .await
+        .unwrap_err();
+    match err {
+        CreateError::NoEligibleModel {
+            profile,
+            explanation,
+            task,
+        } => {
+            assert_eq!(profile, "@fast");
+            assert!(
+                explanation.contains("descartado: sesión inválida o vencida"),
+                "{explanation}"
+            );
+            assert!(explanation.contains("Ningún modelo es elegible ahora."));
+            assert_eq!(task, "sin nadie", "la tarea no se pierde");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_nothing_created(&e);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_exact_model_is_obeyed_even_with_low_quota_and_the_choice_is_recorded() {
+    let e = env_with(&[("alpha", SAY), ("beta", SAY)], None).await;
+    // Cuota informada dentro de la reserva: un profile automático no la gastaría; el usuario sí.
+    set_health(&e, "alpha", "QUOTA_LOW", "KNOWN", Some(0.1), None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "exacto", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id.to_string();
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT provider_id FROM agent_runs WHERE agent_id = '{agent}'")
+        ),
+        "alpha"
+    );
+    let explanation: String = one(
+        &e,
+        &format!("SELECT explanation FROM routing_decisions WHERE agent_id = '{agent}'"),
+    );
+    assert!(
+        explanation.starts_with("Modelo exacto elegido por el usuario: alpha/fast"),
+        "{explanation}"
+    );
+    assert_eq!(
+        one::<Option<String>>(
+            &e,
+            &format!("SELECT profile_id FROM routing_decisions WHERE agent_id = '{agent}'")
+        ),
+        None
+    );
+    e.writer.shutdown();
+}
+
+async fn failover_from(
+    first: &'static str,
+    policy: symphony_core::FailoverPolicy,
+    others: &[(&'static str, &'static str)],
+) -> (Env, String) {
+    let mut providers = vec![(first, QUOTA)];
+    providers.extend_from_slice(others);
+    let e = env_with(&providers, None).await;
+    let mut r = req(&e, "failover", Execution::Exact(format!("{first}/fast")));
+    r.failover = policy;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    (e, created.agent_id.to_string())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failover_any_goes_to_the_best_other_provider_and_records_why() {
+    let (e, agent) = failover_from(
+        "alpha",
+        symphony_core::FailoverPolicy::Any,
+        &[("beta", SAY), ("gamma", SAY)],
+    )
+    .await;
+    let providers: String = one(
+        &e,
+        &format!(
+            "SELECT group_concat(provider_id, '>') FROM (SELECT provider_id FROM agent_runs WHERE agent_id = '{agent}' ORDER BY seq)"
+        ),
+    );
+    assert_eq!(
+        providers, "alpha>beta",
+        "gana el primero por puntaje y, a igualdad, por id"
+    );
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT state FROM agents WHERE id = '{agent}'")
+        ),
+        "COMPLETED"
+    );
+    // La decisión de failover queda atada al run nuevo, con todos los modelos evaluados.
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT d.trigger FROM routing_decisions d JOIN agent_runs r ON r.routing_decision_id = d.id WHERE r.agent_id = '{agent}' AND r.seq = 2"
+            )
+        ),
+        "FAILOVER"
+    );
+    let rej = rejections(&e, &agent);
+    // El modelo que se agotó queda descartado como agotado; el proveedor agotado, por salud.
+    assert!(
+        rej.iter()
+            .any(|(m, r)| m == "alpha/fast" && r.as_deref() == Some("EXHAUSTED")),
+        "{rej:?}"
+    );
+    assert!(
+        rej.iter()
+            .any(|(m, r)| m.starts_with("gamma/") && r.is_none()),
+        "gamma sigue elegible: {rej:?}"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failover_none_leaves_the_agent_waiting_and_asks_the_user() {
+    let (e, agent) = failover_from(
+        "alpha",
+        symphony_core::FailoverPolicy::None,
+        &[("beta", SAY)],
+    )
+    .await;
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT state FROM agents WHERE id = '{agent}'")
+        ),
+        "WAITING_PROVIDER"
+    );
+    assert!(
+        one::<String>(
+            &e,
+            &format!("SELECT state_reason FROM agents WHERE id = '{agent}'")
+        )
+        .contains("el failover está desactivado")
+    );
+    assert_eq!(
+        one::<i64>(
+            &e,
+            &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id = '{agent}'")
+        ),
+        1
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failover_same_provider_does_not_leave_a_provider_that_is_exhausted() {
+    // Quedarse en el proveedor no sirve si lo que se agotó fue su cuota: espera al usuario.
+    let (e, agent) = failover_from(
+        "alpha",
+        symphony_core::FailoverPolicy::SameProvider,
+        &[("beta", SAY)],
+    )
+    .await;
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT state FROM agents WHERE id = '{agent}'")
+        ),
+        "WAITING_PROVIDER"
+    );
+    assert_eq!(
+        one::<i64>(
+            &e,
+            &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id = '{agent}'")
+        ),
+        1
+    );
+    // Aun así queda la decisión: todo lo de otros proveedores quedó fuera por la política.
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT d.trigger || '|' || COALESCE(d.selected_model_id, 'ninguno') FROM routing_decisions d WHERE d.agent_id = '{agent}' AND d.trigger = 'FAILOVER'"
+            )
+        ),
+        "FAILOVER|ninguno"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_automatic_failover_never_spends_the_reserve_of_another_provider() {
+    let e = env_with(&[("alpha", QUOTA), ("beta", SAY), ("gamma", SAY)], None).await;
+    // beta (que ganaría por id) tiene la cuota informada dentro de la reserva: se salta.
+    set_health(&e, "beta", "QUOTA_LOW", "KNOWN", Some(0.1), None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "reserva", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id.to_string();
+    let providers: String = one(
+        &e,
+        &format!(
+            "SELECT group_concat(provider_id, '>') FROM (SELECT provider_id FROM agent_runs WHERE agent_id = '{agent}' ORDER BY seq)"
+        ),
+    );
+    assert_eq!(providers, "alpha>gamma", "se salta la reserva de beta");
+    let rej = rejections(&e, &agent);
+    assert!(
+        rej.iter()
+            .any(|(m, r)| m.starts_with("beta/") && r.as_deref() == Some("RESERVE")),
+        "{rej:?}"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_manual_switch_is_recorded_as_an_exact_choice() {
+    // alpha sigue trabajando cuando el usuario cambia de modelo.
+    let slow = "[[step]]\nkind = \"say\"\ntext = \"voy\"\n[[step]]\nkind = \"sleep\"\nms = 30000\n";
+    let e = env_with(&[("alpha", slow), ("beta", SAY)], None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "cambio", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime
+        .switch(created.agent_id, "beta/smart")
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id.to_string();
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT trigger || '|' || selected_model_id FROM routing_decisions WHERE agent_id = '{agent}' AND trigger = 'SWITCH'"
+            )
+        ),
+        "SWITCH|beta/smart"
+    );
+    let explain = symphony_daemon::routing::explain(
+        &symphony_store::open_reader(&e.db).unwrap(),
+        created.agent_id,
+        5,
+    )
+    .unwrap();
+    let decisions = explain.as_array().unwrap();
+    assert_eq!(decisions.len(), 2, "el spawn y el cambio");
+    assert_eq!(decisions[0]["trigger"], "SWITCH");
+    assert!(decisions[0]["candidates"].as_array().unwrap().len() >= 4);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn switching_by_profile_lets_the_router_choose_among_the_usable_models() {
+    let slow = "[[step]]\nkind = \"say\"\ntext = \"voy\"\n[[step]]\nkind = \"sleep\"\nms = 30000\n";
+    let e = env_with(&[("alpha", slow), ("beta", SAY), ("gamma", SAY)], None).await;
+    set_health(&e, "beta", "EXHAUSTED", "UNKNOWN", None, Some(3_600_000)).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "por profile",
+            Execution::Exact("alpha/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let (_, model) = e
+        .runtime
+        .switch_to_profile(created.agent_id, "@fast", None)
+        .await
+        .unwrap();
+    assert!(model.starts_with("gamma/"), "beta está agotado: {model}");
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id.to_string();
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT trigger || '|' || profile_id FROM routing_decisions WHERE agent_id = '{agent}' AND trigger = 'SWITCH'"
+            )
+        ),
+        "SWITCH|@fast"
+    );
+    // Un profile que no existe se rechaza sin tocar al agente.
+    let err = e
+        .runtime
+        .switch_to_profile(created.agent_id, "@nada", None)
+        .await
+        .unwrap_err();
+    assert!(err.0.contains("no existe"), "{}", err.0);
+    e.writer.shutdown();
 }
 
 /// Un CLI que falla (login, cuota) antes de leer su prompt deja un `EPIPE` al escribirlo: no es un

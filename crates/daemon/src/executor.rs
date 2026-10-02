@@ -77,7 +77,7 @@ pub struct LiveRun {
 }
 
 /// Fallos que justifican cambiar de executor (P06.S5): cuota agotada o login.
-fn needs_failover(e: &ProviderError) -> bool {
+pub(crate) fn needs_failover(e: &ProviderError) -> bool {
     !e.transient
         && matches!(
             e.failure_type,
@@ -335,14 +335,32 @@ impl Runtime {
             _ => None,
         };
         match (stopped, fatal) {
-            (Some((status, end, done, kind)), _) => {
+            (Some((status, end, done, kind)), fatal) => {
                 let run = l.run_id;
                 let (agent, project) = (l.agent_id, l.project_id);
+                let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
+                let health_cfg = self.bus.health_config();
                 let _ = self
                     .writer
                     .write(Box::new(move |t| {
                         let now = now_ms();
                         repo::close_run(t, run, status, end, code, now)?;
+                        // Un fallo de cuota o de login que llegó justo antes de la parada no se
+                        // pierde: el recorder lo dejó para el failover, que ya no va a correr.
+                        if let Some(err) = &fatal {
+                            crate::health::record_failure_row(
+                                t,
+                                ProviderFailureId::new(),
+                                Some(run),
+                                &provider,
+                                Some(&model),
+                                err,
+                                now,
+                            )?;
+                            crate::health::on_failure(t, &provider, Some(&model), err, now)?;
+                        }
+                        // Lo gastado hasta aquí cuenta aunque el run no haya terminado bien.
+                        crate::health::on_run_finished(t, run, &health_cfg, now)?;
                         match kind {
                             StopKind::User => {
                                 if status == RunStatus::HandedOff {
@@ -451,6 +469,8 @@ impl Runtime {
         if exit == ExitStatus::Exited(0) {
             self.commit_chat_turn(l).await;
             let (agent, task, run) = (l.agent_id, l.task_id, l.run_id);
+            let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
+            let health_cfg = self.bus.health_config();
             let result = self
                 .writer
                 .write(Box::new(move |t| {
@@ -464,6 +484,10 @@ impl Runtime {
                         now,
                     )?;
                     repo::set_handoff_outcome(t, run, "CONTINUED")?;
+                    // Un turno terminó bien: el proveedor está sano y se anota el uso estimado
+                    // si su CLI no informó tokens.
+                    crate::health::on_success(t, &provider, Some(&model), now)?;
+                    crate::health::on_run_finished(t, run, &health_cfg, now)?;
                     if repo::get_task(t, task)?.code == repo::CHAT_TASK_CODE {
                         repo::set_agent_state(
                             t,
@@ -531,11 +555,13 @@ impl Runtime {
     async fn finish_failed(&self, l: &Launch, status: RunStatus, code: Option<i32>, reason: &str) {
         let (project, agent, run, reason) =
             (l.project_id, l.agent_id, l.run_id, reason.to_string());
+        let health_cfg = self.bus.health_config();
         let result = self
             .writer
             .write(Box::new(move |t| {
                 let now = now_ms();
                 repo::close_run(t, run, status, RunEndReason::Crash, code, now)?;
+                crate::health::on_run_finished(t, run, &health_cfg, now)?;
                 repo::set_handoff_outcome(t, run, "FAILED_TO_CONTINUE")?;
                 repo::set_agent_state(t, agent, AgentState::Failed, Some(&reason), now)?;
                 repo::open_recovery_item(
@@ -555,8 +581,102 @@ impl Runtime {
         }
     }
 
-    /// Cuota agotada o login rechazado (P06.S5, IDEA §5.7): otro executor si la
-    /// política lo permite; si no, `WAITING_PROVIDER` + recovery item.
+    /// El mejor reemplazo según la política del agente (P10.S5, IDEA §5.7): el router elige entre
+    /// los modelos utilizables, sin tocar lo que este agente ya agotó ni la reserva de cuota.
+    /// `rotate`: rotación a propósito (umbral de contexto): se aparta el proveedor actual.
+    fn pick_replacement(
+        &self,
+        c: &rusqlite::Connection,
+        agent: &repo::Agent,
+        current_provider: &str,
+        current_model: &str,
+        auth: bool,
+        rotate: bool,
+    ) -> Result<(Option<repo::EligibleModel>, Option<crate::routing::Pending>), repo::RepoError>
+    {
+        if agent.failover_policy == FailoverPolicy::None {
+            return Ok((None, None));
+        }
+        let profile = agent
+            .requested_profile_id
+            .clone()
+            .unwrap_or_else(|| self.default_profile());
+        use symphony_core::RejectReason;
+        use symphony_router::Exclusion;
+        // Lo que este agente ya agotó, o donde ya le rechazaron el login: no se vuelve.
+        let failed: Vec<(String, String, String)> = c
+            .prepare(
+                "SELECT provider_id, model_id, end_reason FROM agent_runs
+                 WHERE agent_id = ?1 AND end_reason IN ('QUOTA_EXHAUSTED','AUTH_ERROR')",
+            )?
+            .query_map([agent.id.to_string()], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut excluded: Vec<Exclusion> = failed
+            .into_iter()
+            .map(|(provider, model, why)| {
+                if why == "AUTH_ERROR" {
+                    Exclusion {
+                        model_id: None,
+                        provider_id: Some(provider),
+                        reason: RejectReason::Auth,
+                    }
+                } else {
+                    Exclusion {
+                        model_id: Some(model),
+                        provider_id: None,
+                        reason: RejectReason::Exhausted,
+                    }
+                }
+            })
+            .collect();
+        let same = agent.failover_policy == FailoverPolicy::SameProvider;
+        let mut choose = crate::routing::Choose {
+            profile: profile.clone(),
+            only_provider: same.then(|| current_provider.to_string()),
+            ..Default::default()
+        };
+        if rotate {
+            if same {
+                choose.skip_model = Some(current_model.to_string());
+            } else {
+                choose.skip_provider = Some(current_provider.to_string());
+            }
+        } else {
+            excluded.push(if auth {
+                Exclusion {
+                    model_id: None,
+                    provider_id: Some(current_provider.to_string()),
+                    reason: RejectReason::Auth,
+                }
+            } else {
+                Exclusion {
+                    model_id: Some(current_model.to_string()),
+                    provider_id: None,
+                    reason: RejectReason::Exhausted,
+                }
+            });
+        }
+        choose.excluded = excluded;
+        let decision = self.evaluate(c, &choose)?;
+        let selected = decision.selected.clone();
+        let next = match &selected {
+            Some(id) => repo::eligible_model(c, id)?.ok(),
+            None => None,
+        };
+        let pending = crate::routing::Pending {
+            explanation: decision.explanation.clone(),
+            selected,
+            profile: Some(profile),
+            trigger: symphony_core::RoutingTrigger::Failover,
+            decision,
+        };
+        Ok((next, Some(pending)))
+    }
+
+    /// Cuota agotada o login rechazado (P06.S5, P10.S5, IDEA §5.7): el router elige otro
+    /// executor según la política del agente; si no hay uno, `WAITING_PROVIDER` + recovery item.
     async fn failover(&self, l: &Launch, err: &ProviderError, code: Option<i32>) {
         let auth = err.failure_type == FailureType::Auth;
         let end = if auth {
@@ -570,52 +690,77 @@ impl Runtime {
         } else {
             (format!("{who} se quedó sin cuota"), "quota exhausted")
         };
-        let failure = repo::NewProviderFailure {
-            id: ProviderFailureId::new(),
-            provider_id: l.provider_id.clone(),
-            model_id: Some(l.model_id.clone()),
-            run_id: Some(l.run_id),
-            failure_type: err.failure_type,
-            raw_code: err.raw_code.clone(),
-            message: symphony_core::redact(&err.message).into_owned(),
-            reset_at: err.resets_at,
-        };
-        let failure_id = failure.id;
+        let failure_id = ProviderFailureId::new();
+        let (failed_provider, failed_model, failed_err) =
+            (l.provider_id.clone(), l.model_id.clone(), err.clone());
+        let run = l.run_id;
 
-        let next = self.read_op(|c| {
+        // 1. El fallo y la salud primero: el router tiene que verlos al elegir.
+        let recorded = self
+            .writer
+            .write(Box::new(move |t| {
+                let now = now_ms();
+                crate::health::record_failure_row(
+                    t,
+                    failure_id,
+                    Some(run),
+                    &failed_provider,
+                    Some(&failed_model),
+                    &failed_err,
+                    now,
+                )?;
+                crate::health::on_failure(
+                    t,
+                    &failed_provider,
+                    Some(&failed_model),
+                    &failed_err,
+                    now,
+                )?;
+                Ok(())
+            }))
+            .await;
+        if let Err(e) = recorded {
+            tracing::error!(agent = %l.agent_id, error = %e, "failover: no se pudo registrar el fallo");
+            return;
+        }
+
+        // 2. El router elige el reemplazo.
+        let picked = self.read_op(|c| {
             let agent = repo::get_agent(c, l.agent_id)?;
-            let has_adapter = |p: &str| self.adapter(p).is_some();
-            let next = repo::next_executor(
-                c,
-                l.agent_id,
-                agent.failover_policy,
-                &l.provider_id,
-                &l.model_id,
-                auth,
-                &has_adapter,
-            )?;
-            Ok((agent, next))
+            let (next, pending) =
+                self.pick_replacement(c, &agent, &l.provider_id, &l.model_id, auth, false)?;
+            Ok((agent, next, pending))
         });
-        let (agent, next) = match next {
+        let (agent, next, pending) = match picked {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!(agent = %l.agent_id, error = %e, "failover: no se pudo leer el agente");
+                tracing::error!(agent = %l.agent_id, error = %e, "failover: no se pudo elegir el reemplazo");
                 return;
             }
         };
+
+        // 3. Cierra el run; si no hay reemplazo, la decisión se guarda aquí (si lo hay, queda
+        //    atada al run nuevo).
         let status = if next.is_some() {
             RunStatus::HandedOff
         } else {
             RunStatus::Failed
         };
-        let run = l.run_id;
+        let (agent_id, wait_decision) = (
+            l.agent_id,
+            next.is_none().then(|| pending.clone()).flatten(),
+        );
+        let health_cfg = self.bus.health_config();
         let closed = self
             .writer
             .write(Box::new(move |t| {
                 let now = now_ms();
                 repo::close_run(t, run, status, end, code, now)?;
                 repo::set_handoff_outcome(t, run, "CONTINUED")?;
-                repo::insert_provider_failure(t, &failure, now)?;
+                crate::health::on_run_finished(t, run, &health_cfg, now)?;
+                if let Some(p) = &wait_decision {
+                    p.save(t, agent_id, None, now)?;
+                }
                 Ok(())
             }))
             .await;
@@ -685,6 +830,7 @@ impl Runtime {
                 why_en,
                 Some(failure_id),
                 None,
+                pending,
             )
             .await
         {
@@ -706,6 +852,7 @@ impl Runtime {
         reason_en: &str,
         failure_id: Option<ProviderFailureId>,
         message: Option<&str>,
+        route: Option<crate::routing::Pending>,
     ) -> Result<RunId, AgentOpError> {
         let adapter = self
             .adapter(&model.provider_id)
@@ -776,6 +923,9 @@ impl Runtime {
                     repo::set_task_status(t, task_id, TaskStatus::Running, None, now)?;
                 }
                 repo::open_run(t, run, agent_id, &provider, &model_id, now)?;
+                if let Some(p) = &route {
+                    p.save(t, agent_id, Some(run), now)?;
+                }
                 let (checkpoint_id, mode, raw, sent, build_ms) = handoff;
                 repo::insert_handoff(
                     t,
@@ -907,6 +1057,57 @@ impl Runtime {
         model_id: &str,
         message: Option<&str>,
     ) -> Result<RunId, AgentOpError> {
+        self.switch_inner(agent_id, model_id, message, None).await
+    }
+
+    /// Cambio de modelo eligiendo por profile (FLOW §8.3): el router escoge entre los modelos
+    /// utilizables ahora y la decisión queda explicable. Devuelve el run y el modelo elegido.
+    pub async fn switch_to_profile(
+        &self,
+        agent_id: AgentId,
+        profile: &str,
+        message: Option<&str>,
+    ) -> Result<(RunId, String), AgentOpError> {
+        let profile_name = profile.to_string();
+        let decision = self.read_op(|c| {
+            if crate::routing::profile_weights(c, &profile_name)?.is_none() {
+                return Ok(None);
+            }
+            let choose = crate::routing::Choose {
+                profile: profile_name.clone(),
+                ..Default::default()
+            };
+            Ok(Some(self.evaluate(c, &choose)?))
+        })?;
+        let Some(decision) = decision else {
+            return Err(AgentOpError(format!("el profile `{profile}` no existe")));
+        };
+        let Some(model_id) = decision.selected.clone() else {
+            return Err(AgentOpError(format!(
+                "ningún modelo es elegible para {profile} ahora.\n{}",
+                decision.explanation
+            )));
+        };
+        let route = crate::routing::Pending {
+            explanation: decision.explanation.clone(),
+            selected: Some(model_id.clone()),
+            profile: Some(profile.to_string()),
+            trigger: symphony_core::RoutingTrigger::Switch,
+            decision,
+        };
+        let run = self
+            .switch_inner(agent_id, &model_id, message, Some(route))
+            .await?;
+        Ok((run, model_id))
+    }
+
+    async fn switch_inner(
+        &self,
+        agent_id: AgentId,
+        model_id: &str,
+        message: Option<&str>,
+        profile_route: Option<crate::routing::Pending>,
+    ) -> Result<RunId, AgentOpError> {
         let model = self
             .read_op(|c| repo::eligible_model(c, model_id))?
             .map_err(|reason| {
@@ -989,6 +1190,32 @@ impl Runtime {
             .await
             .map_err(op_err)?;
         let reason = format!("El usuario cambió el modelo a {}.", model.model_id);
+        // El cambio manual se obedece y no se sustituye; igual se deja constancia de cómo
+        // estaban los demás modelos para `/explain-route`.
+        let exact = model.model_id.clone();
+        let route = match profile_route {
+            Some(r) => Some(r),
+            None => self
+                .read_op(|c| {
+                    let choose = crate::routing::Choose {
+                        profile: self.default_profile(),
+                        allow_reserve: true,
+                        ..Default::default()
+                    };
+                    let decision = self.evaluate(c, &choose)?;
+                    Ok(crate::routing::Pending {
+                        explanation: crate::routing::exact_explanation(
+                            &exact,
+                            &decision.explanation,
+                        ),
+                        selected: Some(exact),
+                        profile: None,
+                        trigger: symphony_core::RoutingTrigger::Switch,
+                        decision,
+                    })
+                })
+                .ok(),
+        };
         self.start_successor(
             &agent,
             from_run.map(|r| r.id),
@@ -998,6 +1225,7 @@ impl Runtime {
             "user switch",
             None,
             message,
+            route,
         )
         .await
     }
@@ -1122,29 +1350,22 @@ impl Runtime {
         &self,
         agent: &repo::Agent,
         last: &repo::AgentRun,
-    ) -> Result<Option<repo::EligibleModel>, AgentOpError> {
+    ) -> Result<Option<(repo::EligibleModel, Option<crate::routing::Pending>)>, AgentOpError> {
         let limit = self
             .chat_switch_tokens
             .load(std::sync::atomic::Ordering::Relaxed);
         if limit == 0 {
             return Ok(None);
         }
-        let has_adapter = |p: &str| self.adapter(p).is_some();
         self.read_op(|c| {
             if repo::get_task(c, agent.task_id)?.code != repo::CHAT_TASK_CODE
                 || repo::last_turn_tokens(c, last.id)? < limit
             {
                 return Ok(None);
             }
-            repo::next_executor(
-                c,
-                agent.id,
-                agent.failover_policy,
-                &last.provider_id,
-                &last.model_id,
-                false,
-                &has_adapter,
-            )
+            let (next, pending) =
+                self.pick_replacement(c, agent, &last.provider_id, &last.model_id, false, true)?;
+            Ok(next.map(|n| (n, pending)))
         })
     }
 
@@ -1192,7 +1413,7 @@ impl Runtime {
                     agent.number
                 ))
             })?;
-        if let Some(next) = self.rotation_target(&agent, &last)? {
+        if let Some((next, route)) = self.rotation_target(&agent, &last)? {
             let reason = format!(
                 "El contexto de {} llegó al umbral configurado de tokens.",
                 last.model_id
@@ -1207,6 +1428,7 @@ impl Runtime {
                     "context threshold",
                     None,
                     Some(text),
+                    route,
                 )
                 .await;
         }
@@ -1320,6 +1542,7 @@ impl Runtime {
                 reason,
                 change,
                 reason_en,
+                None,
                 None,
                 None,
             )

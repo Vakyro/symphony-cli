@@ -7,7 +7,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
-use symphony_tui::app::{App, Call, Failure, Msg, Notice, Req, Screen, Tab};
+use symphony_tui::app::{App, Call, Exec, Failure, Msg, Notice, Req, Screen, Tab};
 use symphony_tui::ui;
 
 const NOW: i64 = 1_800_000_000_000;
@@ -56,9 +56,25 @@ fn status(initialized: bool, recovery: i64) -> Value {
 fn providers() -> Value {
     json!({ "providers": [
         { "id": "anthropic", "display_name": "Claude", "setup_state": "READY", "cli_version": "2.1.0",
-          "cli_path": "/usr/bin/claude", "enabled": true, "models": 4 },
+          "cli_path": "/usr/bin/claude", "enabled": true, "models": 4,
+          "model_names": ["Claude Haiku", "Claude Opus", "Claude Sonnet"], "agents_active": 1,
+          "health": { "state": "QUOTA_LOW", "stored_state": "QUOTA_LOW", "certainty": "KNOWN", "remaining": 0.15,
+                      "evidence": "provider quota report", "retry_after_at": null, "reset_at": NOW + 7_200_000, "reserve": 0.2 },
+          "last_failure": null,
+          "usage_7d": { "reported_tokens": 1_234_567, "estimated_tokens": 0 } },
         { "id": "openai", "display_name": "Codex", "setup_state": "LOGIN_REQUIRED", "cli_version": "0.40.0",
-          "cli_path": "/usr/bin/codex", "enabled": true, "models": 0 },
+          "cli_path": "/usr/bin/codex", "enabled": true, "models": 0,
+          "model_names": [], "agents_active": 0,
+          "health": { "state": "UNKNOWN", "stored_state": "UNKNOWN", "certainty": "UNKNOWN", "remaining": null,
+                      "evidence": null, "retry_after_at": null, "reset_at": null, "reserve": 0.2 },
+          "last_failure": null, "usage_7d": { "reported_tokens": 0, "estimated_tokens": 0 } },
+        { "id": "github", "display_name": "Copilot", "setup_state": "READY", "cli_version": "1.0.60",
+          "cli_path": "/usr/bin/copilot", "enabled": true, "models": 1,
+          "model_names": ["Copilot (automático)"], "agents_active": 0,
+          "health": { "state": "RATE_LIMITED", "stored_state": "RATE_LIMITED", "certainty": "ESTIMATED", "remaining": null,
+                      "evidence": "TEMP_RATE_LIMIT x1", "retry_after_at": NOW + 45_000, "reset_at": null, "reserve": 0.2 },
+          "last_failure": { "type": "TEMP_RATE_LIMIT", "message": "429 Too Many Requests", "at": NOW - 180_000 },
+          "usage_7d": { "reported_tokens": 0, "estimated_tokens": 48_000 } },
     ]})
 }
 
@@ -91,6 +107,28 @@ fn models() -> Value {
           "setup_state": "READY", "available": true },
         { "id": "codex/gpt-5", "display_name": "GPT-5", "provider_id": "openai", "provider": "Codex",
           "setup_state": "LOGIN_REQUIRED", "available": false },
+    ]})
+}
+
+fn profiles() -> Value {
+    json!({ "profiles": [
+        { "id": "@code", "description": "Best available for implementation", "weights": {} },
+        { "id": "@fast", "description": "Prioritize response speed", "weights": {} },
+        { "id": "@conserve", "description": "Preserve scarce quota", "weights": {} },
+    ]})
+}
+
+fn explain() -> Value {
+    json!({ "agent_id": "01AGENT1", "decisions": [
+        { "id": "01D2", "trigger": "FAILOVER", "profile": "@code", "selected": "openai/sol", "decided_at": NOW - 120_000,
+          "explanation": "Profile: @code\nClaude Sonnet — descartado: cuota agotada (o ya agotada en este agente)\nCodex Sol — elegible · salud HEALTHY · cuota desconocida\nKimi — descartado: en espera tras un límite temporal\nElegido: Codex Sol\nPor qué:\n+ buen ajuste con el profile\n+ proveedor sano",
+          "candidates": [
+            { "model_id": "openai/sol", "eligible": true, "reject_reason": null, "score": 1.42, "factors": {} },
+            { "model_id": "claude/sonnet", "eligible": false, "reject_reason": "EXHAUSTED", "score": null, "factors": null },
+            { "model_id": "moonshot/default", "eligible": false, "reject_reason": "COOLDOWN", "score": null, "factors": null },
+          ] },
+        { "id": "01D1", "trigger": "SPAWN", "profile": null, "selected": "claude/sonnet", "decided_at": NOW - 900_000,
+          "explanation": "Modelo exacto elegido por el usuario: claude/sonnet.", "candidates": [] },
     ]})
 }
 
@@ -279,10 +317,87 @@ fn view_13_model_picker() {
     press(&mut app, KeyCode::Right);
     let calls = press(&mut app, KeyCode::Enter);
     assert_eq!(app.screen, Screen::ModelPicker);
-    assert_eq!(methods(&calls), ["models.list"]);
+    assert_eq!(methods(&calls), ["models.list", "profiles.list"]);
     ok(&mut app, Req::Models, models());
-    press(&mut app, KeyCode::Down);
+    ok(&mut app, Req::Profiles, profiles());
+    // Los profiles van primero y luego los modelos exactos, con su estado de salud.
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Down);
+    }
     insta::assert_snapshot!(draw(&app));
+}
+
+#[test]
+fn picking_a_profile_for_a_new_agent_creates_it_with_that_profile() {
+    let mut app = home_app();
+    app.new_agent.task = "Arreglar el login".into();
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Right); // Later → Exact
+    press(&mut app, KeyCode::Right); // Exact → Profile
+    assert_eq!(app.new_agent.exec, Exec::Profile);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen, Screen::ModelPicker);
+    ok(&mut app, Req::Models, models());
+    ok(&mut app, Req::Profiles, profiles());
+    press(&mut app, KeyCode::Down); // @fast
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen, Screen::NewAgent);
+    assert_eq!(app.new_agent.profile.as_deref(), Some("@fast"));
+    // Crear manda el profile, no un modelo.
+    app.new_agent.field = 4;
+    let calls = press(&mut app, KeyCode::Enter);
+    let create = calls.iter().find(|c| c.method == "agent.create").unwrap();
+    assert_eq!(create.params["profile"], "@fast");
+    assert!(create.params["model"].is_null());
+}
+
+#[test]
+fn creating_with_a_profile_requires_choosing_one() {
+    let mut app = home_app();
+    app.new_agent.task = "x".into();
+    app.new_agent.exec = Exec::Profile;
+    app.new_agent.field = 4;
+    let calls = press(&mut app, KeyCode::Enter);
+    assert!(calls.iter().all(|c| c.method != "agent.create"));
+}
+
+#[test]
+fn switching_by_profile_sends_the_profile_to_the_daemon() {
+    let mut app = agent_app(Tab::Overview);
+    press(&mut app, KeyCode::Char('s'));
+    assert_eq!(app.screen, Screen::ModelPicker);
+    ok(&mut app, Req::Models, models());
+    ok(&mut app, Req::Profiles, profiles());
+    let calls = press(&mut app, KeyCode::Enter); // el primer profile
+    let switch = calls.iter().find(|c| c.method == "agent.switch").unwrap();
+    assert_eq!(switch.params["profile"], "@code");
+    assert!(switch.params.get("model").is_none());
+}
+
+#[test]
+fn view_14_explain_route() {
+    let mut app = agent_app(Tab::Overview);
+    let calls = press(&mut app, KeyCode::Char('?'));
+    assert_eq!(app.screen, Screen::ExplainRoute);
+    assert_eq!(methods(&calls), ["route.explain"]);
+    ok(&mut app, Req::Explain, explain());
+    insta::assert_snapshot!(draw(&app));
+    // Esc vuelve al agente.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::Agent);
+}
+
+#[test]
+fn explain_route_without_decisions_says_so() {
+    let mut app = agent_app(Tab::Overview);
+    press(&mut app, KeyCode::Char('?'));
+    ok(
+        &mut app,
+        Req::Explain,
+        json!({ "agent_id": "01AGENT1", "decisions": [] }),
+    );
+    assert!(draw(&app).contains("todavía no tiene decisiones de routing"));
 }
 
 #[test]
@@ -345,6 +460,16 @@ fn view_22_providers() {
     let mut app = home_app();
     let calls = press(&mut app, KeyCode::Char('p'));
     assert_eq!(methods(&calls), ["providers.list"]);
+    insta::assert_snapshot!(draw(&app));
+}
+
+#[test]
+fn view_22_provider_detail_with_a_temporary_limit_and_estimated_quota() {
+    let mut app = home_app();
+    press(&mut app, KeyCode::Char('p'));
+    ok(&mut app, Req::Providers, providers());
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
     insta::assert_snapshot!(draw(&app));
 }
 

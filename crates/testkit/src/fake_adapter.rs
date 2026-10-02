@@ -222,6 +222,19 @@ impl ProviderAdapter for FakeAdapter {
                     vec![AgentEvent::ProviderError(e)]
                 })
                 .unwrap_or_default(),
+            (Some("quota"), _) => match (
+                s(&v, "window"),
+                v.get("used_fraction").and_then(Value::as_f64),
+            ) {
+                (Some(window), Some(used_fraction)) => {
+                    vec![AgentEvent::Quota(symphony_adapter_common::QuotaSnapshot {
+                        window,
+                        used_fraction,
+                        resets_at: v.get("resets_at").and_then(Value::as_i64),
+                    })]
+                }
+                _ => Vec::new(),
+            },
             (Some("usage"), _) => v
                 .get("tokens")
                 .and_then(Value::as_u64)

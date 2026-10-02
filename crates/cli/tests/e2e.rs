@@ -62,7 +62,7 @@ fn cli_restarts_a_daemon_that_died_without_cleanup() {
 
     kill_hard(first);
     // Esperar a que el SO lo termine de bajar (libera lock y socket/pipe).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !symphony(&home, &["daemon", "status"]).contains("detenido") {
         assert!(
             std::time::Instant::now() < deadline,

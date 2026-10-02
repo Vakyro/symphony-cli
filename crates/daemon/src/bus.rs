@@ -122,6 +122,15 @@ impl EventBus {
         }
     }
 
+    /// La reserva de cuota por proveedor de `config.toml`.
+    pub fn set_health_config(&self, cfg: crate::health::HealthConfig) {
+        self.recorder.set_health_config(cfg);
+    }
+
+    pub fn health_config(&self) -> std::sync::Arc<crate::health::HealthConfig> {
+        self.recorder.health_config()
+    }
+
     pub async fn publish(&self, ev: BusEvent) -> Result<(), WriterClosed> {
         let payload = serde_json::to_string(&ev.event).ok();
         self.writer

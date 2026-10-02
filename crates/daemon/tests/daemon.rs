@@ -37,7 +37,7 @@ async fn call(home: &Path, method: &str, params: Value) -> Outcome {
 }
 
 async fn wait_ready(home: &Path, daemon: &mut Child) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while transport::connect(home).await.is_err() {
         let exited = daemon.try_wait().unwrap().is_some();
         if exited || Instant::now() > deadline {

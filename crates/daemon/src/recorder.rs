@@ -5,7 +5,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use symphony_adapter_common::{AgentEvent, ToolKind};
 use symphony_core::{AgentId, ContextObjectId, MessageId, ProjectId, RunId, ToolCallId};
@@ -13,6 +13,7 @@ use symphony_object_store::ObjectStore;
 use symphony_store::{WriteFn, repo};
 
 use crate::bus::BusEvent;
+use crate::health::{self, HealthConfig};
 
 /// Mensajes más largos que esto van al object store (DB §3.C `messages`).
 pub const INLINE_MAX: usize = 4 * 1024;
@@ -20,6 +21,7 @@ pub const INLINE_MAX: usize = 4 * 1024;
 pub struct Recorder {
     objects: ObjectStore,
     open: Mutex<Open>,
+    health: Mutex<Arc<HealthConfig>>,
 }
 
 #[derive(Default)]
@@ -58,7 +60,19 @@ impl Recorder {
         Self {
             objects,
             open: Mutex::new(Open::default()),
+            health: Mutex::new(Arc::new(HealthConfig::default())),
         }
+    }
+
+    /// La reserva por proveedor de `config.toml`.
+    pub fn set_health_config(&self, cfg: HealthConfig) {
+        if let Ok(mut h) = self.health.lock() {
+            *h = Arc::new(cfg);
+        }
+    }
+
+    pub fn health_config(&self) -> Arc<HealthConfig> {
+        self.health.lock().map(|h| h.clone()).unwrap_or_default()
     }
 
     /// Suelta el estado en memoria de un run que terminó.
@@ -167,6 +181,47 @@ impl Recorder {
                         repo::insert_tool_call(t, call, now)?;
                     }
                     Ok(repo::finish_tool_call(t, id, ok, exit_code, now)?)
+                }))
+            }
+            // Los errores que no obligan a cambiar de executor (límites temporales, red…) no pasan
+            // por el failover: su salud y su fila de fallo se anotan aquí. Los fatales los anota
+            // el failover en la misma escritura que cierra el run.
+            AgentEvent::ProviderError(e) if !crate::executor::needs_failover(e) => {
+                let run = run?;
+                let e = e.clone();
+                Some(Box::new(move |t| {
+                    let (provider, model) = symphony_store::health::run_scope(t, run)?;
+                    health::record_failure_row(
+                        t,
+                        symphony_core::ProviderFailureId::new(),
+                        Some(run),
+                        &provider,
+                        Some(&model),
+                        &e,
+                        now,
+                    )?;
+                    Ok(health::on_failure(t, &provider, Some(&model), &e, now)?)
+                }))
+            }
+            AgentEvent::Quota(q) => {
+                let run = run?;
+                let (q, cfg) = (q.clone(), self.health_config());
+                Some(Box::new(move |t| {
+                    let (provider, _) = symphony_store::health::run_scope(t, run)?;
+                    Ok(health::on_quota(
+                        t,
+                        &provider,
+                        cfg.reserve_for(&provider),
+                        &q,
+                        now,
+                    )?)
+                }))
+            }
+            AgentEvent::TurnUsage { context_tokens } => {
+                let run = run?;
+                let tokens = *context_tokens;
+                Some(Box::new(move |t| {
+                    Ok(health::on_usage(t, run, tokens, now)?)
                 }))
             }
             _ => None,

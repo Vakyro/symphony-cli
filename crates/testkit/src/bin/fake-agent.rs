@@ -209,6 +209,13 @@ impl Agent {
                     return self.fail("quota_exhausted", json!({"resets_at": resets_at}));
                 }
                 Step::Usage { tokens } => emit(&json!({"type": "usage", "tokens": tokens})),
+                Step::Quota {
+                    window,
+                    used_fraction,
+                    resets_at,
+                } => emit(
+                    &json!({"type": "quota", "window": window, "used_fraction": used_fraction, "resets_at": resets_at}),
+                ),
                 Step::AuthError => return self.fail("authentication_failed", json!({})),
                 Step::Crash => std::process::abort(),
                 Step::Hang => loop {

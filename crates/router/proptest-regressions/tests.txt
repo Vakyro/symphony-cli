@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 133052d857c43382ec98b52e46811d8d38f4012f9dc7d73a329906e0344ce772 # shrinks to cands = [Candidate { model_id: "p0/m0", provider_id: "p0", display_name: "M0", unavailable: None, supports_tools: false, context_window: None, speed: None, base_score: 0.0, health: Health { state: Degraded, certainty: Known, remaining: Some(0.0), retry_after_at: Some(0), reset_at: None, evidence: None, updated_at: 1000000 }, model_health: None, reserve: 0.2, recent_failures: 0, load: 0 }]

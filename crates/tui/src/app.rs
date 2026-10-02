@@ -25,6 +25,8 @@ pub enum Screen {
     ModelPicker,
     /// 06–09 y 12: vista de agente con pestañas.
     Agent,
+    /// 14 Explain Route: por qué se eligió el modelo del agente.
+    ExplainRoute,
     /// 22 Providers.
     Providers,
     /// 30 Recovery Center.
@@ -90,6 +92,8 @@ pub enum Req {
     SkillsOpenai,
     ChatGet,
     ChatCreate,
+    Profiles,
+    Explain,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,13 +188,34 @@ pub struct FirstRun {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NewAgent {
     pub task: String,
-    /// `true` = modelo exacto; `false` = decidir después (los profiles llegan en P10).
-    pub exact: bool,
+    pub exec: Exec,
     pub model: Option<String>,
+    /// Profile elegido (`@code`…) cuando `exec == Exec::Profile`.
+    pub profile: Option<String>,
     pub failover: usize,
     pub priority: usize,
     /// 0 tarea · 1 ejecución · 2 failover · 3 prioridad · 4 crear.
     pub field: usize,
+}
+
+/// Cómo se elige el executor de un agente nuevo (FLOW §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Exec {
+    /// Un modelo exacto: se obedece y no se sustituye en silencio.
+    Exact,
+    /// Un profile: Symphony elige entre los modelos utilizables ahora.
+    Profile,
+    /// Se decide después.
+    #[default]
+    Later,
+}
+
+impl Exec {
+    fn cycle(self, forward: bool) -> Self {
+        const ALL: [Exec; 3] = [Exec::Exact, Exec::Profile, Exec::Later];
+        let i = ALL.iter().position(|e| *e == self).unwrap_or(0);
+        ALL[cycle(i, ALL.len(), forward)]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +300,10 @@ pub struct App {
     pub providers: Vec<Value>,
     pub agents: Vec<Value>,
     pub models: Vec<Value>,
+    /// Profiles de routing (`profiles.list`).
+    pub profiles: Vec<Value>,
+    /// Decisiones de routing del agente abierto (`route.explain`).
+    pub explain: Option<Value>,
     /// Catálogo de skills y comandos por proveedor (`anthropic`, `openai`) para el autocompletado.
     pub skills: std::collections::HashMap<String, Vec<Value>>,
     /// Opción elegida en el desplegable de skills.
@@ -342,6 +371,8 @@ impl App {
             providers: Vec::new(),
             agents: Vec::new(),
             models: Vec::new(),
+            profiles: Vec::new(),
+            explain: None,
             skills: std::collections::HashMap::new(),
             skill_sel: 0,
             skill_dismissed: None,
@@ -444,7 +475,7 @@ impl App {
         match self.screen {
             Screen::Home => self.agents.len(),
             Screen::ProviderSetup | Screen::Providers => self.providers.len(),
-            Screen::ModelPicker => self.models.len(),
+            Screen::ModelPicker => self.profiles.len() + self.models.len(),
             Screen::Recovery => self.recovery.len(),
             _ => 0,
         }
@@ -579,7 +610,11 @@ impl App {
                 calls.extend(self.agent_call(Req::Inspect, "agent.inspect"));
                 calls.extend(self.tab_call());
             }
-            Screen::ModelPicker => calls.push(call(Req::Models, "models.list", json!({}))),
+            Screen::ModelPicker => {
+                calls.push(call(Req::Models, "models.list", json!({})));
+                calls.push(call(Req::Profiles, "profiles.list", json!({})));
+            }
+            Screen::ExplainRoute => calls.extend(self.agent_call(Req::Explain, "route.explain")),
             Screen::Chat => {
                 if self.chat.is_none() {
                     calls.push(call(
@@ -760,6 +795,8 @@ impl App {
                 self.skills.insert("openai".into(), list("skills"));
             }
             Req::Agents => self.agents = list("agents"),
+            Req::Profiles => self.profiles = list("profiles"),
+            Req::Explain => self.explain = Some(v.clone()),
             Req::Models => {
                 self.models = list("models");
                 self.default_chat_model();
@@ -913,6 +950,7 @@ impl App {
             Screen::Home => self.home_key(key),
             Screen::NewAgent => self.new_agent_key(key),
             Screen::ModelPicker => self.picker_key(key),
+            Screen::ExplainRoute => self.explain_key(key),
             Screen::Agent => self.agent_key(key),
             Screen::Recovery => self.recovery_key(key),
         }
@@ -1288,10 +1326,15 @@ impl App {
                     _ => (None, rest),
                 };
                 self.new_agent.task = task.to_string();
-                self.new_agent.exact = model.is_some();
+                self.new_agent.exec = if model.is_some() {
+                    Exec::Exact
+                } else {
+                    Exec::Later
+                };
                 self.new_agent.model = model.map(str::to_string);
                 self.create()
             }
+            "explain-route" | "explain" => self.open_explain(),
             "agent" | "a" => {
                 let n = rest.trim_start_matches('#');
                 match self
@@ -1332,14 +1375,19 @@ impl App {
             self.error("Escribe la tarea del agente.");
             return Vec::new();
         }
-        if f.exact && f.model.is_none() {
+        if f.exec == Exec::Exact && f.model.is_none() {
             self.error("Elige un modelo (Enter en «Ejecución») o cambia a «Decidir después».");
+            return Vec::new();
+        }
+        if f.exec == Exec::Profile && f.profile.is_none() {
+            self.error("Elige un profile (Enter en «Ejecución») o cambia a «Decidir después».");
             return Vec::new();
         }
         let params = json!({
             "title": f.task.trim(),
             "project_root": self.root(),
-            "model": if f.exact { f.model.clone() } else { None },
+            "model": if f.exec == Exec::Exact { f.model.clone() } else { None },
+            "profile": if f.exec == Exec::Profile { f.profile.clone() } else { None },
             "failover": FAILOVER[f.failover].0,
             "priority": PRIORITY[f.priority].0,
         });
@@ -1356,7 +1404,7 @@ impl App {
             KeyCode::Left | KeyCode::Right => {
                 let fwd = key.code == KeyCode::Right;
                 match f.field {
-                    1 => f.exact = !f.exact,
+                    1 => f.exec = f.exec.cycle(fwd),
                     2 => f.failover = cycle(f.failover, FAILOVER.len(), fwd),
                     3 => f.priority = cycle(f.priority, PRIORITY.len(), fwd),
                     _ => {}
@@ -1366,7 +1414,7 @@ impl App {
                 f.task.pop();
             }
             KeyCode::Char(c) if f.field == 0 => f.task.push(c),
-            KeyCode::Enter if f.field == 1 && f.exact => {
+            KeyCode::Enter if f.field == 1 && f.exec != Exec::Later => {
                 self.pick_for = PickFor::NewAgent;
                 return self.go(Screen::ModelPicker);
             }
@@ -1375,6 +1423,28 @@ impl App {
             _ => {}
         }
         Vec::new()
+    }
+
+    /// 14 Explain Route: solo lectura; Esc vuelve al agente.
+    fn explain_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                self.screen = Screen::Agent;
+                self.refresh()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// `/explain-route`: abre la explicación de la decisión de routing del agente abierto.
+    fn open_explain(&mut self) -> Vec<Call> {
+        if self.agent.is_none() {
+            self.error("Abre un agente para ver por qué se eligió su modelo.");
+            return Vec::new();
+        }
+        self.explain = None;
+        self.screen = Screen::ExplainRoute;
+        self.refresh()
     }
 
     fn picker_key(&mut self, key: KeyEvent) -> Vec<Call> {
@@ -1393,8 +1463,39 @@ impl App {
                 }
                 Vec::new()
             }
+            KeyCode::Enter if self.selected < self.profiles.len() => {
+                // FLOW §8.3: un profile → Symphony elige entre los modelos utilizables.
+                let profile = self.profiles[self.selected]["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                match self.pick_for {
+                    PickFor::NewAgent => {
+                        self.new_agent.exec = Exec::Profile;
+                        self.new_agent.profile = Some(profile);
+                        self.new_agent.field = 2;
+                        self.screen = Screen::NewAgent;
+                        Vec::new()
+                    }
+                    PickFor::Switch => {
+                        self.screen = Screen::Agent;
+                        self.info(format!("Eligiendo el modelo para {profile}…"));
+                        self.agent_call(Req::Switch, "agent.switch")
+                            .map(|mut c| {
+                                c.params["profile"] = json!(profile);
+                                c
+                            })
+                            .into_iter()
+                            .collect()
+                    }
+                }
+            }
             KeyCode::Enter => {
-                let Some(m) = self.models.get(self.selected).cloned() else {
+                let Some(m) = self
+                    .models
+                    .get(self.selected - self.profiles.len())
+                    .cloned()
+                else {
                     return Vec::new();
                 };
                 let id = m["id"].as_str().unwrap_or_default().to_string();
@@ -1408,7 +1509,7 @@ impl App {
                 }
                 match self.pick_for {
                     PickFor::NewAgent => {
-                        self.new_agent.exact = true;
+                        self.new_agent.exec = Exec::Exact;
                         self.new_agent.model = Some(id);
                         self.new_agent.field = 2;
                         self.screen = Screen::NewAgent;
@@ -1497,6 +1598,7 @@ impl App {
                 scroll_view(a, 10);
                 return Vec::new();
             }
+            KeyCode::Char('?') => return self.open_explain(),
             KeyCode::Char('e') => {
                 return vec![call(Req::Export, "agent.export", json!({ "agent": a.id }))];
             }

@@ -31,6 +31,12 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<ProvidersCmd>,
     },
+    /// Uso de tokens por proveedor y modelo: lo que informa cada CLI frente a lo que se estima.
+    Usage {
+        /// Cuántos días hacia atrás (por defecto 7).
+        #[arg(long, default_value_t = 7)]
+        days: i64,
+    },
     /// Crea un agente nuevo con su tarea y workspace aislado.
     Spawn {
         /// Tarea u objetivo del agente.
@@ -99,6 +105,14 @@ enum Cmd {
         model: Option<String>,
         /// Modelo posicional si no se usa `--model`.
         target_model: Option<String>,
+        /// En vez de un modelo, un profile (`@code`, `@fast`…): Symphony elige entre los utilizables.
+        #[arg(short, long, conflicts_with_all = ["model", "target_model"])]
+        profile: Option<String>,
+    },
+    /// Por qué se eligió el modelo de un agente: decisiones de routing y candidatos evaluados.
+    ExplainRoute {
+        /// ID o número del agente.
+        agent: String,
     },
     /// Muestra el git diff del worktree del agente contra su commit base.
     Diff {
@@ -208,6 +222,10 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
             let mut conn = client::connect_or_start(home).await?;
             print_providers(&client::call(&mut conn, method, json!({})).await?);
         }
+        Some(Cmd::Usage { days }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            print_usage(&client::call(&mut conn, "usage.get", json!({ "days": days })).await?);
+        }
         Some(Cmd::Status) => {
             let mut conn = client::connect_or_start(home).await?;
             print_status(&client::call(&mut conn, "status", json!({})).await?);
@@ -292,22 +310,29 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
             agent,
             model,
             target_model,
+            profile,
         }) => {
-            let target = model.or(target_model).ok_or_else(|| {
-                miette::miette!("falta especificar el modelo (ej. `claude/sonnet`)")
-            })?;
             let mut conn = client::connect_or_start(home).await?;
-            let res = client::call(
-                &mut conn,
-                "agent.switch",
-                json!({ "agent": agent, "model": target }),
-            )
-            .await?;
+            let (params, target) = match (&profile, model.or(target_model)) {
+                (Some(p), _) => (json!({ "agent": agent, "profile": p }), p.clone()),
+                (None, Some(m)) => (json!({ "agent": agent, "model": m }), m),
+                (None, None) => {
+                    return Err(miette::miette!(
+                        "falta especificar el modelo (ej. `claude/sonnet`) o un `--profile`"
+                    ));
+                }
+            };
+            let res = client::call(&mut conn, "agent.switch", params).await?;
             println!(
                 "agente {agent} cambiado a {} (run {})",
                 res["model"].as_str().unwrap_or(&target),
                 res["run_id"].as_str().unwrap_or("?")
             );
+        }
+        Some(Cmd::ExplainRoute { agent }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            let res = client::call(&mut conn, "route.explain", json!({ "agent": agent })).await?;
+            print_route(&res);
         }
         Some(Cmd::Diff { agent }) => {
             let mut conn = client::connect_or_start(home).await?;
@@ -522,6 +547,19 @@ fn print_status(status: &Value) {
     println!("  home:     {}", status["home"].as_str().unwrap_or("?"));
 }
 
+/// Cuota con su certeza: nunca un porcentaje que el CLI no informó (FLOW §12.3).
+fn quota_label(health: &Value) -> String {
+    match health["certainty"].as_str() {
+        Some("KNOWN") => health["remaining"]
+            .as_f64()
+            .map_or("desconocida".into(), |r| {
+                format!("{:.0} % restante", r * 100.0)
+            }),
+        Some("ESTIMATED") => "estimada".into(),
+        _ => "desconocida".into(),
+    }
+}
+
 fn print_providers(v: &Value) {
     let empty = Vec::new();
     let rows = v["providers"].as_array().unwrap_or(&empty);
@@ -530,20 +568,92 @@ fn print_providers(v: &Value) {
         return;
     }
     println!(
-        "{:<10} {:<10} {:<10} {:>7}  RUTA",
-        "PROVEEDOR", "ESTADO", "VERSIÓN", "MODELOS"
+        "{:<10} {:<10} {:<13} {:<14} {:<10} {:>7}  RUTA",
+        "PROVEEDOR", "ESTADO", "SALUD", "CUOTA", "VERSIÓN", "MODELOS"
     );
     for p in rows {
         let text = |k: &str| p[k].as_str().unwrap_or("—").to_string();
         println!(
-            "{:<10} {:<10} {:<10} {:>7}  {}",
+            "{:<10} {:<10} {:<13} {:<14} {:<10} {:>7}  {}",
             text("display_name"),
             text("setup_state"),
+            p["health"]["state"].as_str().unwrap_or("UNKNOWN"),
+            quota_label(&p["health"]),
             text("cli_version"),
             p["models"],
             text("cli_path")
         );
     }
+}
+
+fn print_route(v: &Value) {
+    let empty = Vec::new();
+    let decisions = v["decisions"].as_array().unwrap_or(&empty);
+    let Some(d) = decisions.first() else {
+        println!("Este agente todavía no tiene decisiones de routing registradas.");
+        return;
+    };
+    println!(
+        "Decisión más reciente: {} · {}\n",
+        d["trigger"].as_str().unwrap_or("?"),
+        d["profile"].as_str().unwrap_or("modelo exacto")
+    );
+    println!("{}\n", d["explanation"].as_str().unwrap_or(""));
+    println!("{:<30} {:<11} {:>7}  MOTIVO", "MODELO", "ESTADO", "PUNTAJE");
+    for c in d["candidates"].as_array().unwrap_or(&empty) {
+        let eligible = c["eligible"].as_bool().unwrap_or(false);
+        println!(
+            "{:<30} {:<11} {:>7}  {}",
+            c["model_id"].as_str().unwrap_or("?"),
+            if eligible { "elegible" } else { "descartado" },
+            c["score"]
+                .as_f64()
+                .map_or("—".into(), |s| format!("{s:.2}")),
+            c["reject_reason"].as_str().unwrap_or("")
+        );
+    }
+    if decisions.len() > 1 {
+        println!("\nDecisiones anteriores:");
+        for p in &decisions[1..] {
+            println!(
+                "  {} → {}",
+                p["trigger"].as_str().unwrap_or("?"),
+                p["selected"].as_str().unwrap_or("ninguno")
+            );
+        }
+    }
+}
+
+fn print_usage(v: &Value) {
+    let empty = Vec::new();
+    let rows = v["usage"].as_array().unwrap_or(&empty);
+    if rows.is_empty() {
+        println!("Sin uso registrado en los últimos {} días.", v["days"]);
+        return;
+    }
+    println!(
+        "{:<12} {:<26} {:<10} {:>5} {:>12} {:>12}",
+        "PROVEEDOR", "MODELO", "ORIGEN", "RUNS", "ENTRADA", "SALIDA"
+    );
+    for u in rows {
+        let text = |k: &str| u[k].as_str().unwrap_or("—").to_string();
+        println!(
+            "{:<12} {:<26} {:<10} {:>5} {:>12} {:>12}",
+            text("provider_id"),
+            text("model_id"),
+            if u["source"] == "REPORTED" {
+                "informado"
+            } else {
+                "estimado"
+            },
+            u["runs"],
+            u["tokens_in"],
+            u["tokens_out"]
+        );
+    }
+    println!(
+        "«estimado»: el CLI no informó tokens; es una aproximación (~4 caracteres por token)."
+    );
 }
 
 /// `same-provider` → `SAME_PROVIDER`: los flags aceptan la forma de CLI, la DB la suya.

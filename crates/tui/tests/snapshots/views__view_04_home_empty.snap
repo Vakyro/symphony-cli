@@ -12,7 +12,7 @@ expression: draw(&app)
 "│  También: p proveedores · r recovery · : comandos                                            │"
 "│                                                                                              │"
 "│PROVEEDORES                                                                                   │"
-"│  Claude READY   Codex LOGIN_REQUIRED                                                         │"
+"│  Claude READY   Codex LOGIN_REQUIRED   Copilot READY                                         │"
 "│                                                                                              │"
 "│SISTEMA                                                                                       │"
 "│  CPU, RAM y operaciones pesadas: se muestran cuando llegue el scheduler (v0.5).              │"

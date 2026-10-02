@@ -73,7 +73,10 @@ ulid_id!(
     ContextObjectId,
     HandoffId,
     ProviderFailureId,
-    ExecutorChangeId
+    ExecutorChangeId,
+    ProviderHealthId,
+    UsageRecordId,
+    RoutingDecisionId
 );
 
 #[cfg(test)]

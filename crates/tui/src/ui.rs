@@ -9,8 +9,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use serde_json::Value;
 
 use crate::app::{
-    AgentView, App, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab, ago,
-    state_phrase,
+    AgentView, App, Exec, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab,
+    ago, state_phrase,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -77,6 +77,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::NewAgent => "· Nuevo agente",
         Screen::ModelPicker => "· Elegir ejecución",
         Screen::Agent => "· Agente",
+        Screen::ExplainRoute => "· Por qué este modelo",
         Screen::Providers => "· Proveedores",
         Screen::Recovery => "· Recovery Center",
     };
@@ -100,6 +101,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::NewAgent => new_agent(app, f, body),
         Screen::ModelPicker => model_picker(app, f, body),
         Screen::Agent => agent(app, f, body),
+        Screen::ExplainRoute => explain_route(app, f, body),
         Screen::Recovery => recovery(app, f, body),
     }
 
@@ -125,10 +127,11 @@ fn hints(app: &App) -> &'static str {
         }
         Screen::NewAgent => "↑↓ campo · ←→ opción · Enter siguiente/crear · Esc cancelar",
         Screen::ModelPicker => "↑↓ elegir · Enter usar · Esc volver",
+        Screen::ExplainRoute => "Esc volver al agente",
         Screen::Agent => match app.agent.as_ref() {
             Some(a) if a.typing => "Enter enviar · Esc cancelar",
             _ => {
-                "←→ pestaña · m mensaje · p pausa · s modelo · o CLI · e exportar · d diff · x detener · Esc"
+                "←→ pestaña · m mensaje · p pausa · s modelo · ? por qué · o CLI · e exportar · d diff · x detener · Esc"
             }
         },
         Screen::Recovery => {
@@ -339,10 +342,109 @@ fn provider_advice(state: &str, name: &str) -> String {
     }
 }
 
+/// Color de un estado de salud (FLOW §12.2).
+fn health_color(state: &str) -> Color {
+    match state {
+        "HEALTHY" => Color::Green,
+        "EXHAUSTED" | "AUTH_ERROR" | "OFFLINE" => Color::Red,
+        "UNKNOWN" => Color::DarkGray,
+        _ => Color::Yellow,
+    }
+}
+
+/// Cuota con su certeza, sin inventar nunca un porcentaje (FLOW §12.3).
+fn quota_text(h: &Value) -> String {
+    match h["certainty"].as_str() {
+        Some("KNOWN") => h["remaining"]
+            .as_f64()
+            .map_or("restante desconocido".into(), |r| {
+                format!("{:.0} % restante", r * 100.0)
+            }),
+        Some("ESTIMATED") => "estimada (sin %)".into(),
+        _ => "restante desconocido".into(),
+    }
+}
+
+/// `12345` → `12,3k`; `1234567` → `1,2M`.
+fn tokens_text(n: i64) -> String {
+    match n {
+        0..1000 => n.to_string(),
+        1000..1_000_000 => format!("{:.1}k", n as f64 / 1000.0).replace('.', ","),
+        _ => format!("{:.1}M", n as f64 / 1_000_000.0).replace('.', ","),
+    }
+}
+
+/// Detalle del proveedor seleccionado (FLOW §12.1).
+fn provider_detail(app: &App, p: &Value, lines: &mut Vec<Line<'static>>) {
+    let h = &p["health"];
+    if h.is_null() {
+        return;
+    }
+    let state = h["state"].as_str().unwrap_or("UNKNOWN");
+    let mut health = format!("Salud: {state}");
+    if let Some(e) = h["evidence"].as_str() {
+        health.push_str(&format!(" · evidencia: {e}"));
+    }
+    if let Some(at) = h["retry_after_at"].as_i64().filter(|t| *t > app.now_ms) {
+        health.push_str(&format!(" · reintenta en {}", ago(at, app.now_ms)));
+    }
+    if let Some(at) = h["reset_at"].as_i64().filter(|t| *t > app.now_ms) {
+        health.push_str(&format!(" · se reinicia en {}", ago(at, app.now_ms)));
+    }
+    lines.push(Line::from(colored(health, health_color(state))));
+    lines.push(Line::raw(format!(
+        "Cuota: {} ({}) · reserva {:.0} %",
+        quota_text(h),
+        h["certainty"].as_str().unwrap_or("UNKNOWN"),
+        h["reserve"].as_f64().unwrap_or(0.2) * 100.0
+    )));
+    let names: Vec<String> = p["model_names"]
+        .as_array()
+        .map(|a| a.iter().map(text).collect())
+        .unwrap_or_default();
+    if !names.is_empty() {
+        lines.push(Line::raw(format!(
+            "Modelos ({}): {}",
+            names.len(),
+            names.join(", ")
+        )));
+    }
+    lines.push(Line::raw(format!(
+        "Agentes que lo usan ahora: {}",
+        num(&p["agents_active"])
+    )));
+    let f = &p["last_failure"];
+    if f.is_object() {
+        let msg = f["message"].as_str().unwrap_or("");
+        lines.push(Line::from(dim(format!(
+            "Último error: {}{} · hace {}",
+            text(&f["type"]),
+            if msg.is_empty() {
+                String::new()
+            } else {
+                format!(" — {msg}")
+            },
+            ago(app.now_ms, f["at"].as_i64().unwrap_or(0))
+        ))));
+    }
+    let u = &p["usage_7d"];
+    let (rep, est) = (
+        u["reported_tokens"].as_i64().unwrap_or(0),
+        u["estimated_tokens"].as_i64().unwrap_or(0),
+    );
+    if rep > 0 || est > 0 {
+        lines.push(Line::from(dim(format!(
+            "Uso (7 días): {} tokens informados · {} estimados",
+            tokens_text(rep),
+            tokens_text(est)
+        ))));
+    }
+}
+
 fn providers(app: &App, f: &mut Frame, area: Rect) {
     let mut lines = vec![Line::from(dim(format!(
-        "  {:<12} {:<16} {:<12} {:>7}",
-        "PROVEEDOR", "ESTADO", "VERSIÓN", "MODELOS"
+        "  {:<11} {:<15} {:<13} {:<21} {:<9} {:>7}",
+        "PROVEEDOR", "ESTADO", "SALUD", "CUOTA", "VERSIÓN", "MODELOS"
     )))];
     for (i, p) in app.providers.iter().enumerate() {
         let enabled = p["enabled"].as_bool().unwrap_or(true);
@@ -352,19 +454,30 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
         } else {
             "DESACTIVADO".into()
         };
+        let health = &p["health"];
+        let health_state = health["state"].as_str().unwrap_or("UNKNOWN").to_string();
         lines.push(Line::from(vec![
             marker(i == app.selected),
-            Span::raw(format!("{:<12} ", text(&p["display_name"]))),
+            Span::raw(format!("{:<11} ", text(&p["display_name"]))),
             colored(
-                format!("{shown:<16} "),
+                format!("{shown:<15} "),
                 if enabled {
                     state_color(&state)
                 } else {
                     Color::DarkGray
                 },
             ),
+            colored(
+                format!("{health_state:<13} "),
+                if enabled && state == "READY" {
+                    health_color(&health_state)
+                } else {
+                    Color::DarkGray
+                },
+            ),
+            dim(format!("{:<21} ", quota_text(health))),
             Span::raw(format!(
-                "{:<12} {:>7}",
+                "{:<9} {:>7}",
                 text(&p["cli_version"]),
                 num(&p["models"])
             )),
@@ -384,6 +497,9 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
         if let Some(path) = p["cli_path"].as_str() {
             lines.push(Line::from(dim(format!("Ruta: {path}"))));
         }
+        if app.screen == Screen::Providers {
+            provider_detail(app, p, &mut lines);
+        }
     }
     if app.screen == Screen::ProviderSetup {
         lines.push(Line::raw(""));
@@ -397,6 +513,90 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
         "Proveedores"
     };
     paragraph(f, area, title, lines);
+}
+
+// --- 14 Explain Route -----------------------------------------------------------
+
+fn explain_route(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let decisions = app
+        .explain
+        .as_ref()
+        .and_then(|e| e["decisions"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    if app.explain.is_none() {
+        lines.push(Line::from(dim("Cargando…")));
+    } else if decisions.is_empty() {
+        lines.push(Line::raw(
+            "Este agente todavía no tiene decisiones de routing registradas.",
+        ));
+    }
+    if let Some(d) = decisions.first() {
+        let trigger = match d["trigger"].as_str().unwrap_or("") {
+            "SPAWN" => "al crear el agente",
+            "FAILOVER" => "en un failover",
+            "SWITCH" => "en un cambio de modelo",
+            _ => "por una sugerencia",
+        };
+        lines.push(Line::from(vec![
+            bold("Decisión más reciente: "),
+            Span::raw(format!(
+                "{trigger} · {} · hace {}",
+                d["profile"]
+                    .as_str()
+                    .map_or("modelo exacto".into(), str::to_string),
+                ago(app.now_ms, d["decided_at"].as_i64().unwrap_or(0))
+            )),
+        ]));
+        lines.push(Line::raw(""));
+        for l in d["explanation"].as_str().unwrap_or("").lines() {
+            lines.push(Line::raw(l.to_string()));
+        }
+        lines.push(Line::raw(""));
+        lines.push(section("CANDIDATOS"));
+        lines.push(Line::from(dim(format!(
+            "  {:<28} {:<10} {:>7}  MOTIVO",
+            "MODELO", "ESTADO", "PUNTAJE"
+        ))));
+        let selected = d["selected"].as_str().unwrap_or("");
+        for c in d["candidates"].as_array().cloned().unwrap_or_default() {
+            let id = text(&c["model_id"]);
+            let eligible = c["eligible"].as_bool().unwrap_or(false);
+            lines.push(Line::from(vec![
+                Span::raw(if id == selected { "▸ " } else { "  " }),
+                Span::raw(format!("{id:<28} ")),
+                colored(
+                    format!("{:<10} ", if eligible { "elegible" } else { "descartado" }),
+                    if eligible {
+                        Color::Green
+                    } else {
+                        Color::DarkGray
+                    },
+                ),
+                Span::raw(format!(
+                    "{:>7}  ",
+                    c["score"]
+                        .as_f64()
+                        .map_or("—".into(), |s| format!("{s:.2}"))
+                )),
+                dim(c["reject_reason"].as_str().unwrap_or("").to_string()),
+            ]));
+        }
+        if decisions.len() > 1 {
+            lines.push(Line::raw(""));
+            lines.push(section("DECISIONES ANTERIORES"));
+            for p in &decisions[1..] {
+                lines.push(Line::from(dim(format!(
+                    "  hace {} · {} → {}",
+                    ago(app.now_ms, p["decided_at"].as_i64().unwrap_or(0)),
+                    text(&p["trigger"]),
+                    p["selected"].as_str().unwrap_or("ninguno")
+                ))));
+            }
+        }
+    }
+    paragraph(f, area, "Explain Route", lines);
 }
 
 // --- 00 Chat ---------------------------------------------------------------
@@ -799,22 +999,28 @@ fn home(app: &App, f: &mut Frame, area: Rect) {
 
 fn new_agent(app: &App, f: &mut Frame, area: Rect) {
     let na = &app.new_agent;
-    let exec = if na.exact {
-        let model = na
-            .model
-            .clone()
-            .unwrap_or_else(|| "Enter para elegir".into());
-        Line::from(vec![
-            colored("(•) Modelo exacto: ", ACCENT),
-            bold(model),
-            dim("   ( ) Decidir después"),
-        ])
-    } else {
-        Line::from(vec![
-            dim("( ) Modelo exacto   "),
-            colored("(•) Decidir después", ACCENT),
-        ])
+    let pick = |on: bool, label: String| {
+        if on {
+            colored(format!("(•) {label}"), ACCENT)
+        } else {
+            dim(format!("( ) {label}"))
+        }
     };
+    let model = na
+        .model
+        .clone()
+        .unwrap_or_else(|| "Enter para elegir".into());
+    let profile = na
+        .profile
+        .clone()
+        .unwrap_or_else(|| "Enter para elegir".into());
+    let exec = Line::from(vec![
+        pick(na.exec == Exec::Exact, format!("Modelo exacto: {model}")),
+        Span::raw("   "),
+        pick(na.exec == Exec::Profile, format!("Profile: {profile}")),
+        Span::raw("   "),
+        pick(na.exec == Exec::Later, "Decidir después".into()),
+    ]);
     let lines = vec![
         field(
             "Tarea",
@@ -824,7 +1030,7 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
         Line::raw(""),
         field("Ejecución", exec, na.field == 1),
         Line::from(dim(
-            "                  Profiles (@code, @fast…) llegan en v0.5.",
+            "                  Un modelo exacto no se sustituye en silencio; un profile (@code, @fast…) deja elegir a Symphony.",
         )),
         field(
             "Failover",
@@ -850,34 +1056,43 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
     paragraph(f, area, "Nuevo agente", lines);
 }
 
+/// FLOW §8.1: el estado que se ve junto a cada modelo.
+fn model_status(m: &Value) -> (String, Color) {
+    if !m["available"].as_bool().unwrap_or(false) {
+        return (text(&m["setup_state"]), Color::Yellow);
+    }
+    match m["health"].as_str().unwrap_or("UNKNOWN") {
+        "HEALTHY" | "UNKNOWN" | "PROBING" => ("DISPONIBLE".into(), Color::Green),
+        other => (other.to_string(), health_color(other)),
+    }
+}
+
 fn model_picker(app: &App, f: &mut Frame, area: Rect) {
-    let mut lines = vec![
-        section("PROFILES"),
-        Line::from(dim(
-            "  @code @debug @fast @reasoning @docs @conserve — llegan en v0.5",
-        )),
-        Line::raw(""),
-        section("MODELOS EXACTOS"),
-    ];
-    for (i, m) in app.models.iter().enumerate() {
-        let available = m["available"].as_bool().unwrap_or(false);
-        let status = if available {
-            "DISPONIBLE".to_string()
-        } else {
-            text(&m["setup_state"])
-        };
+    let mut lines = vec![section(
+        "PROFILES (Symphony elige entre los modelos utilizables)",
+    )];
+    for (i, p) in app.profiles.iter().enumerate() {
         lines.push(Line::from(vec![
             marker(i == app.selected),
+            bold(format!("{:<12} ", text(&p["id"]))),
+            dim(text(&p["description"])),
+        ]));
+    }
+    if app.profiles.is_empty() {
+        lines.push(Line::from(dim("  Cargando profiles…")));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section(
+        "MODELOS EXACTOS (se obedecen; no se sustituyen en silencio)",
+    ));
+    let offset = app.profiles.len();
+    for (i, m) in app.models.iter().enumerate() {
+        let (status, color) = model_status(m);
+        lines.push(Line::from(vec![
+            marker(offset + i == app.selected),
             Span::raw(format!("{:<12} / ", text(&m["provider"]))),
             Span::raw(format!("{:<20} ", text(&m["display_name"]))),
-            colored(
-                status,
-                if available {
-                    Color::Green
-                } else {
-                    Color::Yellow
-                },
-            ),
+            colored(status, color),
         ]));
     }
     if app.models.is_empty() {

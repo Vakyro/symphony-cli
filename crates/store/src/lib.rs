@@ -6,6 +6,7 @@ use std::path::Path;
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
+pub mod health;
 pub mod repo;
 mod writer;
 pub use writer::{
@@ -15,8 +16,10 @@ pub use writer::{
 
 /// Migraciones versionadas con `PRAGMA user_version` (DB §6).
 /// `foreign_key_check` hace que una migración con FKs rotas falle al aplicarse.
-const MIGRATION_LIST: &[M<'static>] =
-    &[M::up(include_str!("../../../migrations/001_core.sql")).foreign_key_check()];
+const MIGRATION_LIST: &[M<'static>] = &[
+    M::up(include_str!("../../../migrations/001_core.sql")).foreign_key_check(),
+    M::up(include_str!("../../../migrations/002_health.sql")).foreign_key_check(),
+];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);
 

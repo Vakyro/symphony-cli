@@ -2575,6 +2575,7 @@ dependencies = [
  "symphony-object-store",
  "symphony-process",
  "symphony-protocol",
+ "symphony-router",
  "symphony-store",
  "symphony-testkit",
  "tempfile",
@@ -2629,6 +2630,16 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "widestring",
+]
+
+[[package]]
+name = "symphony-router"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "proptest",
+ "serde_json",
+ "symphony-core",
 ]
 
 [[package]]

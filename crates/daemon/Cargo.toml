@@ -22,6 +22,7 @@ symphony-adapter-common = { path = "../adapters/common" }
 symphony-adapter-copilot = { path = "../adapters/copilot" }
 symphony-adapter-kimi = { path = "../adapters/kimi" }
 symphony-context = { path = "../context" }
+symphony-router = { path = "../router" }
 symphony-core = { path = "../core" }
 symphony-git = { path = "../git" }
 symphony-object-store = { path = "../object-store" }

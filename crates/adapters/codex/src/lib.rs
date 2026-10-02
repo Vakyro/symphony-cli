@@ -17,6 +17,7 @@ use symphony_adapter_common::hooks::parse_standard_hook;
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, HookCommand, ModelInfo, ProcessSpec,
     ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest,
+    parse_retry_after_ms,
 };
 use symphony_core::FailureType;
 
@@ -301,7 +302,7 @@ impl ProviderAdapter for CodexAdapter {
             failure_type,
             raw_code: Some(code.into()),
             message: symphony_core::redact(text).chars().take(500).collect(),
-            retry_after_ms: None,
+            retry_after_ms: parse_retry_after_ms(text),
             resets_at: None,
             transient,
         })

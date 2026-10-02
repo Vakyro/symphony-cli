@@ -56,3 +56,34 @@ fn a_binary_not_rebuilt_for_days_is_still_pinned() {
     assert!(pinned.is_file());
     assert_eq!(pinned_bin(&bin), pinned);
 }
+
+#[test]
+fn concurrent_callers_share_one_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let debug = dir.path().join("debug");
+    std::fs::create_dir_all(&debug).unwrap();
+    let bin = debug.join("tool.exe");
+    std::fs::write(&bin, vec![7u8; 2_000_000]).unwrap();
+
+    let paths: Vec<_> = (0..8)
+        .map(|_| {
+            let bin = bin.clone();
+            std::thread::spawn(move || pinned_bin(&bin))
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect();
+    assert!(paths.iter().all(|p| p == &paths[0]), "{paths:?}");
+    assert_eq!(std::fs::read(&paths[0]).unwrap().len(), 2_000_000);
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path().join("test-bins"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".lock") || n.ends_with(".tmp"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "sin restos de la copia: {leftovers:?}"
+    );
+}

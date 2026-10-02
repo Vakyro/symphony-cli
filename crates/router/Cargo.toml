@@ -1,0 +1,23 @@
+[package]
+name = "symphony-router"
+description = "Router determinista de modelos de Symphony (IDEA §5.7): filtro de disponibilidad y puntaje por profile, sin E/S"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+symphony-core = { path = "../core" }
+serde_json.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "router"
+harness = false

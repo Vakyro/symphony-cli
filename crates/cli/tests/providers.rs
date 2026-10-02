@@ -60,6 +60,11 @@ fn detection_with_simulated_path() {
         "{out}"
     );
     assert!(claude.contains(" 4 "), "4 modelos de Claude: {out}");
+    // Sin ninguna señal del proveedor: salud desconocida y cuota sin inventar un porcentaje.
+    assert!(
+        claude.contains("UNKNOWN") && claude.contains("desconocida") && !claude.contains('%'),
+        "{out}"
+    );
     assert!(row(&out, "Codex").contains("NOT_FOUND"), "{out}");
 
     // Claude + Codex.
@@ -68,4 +73,29 @@ fn detection_with_simulated_path() {
     assert!(row(&out, "Claude").contains("READY"), "{out}");
     let codex = row(&out, "Codex");
     assert!(codex.contains("READY") && codex.contains("9.9.9"), "{out}");
+}
+
+#[test]
+fn usage_without_runs_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let home = dir.path().join("h");
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_symphony"))
+            .args(args)
+            .env("SYMPHONY_HOME", &home)
+            .env("SYMPHONYD", symphonyd())
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let out = run(&["usage", "--days", "3"]);
+    run(&["daemon", "stop"]);
+    assert!(
+        out.contains("Sin uso registrado en los últimos 3 días"),
+        "{out}"
+    );
 }

@@ -79,6 +79,13 @@ pub enum Step {
     Usage {
         tokens: u64,
     },
+    /// Cuota que informa el CLI (como el `rate_limit_event` de Claude): `used_fraction` 0–1 de
+    /// una ventana, y cuándo se reinicia (epoch en segundos).
+    Quota {
+        window: String,
+        used_fraction: f64,
+        resets_at: Option<i64>,
+    },
     /// Se cuelga para siempre (para probar timeouts y kills).
     Hang,
 }
