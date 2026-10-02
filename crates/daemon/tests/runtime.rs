@@ -2285,6 +2285,151 @@ async fn handoff_matrix_from_github() {
     handoff_matrix_from("github").await;
 }
 
+/// P10.S2: la salud del proveedor sigue a lo que pasa en sus runs.
+fn health_of(e: &Env, provider: &str) -> (String, String, Option<f64>, Option<i64>, Option<i64>) {
+    symphony_store::open_reader(&e.db)
+        .unwrap()
+        .query_row(
+            "SELECT state, quota_certainty, quota_remaining, retry_after_at, reset_at
+             FROM provider_health WHERE provider_id = ?1 AND model_id IS NULL",
+            [provider],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap()
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_429_rate_limits_the_provider_and_never_exhausts_it() {
+    // Un 429 y el CLI se cuelga: el watchdog lo mata y no hay éxito que limpie el estado.
+    let script =
+        "[[step]]\nkind = \"rate_limit\"\nretry_after_ms = 30\n[[step]]\nkind = \"hang\"\n";
+    let e = env_with_watchdog(
+        &[("alpha", script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+    e.runtime
+        .create_agent(req(&e, "limitado", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let (state, certainty, remaining, retry_after, reset) = health_of(&e, "alpha");
+    assert_eq!(state, "RATE_LIMITED", "un 429 no es «agotado»");
+    assert_eq!(
+        (certainty.as_str(), remaining, reset),
+        ("UNKNOWN", None, None)
+    );
+    assert!(retry_after.is_some(), "con la espera que pidió el CLI");
+    // Queda anotado como fallo temporal, con la cuenta `default`.
+    assert_eq!(
+        one::<String>(
+            &e,
+            "SELECT failure_type || '|' || account_id FROM provider_failures"
+        ),
+        "TEMP_RATE_LIMIT|acct-alpha"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exhausted_quota_marks_the_provider_and_the_replacement_stays_healthy() {
+    let reset_secs = now_secs() + 3600;
+    let first = format!("[[step]]\nkind = \"quota_exhausted\"\nresets_at = {reset_secs}\n");
+    let second = "[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+    let e = env_with(&[("alpha", first.as_str()), ("beta", second)], None).await;
+    e.runtime
+        .create_agent(req(&e, "agotado", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let (state, _, _, _, reset) = health_of(&e, "alpha");
+    assert_eq!(state, "EXHAUSTED");
+    assert_eq!(
+        reset,
+        Some(reset_secs * 1000),
+        "la base guarda milisegundos"
+    );
+    assert_eq!(
+        health_of(&e, "beta").0,
+        "HEALTHY",
+        "el reemplazo terminó bien"
+    );
+    assert_eq!(
+        one::<String>(&e, "SELECT failure_type FROM provider_failures"),
+        "DAILY_QUOTA"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_known_quota_report_below_the_reserve_marks_quota_low_with_a_real_percentage() {
+    let script = format!(
+        "[[step]]\nkind = \"quota\"\nwindow = \"five_hour\"\nused_fraction = 0.3\nresets_at = {r}\n\
+         [[step]]\nkind = \"quota\"\nwindow = \"seven_day\"\nused_fraction = 0.9\nresets_at = {r}\n\
+         [[step]]\nkind = \"say\"\ntext = \"listo\"\n",
+        r = now_secs() + 7200
+    );
+    let e = env_with(&[("alpha", script.as_str())], None).await;
+    e.runtime
+        .create_agent(req(&e, "cuota", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let (state, certainty, remaining, _, _) = health_of(&e, "alpha");
+    // Manda la ventana más apretada (0.9 usado → 0.1 restante ≤ reserva 0.20); un éxito no la borra.
+    assert_eq!(state, "QUOTA_LOW");
+    assert_eq!(certainty, "KNOWN");
+    assert!((remaining.unwrap() - 0.1).abs() < 1e-9, "{remaining:?}");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn usage_is_reported_when_the_cli_gives_it_and_estimated_when_it_does_not() {
+    let reported =
+        "[[step]]\nkind = \"usage\"\ntokens = 4321\n[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+    let silent = "[[step]]\nkind = \"say\"\ntext = \"respuesta de unas cuantas palabras\"\n";
+    let e = env_with(&[("alpha", reported), ("beta", silent)], None).await;
+    for (title, model) in [("con uso", "alpha/fast"), ("sin uso", "beta/fast")] {
+        e.runtime
+            .create_agent(req(&e, title, Execution::Exact(model.into())))
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+    }
+    e.writer.handle().flush().await.unwrap();
+
+    let usage = |provider: &str| -> (String, i64) {
+        symphony_store::open_reader(&e.db)
+            .unwrap()
+            .query_row(
+                "SELECT source, COALESCE(tokens_in, 0) FROM usage_records WHERE provider_id = ?1",
+                [provider],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    };
+    assert_eq!(usage("alpha"), ("REPORTED".into(), 4321));
+    let (source, tokens_in) = usage("beta");
+    assert_eq!(source, "ESTIMATED");
+    assert!(tokens_in > 0, "se estima a partir del prompt enviado");
+    e.writer.shutdown();
+}
+
 /// Un CLI que falla (login, cuota) antes de leer su prompt deja un `EPIPE` al escribirlo: no es un
 /// fallo de arranque; su salida y su código de salida mandan y el failover sigue su curso.
 #[tokio::test(flavor = "multi_thread")]

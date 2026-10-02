@@ -30,10 +30,19 @@
 - **Cómo se verificó:** `cargo nextest run -p symphony-store` (23 passed). Test `migration_002_keeps_v01_data_and_adds_the_pending_foreign_keys`: una base de v0.1 con agentes, runs, fallo, cambio de executor y mensaje migra sin pérdida, `foreign_key_check` queda en 0, las FKs nuevas existen y la integridad referencial y los índices únicos parciales siguen activos. Además se migró una **copia de la base real de Leo** (4 agentes, 7 runs, 26 mensajes, 212 eventos): versión 2, mismos recuentos, 0 violaciones de FK.
 - **Pendiente / notas:** ninguna.
 
+### P10.S2 · Máquina de estados de salud — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-02
+- **Qué se hizo:** `core::health` (función pura `Health::apply` + `effective_state`, cooldowns como instantes, `PROBING` al vencer); enums nuevos (`AccountAuthStatus`, `UsageSource`, `SpeedClass`, `RoutingTrigger`, `RejectReason`) comparados con la DB spec; `store::health` (salud por proveedor y por modelo, fallos recientes, ventanas de cuota desde los eventos, uso); `daemon::health` que aplica la máquina desde el recorder (errores no fatales, `Quota`, `TurnUsage`) y desde el executor (fallo fatal en la misma escritura que cierra el run, éxito al terminar bien). `parse_retry_after_ms` en `adapters/common` y los cinco adapters lo usan; los cinco ya registran `retry_after_ms`. `[providers.limits.<id>]` en `config.toml` (reserva y presupuesto por proveedor). `fake-agent` gana el paso `quota`.
+- **Archivos clave:** `crates/core/src/health.rs`, `crates/store/src/health.rs`, `crates/daemon/src/health.rs`, `crates/daemon/src/recorder.rs`, `crates/adapters/common/src/lib.rs`
+- **Cómo se verificó:** 14 tests de la máquina (4 proptest: un 429 nunca produce `EXHAUSTED`, el porcentaje solo con certeza `KNOWN`, cooldowns siempre en el futuro y se vuelven `PROBING`, `AUTH_ERROR` no caduca); 6 de store; 4 L2 en el daemon (`a_429_rate_limits…`, `exhausted_quota_marks…` con su hora de reinicio en ms, cuota conocida → `QUOTA_LOW` con 10 % real, uso `REPORTED` frente a `ESTIMATED`); 4 de propiedades de los parsers de los cinco adapters (nunca entran en pánico, mensajes redactados, un 429 nunca es cuota agotada, el `retry_after` se lee del texto). Sustituyen a los fuzz targets del PLAN (corren en CI sin nightly).
+- **Pendiente / notas:** los textos de cuota/auth de Kimi, Antigravity y Copilot siguen siendo sintéticos. Dos cambios de infraestructura de tests: `START_TIMEOUT` del cliente y de los tests de daemon de 10 s a 30 s (con cinco CLIs que detectar, `copilot --version` tarda ~2 s y bajo carga el daemon pasaba de 10 s), y `pinned_bin` copia una sola vez por versión con un archivo de bloqueo.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
 | Migración 001 → 002 sobre datos reales sin pérdida | test + copia de la base real | ✅ |
+| La salud sigue a los runs: 429 → `RATE_LIMITED`, cuota → `EXHAUSTED` con reinicio, cuota conocida → `QUOTA_LOW` | L2 en el daemon + proptest | ✅ |
+| Uso informado frente a estimado | L2 | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |

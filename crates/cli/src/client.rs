@@ -11,7 +11,9 @@ use serde_json::Value;
 use symphony_protocol::transport::{self, LocalStream};
 use symphony_protocol::{Connection, Message, Outcome, ProtocolError, Request};
 
-const START_TIMEOUT: Duration = Duration::from_secs(10);
+/// Cinco CLIs que detectar (`copilot --version` tarda ~2 s) y una máquina cargada pueden
+/// pasarse de 10 s: el daemon abre el socket recién cuando termina.
+const START_TIMEOUT: Duration = Duration::from_secs(30);
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, thiserror::Error, Diagnostic)]

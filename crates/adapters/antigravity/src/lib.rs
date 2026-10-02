@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, ModelInfo, ProcessSpec, ProviderAdapter,
     ProviderError, ResumeRequest, SpawnRequest, ToolKind, find_on_path, has_token, json_str,
+    parse_retry_after_ms,
 };
 use symphony_core::FailureType;
 
@@ -120,7 +121,7 @@ fn result_events(result: &Value, adapter: &AntigravityAdapter) -> Vec<AgentEvent
             failure_type: FailureType::ProviderError,
             raw_code: Some("agy_error".into()),
             message: symphony_core::redact(&text).chars().take(500).collect(),
-            retry_after_ms: None,
+            retry_after_ms: parse_retry_after_ms(&text),
             resets_at: None,
             transient: false,
         });
@@ -330,7 +331,7 @@ impl ProviderAdapter for AntigravityAdapter {
             failure_type,
             raw_code: Some(code.into()),
             message: symphony_core::redact(text).chars().take(500).collect(),
-            retry_after_ms: None,
+            retry_after_ms: parse_retry_after_ms(text),
             resets_at: None,
             transient,
         })

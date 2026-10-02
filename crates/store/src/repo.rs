@@ -1044,6 +1044,7 @@ pub struct NewProviderFailure {
     /// Ya redactado.
     pub message: String,
     pub reset_at: Option<i64>,
+    pub retry_after_at: Option<i64>,
 }
 
 pub fn insert_provider_failure(
@@ -1052,16 +1053,18 @@ pub fn insert_provider_failure(
     now: i64,
 ) -> Result<(), RepoError> {
     conn.execute(
-        "INSERT INTO provider_failures (id, provider_id, model_id, run_id, failure_type, raw_code, message, reset_at, confidence, occurred_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1.0, ?9)",
+        "INSERT INTO provider_failures (id, provider_id, account_id, model_id, run_id, failure_type, raw_code, message, retry_after_at, reset_at, confidence, occurred_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1.0, ?11)",
         params![
             f.id.to_string(),
             f.provider_id,
+            crate::health::account_id(&f.provider_id),
             f.model_id,
             f.run_id.map(|r| r.to_string()),
             f.failure_type.as_str(),
             f.raw_code,
             f.message,
+            f.retry_after_at,
             f.reset_at,
             now
         ],

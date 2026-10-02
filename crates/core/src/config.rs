@@ -125,6 +125,21 @@ pub struct ContextConfig {
 pub struct ProvidersConfig {
     /// Fracción de cuota que se reserva (DB §3.D: `reserve = 0.20`).
     pub quota_reserve: f64,
+    /// Ajustes por proveedor (`[providers.limits.anthropic]`): reserva propia y, opcional, un
+    /// presupuesto de tokens por ventana para estimar la cuota de CLIs que no la informan.
+    pub limits: std::collections::BTreeMap<String, ProviderLimits>,
+}
+
+/// `[providers.limits.<proveedor>]`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderLimits {
+    /// Reserva de este proveedor (0.0–1.0); sin valor, la global.
+    pub reserve: Option<f64>,
+    /// Con `window_tokens`: duración de la ventana de cuota, en horas.
+    pub window_hours: Option<u64>,
+    /// Tokens que el plan da por ventana (estimación; nunca se muestra como porcentaje exacto).
+    pub window_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -163,6 +178,7 @@ impl Default for ProvidersConfig {
     fn default() -> Self {
         Self {
             quota_reserve: 0.20,
+            limits: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -195,6 +211,11 @@ mode = "BALANCED"
 [providers]
 # Fracción de cuota que se guarda para trabajo urgente (0.0–1.0).
 quota_reserve = 0.20
+# Ajustes por proveedor (opcional). La estimación de cuota solo se usa si das un presupuesto.
+# [providers.limits.github]
+# reserve = 0.30
+# window_hours = 720
+# window_tokens = 5000000
 
 [logging]
 # error · warn · info · debug · trace
@@ -217,6 +238,20 @@ impl Config {
                 "providers.quota_reserve = {} debe estar entre 0.0 y 1.0",
                 self.providers.quota_reserve
             )));
+        }
+        for (id, l) in &self.providers.limits {
+            if let Some(r) = l.reserve
+                && !(0.0..=1.0).contains(&r)
+            {
+                return Err(invalid(format!(
+                    "providers.limits.{id}.reserve = {r} debe estar entre 0.0 y 1.0"
+                )));
+            }
+            if l.window_hours == Some(0) || l.window_tokens == Some(0) {
+                return Err(invalid(format!(
+                    "providers.limits.{id}: window_hours y window_tokens deben ser mayores que 0"
+                )));
+            }
         }
         if self.chat.switch_at_tokens == Some(0) {
             return Err(invalid("chat.switch_at_tokens debe ser mayor que 0".into()));

@@ -177,7 +177,10 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     );
 
     match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
-        Ok(config) => runtime.set_chat_switch_tokens(config.chat.switch_at_tokens),
+        Ok(config) => {
+            bus.set_health_config(crate::health::HealthConfig::from_config(&config));
+            runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
+        }
         Err(e) => {
             tracing::warn!(error = %e, "config.toml no se pudo leer; el chat no cambia por umbral")
         }

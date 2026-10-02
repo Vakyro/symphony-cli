@@ -124,6 +124,7 @@ pub async fn save(
         .write(Box::new(move |tx| {
             for d in &detected {
                 repo::upsert_provider(tx, &d.provider, now)?;
+                symphony_store::health::ensure_account(tx, &d.provider.id, now)?;
                 for m in &d.models {
                     repo::upsert_model(tx, m, now)?;
                 }

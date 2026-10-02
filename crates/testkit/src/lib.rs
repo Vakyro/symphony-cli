@@ -47,18 +47,47 @@ fn pin(bin: &Path) -> std::io::Result<PathBuf> {
         std::env::consts::EXE_SUFFIX
     ));
     if !dest.is_file() {
-        let tmp = dir.join(format!("{stem}-{}.tmp", std::process::id()));
-        std::fs::copy(bin, &tmp)?;
-        // Si otro proceso de test ganó la carrera, su copia sirve igual.
-        if std::fs::rename(&tmp, &dest).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        } else if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&dest) {
-            // `copy` conserva la fecha del binario: sin esto, uno viejo se podaría al instante.
-            let _ = f.set_modified(SystemTime::now());
-        }
+        copy_once(bin, &dest, &dir, &stem)?;
     }
     prune_old(&dir, &dest);
     dest.is_file().then_some(dest).ok_or_else(not_found)
+}
+
+/// Una sola copia por versión: un proceso toma el archivo de bloqueo y copia; los demás esperan
+/// a que aparezca. Copiar varias veces el mismo `.exe` multiplica el análisis del antivirus, y
+/// el primer arranque de los daemons de test se pasa de su plazo.
+fn copy_once(bin: &Path, dest: &Path, dir: &Path, stem: &str) -> std::io::Result<()> {
+    let lock = dest.with_extension("lock");
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+        {
+            Ok(_) => {
+                let tmp = dir.join(format!("{stem}-{}.tmp", std::process::id()));
+                let copied = std::fs::copy(bin, &tmp).and_then(|_| std::fs::rename(&tmp, dest));
+                if copied.is_err() {
+                    let _ = std::fs::remove_file(&tmp);
+                } else if let Ok(f) = std::fs::OpenOptions::new().write(true).open(dest) {
+                    // `copy` conserva la fecha del binario: sin esto, uno viejo se podaría al instante.
+                    let _ = f.set_modified(SystemTime::now());
+                }
+                let _ = std::fs::remove_file(&lock);
+                return copied;
+            }
+            Err(_) if dest.is_file() => return Ok(()),
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            // Un bloqueo huérfano (un proceso murió copiando): se descarta y se reintenta.
+            Err(_) => {
+                let _ = std::fs::remove_file(&lock);
+                return std::fs::copy(bin, dest).map(|_| ());
+            }
+        }
+    }
 }
 
 /// Borra las copias de más de un día, salvo `keep` (nunca las recientes: otro test puede estar

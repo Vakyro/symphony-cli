@@ -16,7 +16,7 @@ use serde_json::Value;
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, ModelInfo, ProcessSpec, ProviderAdapter,
     ProviderError, ResumeRequest, SpawnRequest, ToolKind, find_on_path, has_token, json_str,
-    looks_like_error,
+    looks_like_error, parse_retry_after_ms,
 };
 use symphony_core::FailureType;
 
@@ -303,7 +303,7 @@ impl ProviderAdapter for KimiAdapter {
             failure_type,
             raw_code: Some(code.into()),
             message: symphony_core::redact(text).chars().take(500).collect(),
-            retry_after_ms: None,
+            retry_after_ms: parse_retry_after_ms(text),
             resets_at: None,
             transient,
         })

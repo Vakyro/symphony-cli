@@ -16,6 +16,7 @@ use symphony_adapter_common::hooks::{classify_error_category, parse_standard_hoo
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, HookCommand, ModelInfo, ProcessSpec,
     ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest,
+    parse_retry_after_ms,
 };
 use symphony_core::FailureType;
 
@@ -383,7 +384,7 @@ impl ProviderAdapter for ClaudeAdapter {
             failure_type,
             raw_code: Some(code.into()),
             message: symphony_core::redact(text).chars().take(500).collect(),
-            retry_after_ms: None,
+            retry_after_ms: parse_retry_after_ms(text),
             resets_at: None,
             transient: failure_type == FailureType::TempRateLimit,
         })

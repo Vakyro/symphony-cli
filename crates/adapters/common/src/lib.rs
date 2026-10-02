@@ -39,6 +39,64 @@ pub fn has_token(text: &str, token: &str) -> bool {
         .any(|w| w == token)
 }
 
+/// Tope de un `retry_after`: más allá de una semana el texto no es una espera fiable.
+const RETRY_AFTER_MAX_MS: u64 = 7 * 24 * 3600 * 1000;
+
+/// La espera que un mensaje de error pide («Retry-After: 30», «try again in 5 minutes»,
+/// «retry after 1h 30m»), en milisegundos. Solo duraciones relativas: una hora de reloj
+/// («try again at 5 PM») depende de la zona horaria y no se interpreta.
+pub fn parse_retry_after_ms(text: &str) -> Option<u64> {
+    let lower = text.to_lowercase();
+    const KEYS: [&str; 6] = [
+        "retry-after",
+        "retry after",
+        "retry in",
+        "try again in",
+        "try again after",
+        "resets in",
+    ];
+    KEYS.iter().find_map(|key| {
+        let at = lower.find(key)?;
+        parse_duration_prefix(&lower[at + key.len()..])
+    })
+}
+
+/// «30», «30s», «5 minutes», «1h 30m», «2 minutes and 30 seconds». Sin unidad, segundos.
+fn parse_duration_prefix(s: &str) -> Option<u64> {
+    let mut rest = s.trim_start_matches([' ', ':', '=', '~']);
+    let mut total_ms = 0.0_f64;
+    let mut parsed = false;
+    loop {
+        let digits = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(rest.len());
+        let Ok(n) = rest[..digits].parse::<f64>() else {
+            break;
+        };
+        rest = rest[digits..].trim_start();
+        let unit_len = rest
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .unwrap_or(rest.len());
+        let (unit, after) = rest.split_at(unit_len);
+        let factor = match unit {
+            "ms" | "msec" | "millisecond" | "milliseconds" => 1.0,
+            "" | "s" | "sec" | "secs" | "second" | "seconds" => 1000.0,
+            "m" | "min" | "mins" | "minute" | "minutes" => 60_000.0,
+            "h" | "hr" | "hrs" | "hour" | "hours" => 3_600_000.0,
+            "d" | "day" | "days" => 86_400_000.0,
+            _ => break,
+        };
+        total_ms += n * factor;
+        parsed = true;
+        rest = after.trim_start_matches([' ', ',']);
+        if let Some(r) = rest.strip_prefix("and ") {
+            rest = r.trim_start();
+        }
+    }
+    (parsed && total_ms.is_finite() && total_ms >= 0.0)
+        .then(|| (total_ms.round() as u64).min(RETRY_AFTER_MAX_MS))
+}
+
 /// Una línea de texto plano (stderr o stdout) que parece un error (`Error: …`, `fatal: …`).
 /// El resto es ruido y no debe clasificarse: un «429» en una ruta no es un límite de uso.
 pub fn looks_like_error(line: &str) -> bool {

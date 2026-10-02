@@ -77,7 +77,7 @@ pub struct LiveRun {
 }
 
 /// Fallos que justifican cambiar de executor (P06.S5): cuota agotada o login.
-fn needs_failover(e: &ProviderError) -> bool {
+pub(crate) fn needs_failover(e: &ProviderError) -> bool {
     !e.transient
         && matches!(
             e.failure_type,
@@ -451,6 +451,7 @@ impl Runtime {
         if exit == ExitStatus::Exited(0) {
             self.commit_chat_turn(l).await;
             let (agent, task, run) = (l.agent_id, l.task_id, l.run_id);
+            let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
             let result = self
                 .writer
                 .write(Box::new(move |t| {
@@ -464,6 +465,10 @@ impl Runtime {
                         now,
                     )?;
                     repo::set_handoff_outcome(t, run, "CONTINUED")?;
+                    // Un turno terminó bien: el proveedor está sano y se anota el uso estimado
+                    // si su CLI no informó tokens.
+                    crate::health::on_success(t, &provider, Some(&model), now)?;
+                    crate::health::finish_usage(t, run, now)?;
                     if repo::get_task(t, task)?.code == repo::CHAT_TASK_CODE {
                         repo::set_agent_state(
                             t,
@@ -570,17 +575,9 @@ impl Runtime {
         } else {
             (format!("{who} se quedó sin cuota"), "quota exhausted")
         };
-        let failure = repo::NewProviderFailure {
-            id: ProviderFailureId::new(),
-            provider_id: l.provider_id.clone(),
-            model_id: Some(l.model_id.clone()),
-            run_id: Some(l.run_id),
-            failure_type: err.failure_type,
-            raw_code: err.raw_code.clone(),
-            message: symphony_core::redact(&err.message).into_owned(),
-            reset_at: err.resets_at,
-        };
-        let failure_id = failure.id;
+        let failure_id = ProviderFailureId::new();
+        let (failed_provider, failed_model, failed_err) =
+            (l.provider_id.clone(), l.model_id.clone(), err.clone());
 
         let next = self.read_op(|c| {
             let agent = repo::get_agent(c, l.agent_id)?;
@@ -615,7 +612,24 @@ impl Runtime {
                 let now = now_ms();
                 repo::close_run(t, run, status, end, code, now)?;
                 repo::set_handoff_outcome(t, run, "CONTINUED")?;
-                repo::insert_provider_failure(t, &failure, now)?;
+                // El fallo fatal se registra aquí, en la misma escritura, para que la salud ya
+                // esté al día cuando se elija el siguiente executor.
+                crate::health::record_failure_row(
+                    t,
+                    failure_id,
+                    Some(run),
+                    &failed_provider,
+                    Some(&failed_model),
+                    &failed_err,
+                    now,
+                )?;
+                crate::health::on_failure(
+                    t,
+                    &failed_provider,
+                    Some(&failed_model),
+                    &failed_err,
+                    now,
+                )?;
                 Ok(())
             }))
             .await;

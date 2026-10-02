@@ -6,6 +6,7 @@ pub mod checkpoint;
 pub mod executor;
 pub mod export;
 pub mod handoff;
+pub mod health;
 pub mod logging;
 pub mod providers;
 pub mod recorder;

@@ -162,6 +162,57 @@ db_enum!(
 );
 
 db_enum!(
+    /// `provider_accounts.auth_status` (DB §3.D). Solo el estado que reporta el CLI.
+    AccountAuthStatus {
+        Ok => "OK",
+        Expired => "EXPIRED",
+        Missing => "MISSING",
+        Unknown => "UNKNOWN",
+    }
+);
+
+db_enum!(
+    /// `usage_records.source` (DB §3.D): la UI muestra distinto lo informado y lo estimado.
+    UsageSource {
+        Reported => "REPORTED",
+        Estimated => "ESTIMATED",
+    }
+);
+
+db_enum!(
+    /// `models.speed_class` (DB §3.D).
+    SpeedClass {
+        Fast => "FAST",
+        Medium => "MEDIUM",
+        Slow => "SLOW",
+    }
+);
+
+db_enum!(
+    /// `routing_decisions.trigger` (DB §3.E).
+    RoutingTrigger {
+        Spawn => "SPAWN",
+        Failover => "FAILOVER",
+        Switch => "SWITCH",
+        Suggestion => "SUGGESTION",
+    }
+);
+
+db_enum!(
+    /// `routing_candidates.reject_reason` (DB §3.E).
+    RejectReason {
+        Offline => "OFFLINE",
+        Auth => "AUTH",
+        Exhausted => "EXHAUSTED",
+        Context => "CONTEXT",
+        Capability => "CAPABILITY",
+        Cooldown => "COOLDOWN",
+        Reserve => "RESERVE",
+        Disabled => "DISABLED",
+    }
+);
+
+db_enum!(
     /// `provider_health.quota_certainty`.
     QuotaCertainty {
         Known => "KNOWN",
@@ -232,6 +283,19 @@ mod tests {
             "QuotaCertainty",
         );
         assert_matches_db(FailureType::ALL, FailureType::as_str, "FailureType");
+        assert_matches_db(
+            AccountAuthStatus::ALL,
+            AccountAuthStatus::as_str,
+            "AccountAuthStatus",
+        );
+        assert_matches_db(UsageSource::ALL, UsageSource::as_str, "UsageSource");
+        assert_matches_db(SpeedClass::ALL, SpeedClass::as_str, "SpeedClass");
+        assert_matches_db(
+            RoutingTrigger::ALL,
+            RoutingTrigger::as_str,
+            "RoutingTrigger",
+        );
+        assert_matches_db(RejectReason::ALL, RejectReason::as_str, "RejectReason");
         assert_eq!(AgentState::ALL.len(), 12);
     }
 
