@@ -2632,6 +2632,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "symphony-router"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "proptest",
+ "serde_json",
+ "symphony-core",
+]
+
+[[package]]
 name = "symphony-store"
 version = "0.1.0"
 dependencies = [
