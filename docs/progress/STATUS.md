@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-09-30 · por claude-code/sonnet-5.5
-**Fase actual:** P11 · Proveedores (adelantada por ADR-0008). P07.5 cerrada (`p075-done`); P07.S10 resuelta con ADR-0008 (P08–P10 diferidas)
-**Paso actual:** P11.S6 · cierre de P11. P08–P16 siguen provisionales
+**Actualizado:** 2026-10-01 · por claude-code/sonnet-5.5
+**Fase actual:** P11 · Proveedores **cerrada** (tag `p11-done`, fusionada a `main`). P07.5 cerrada (`p075-done`). Sigue lo que Leo decida: revisión de P08–P16 con uso real (P07.S10, ADR-0007/0008) o los pendientes de P11
+**Paso actual:** (ninguno abierto). P08–P16 siguen provisionales; P08–P10 diferidas por ADR-0008
 **Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
 **Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
@@ -37,7 +37,7 @@
 - [x] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
-0. **P11.S5 ✅ (2026-10-01):** matriz de handoff: 20 pares con `fake-agent` ✅ y 3 pares live (Claude→Kimi, Codex→Copilot, Antigravity→Claude) ✅ — 291 tests. Se arregló la carrera de `symphonyd.exe` en los tests (`pinned_bin`). Siguiente: **P11.S6 · cierre** (revisión, `ponytail-review`, protocolo §4.6, tag `p11-done`; merge a `main` ya autorizado por Leo para cierres de fase). Pendiente de Leo: ToS de los tres proveedores; permisos opt-in (Kimi sin sandbox; Antigravity y Copilot sin shell); Copilot solo ofrece `auto` en esta cuenta.
+0. **P11 ✅ cerrada (2026-10-01, tag `p11-done`):** Kimi, Antigravity y Copilot con el mismo contrato (bitácora `docs/phases/P11-proveedores.md`, investigación `docs/research/cli-p11.md`). Matriz de handoff: 20 pares con `fake-agent` y 3 pares live ✅; revisión de código (10 hallazgos: 7 corregidos, 3 documentados); CI verde en ubuntu, windows, macos, msrv y deny; 299 tests. **Pendiente de Leo:** (a) ToS de los tres proveedores; (b) permisos: Kimi no tiene sandbox (`--print` aprueba todo) y Antigravity/Copilot no ejecutan comandos salvo `skip_permissions`/`allow_all_tools`, hoy solo en código, sin `config.toml`; (c) skills nativas de los tres en el chat; (d) Copilot solo ofrece `auto` en esta cuenta; (e) elegir la próxima fase: P10 recortada (salud y failover con N proveedores), P09 recortada (coste del handoff largo) o la revisión de P08–P16 con uso real.
 1. **P07.S10:** revisar P08–P16 a partir de la propuesta «Chat agéntico con failover» (abajo) y de lo que Leo anote en `docs/research/uso-v0.1.md`; escribir el ADR de replanificación.
 1b. Coste real medido el 2026-09-30 (bitácora P07.5 § S9): un cambio de proveedor cuesta el arranque del CLI de destino (Claude ~27,5k, Codex ~18k tokens) más el handoff (~2,4k–2,9k); n = 1 y conversación corta. Falta: una conversación larga (≥ 100 mensajes) y entender por qué Codex «continuar» sube a 48k. Cambio menor sin aplicar: `scan_plugins` en `skills.rs` no necesita el parámetro `commands`.
 2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
@@ -92,4 +92,5 @@ Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y val
 | P06 | ✅ | p06-done |
 | P07 | ✅ (S10 pendiente, diferido por Leo) | p07-done, v0.1.0 |
 | P07.5 | ✅ | p075-done |
-| P08–P16 | ⏳ (provisionales; P08–P10 con rediseño pendiente) | |
+| P11 (adelantada por ADR-0008) | ✅ | p11-done |
+| P08–P10, P12–P16 | ⏳ (provisionales; P08–P10 con rediseño pendiente) | |
