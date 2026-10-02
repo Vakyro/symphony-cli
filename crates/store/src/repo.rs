@@ -616,14 +616,24 @@ pub fn open_run(
     model_id: &str,
     now: i64,
 ) -> Result<AgentRun, RepoError> {
+    // Todo run apunta a la cuenta `default` de su proveedor (FK de la migración 002).
+    crate::health::ensure_account(conn, provider_id, now)?;
     let seq: i64 = conn.query_row(
         "SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_runs WHERE agent_id = ?1",
         [agent.to_string()],
         |r| r.get(0),
     )?;
     conn.execute(
-        "INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, started_at) VALUES (?1, ?2, ?3, ?4, ?5, 'STARTING', ?6)",
-        params![id.to_string(), agent.to_string(), seq, provider_id, model_id, now],
+        "INSERT INTO agent_runs (id, agent_id, seq, provider_id, account_id, model_id, status, started_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'STARTING', ?7)",
+        params![
+            id.to_string(),
+            agent.to_string(),
+            seq,
+            provider_id,
+            crate::health::account_id(provider_id),
+            model_id,
+            now
+        ],
     )?;
     get_run(conn, id)
 }
@@ -1052,6 +1062,7 @@ pub fn insert_provider_failure(
     f: &NewProviderFailure,
     now: i64,
 ) -> Result<(), RepoError> {
+    crate::health::ensure_account(conn, &f.provider_id, now)?;
     conn.execute(
         "INSERT INTO provider_failures (id, provider_id, account_id, model_id, run_id, failure_type, raw_code, message, retry_after_at, reset_at, confidence, occurred_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1.0, ?11)",
@@ -1121,65 +1132,6 @@ pub fn set_agent_exact_model(
         params![agent.to_string(), model_id, now],
     )?;
     Ok(())
-}
-
-/// Siguiente executor para un failover básico (P06.S5; el routing completo llega en P10).
-///
-/// Nunca vuelve a un modelo (ni, con `ANY`, a un proveedor) que este agente ya agotó o
-/// que rechazó el login. Con `ANY` prueba primero otros proveedores listos (orden estable
-/// por id) y después otros modelos del mismo; con `SAME_PROVIDER`, solo lo segundo. Con
-/// un fallo de login, el mismo proveedor no sirve.
-#[allow(clippy::too_many_arguments)]
-pub fn next_executor(
-    conn: &Connection,
-    agent: AgentId,
-    policy: FailoverPolicy,
-    current_provider: &str,
-    current_model: &str,
-    auth_failure: bool,
-    has_adapter: &dyn Fn(&str) -> bool,
-) -> Result<Option<EligibleModel>, RepoError> {
-    if policy == FailoverPolicy::None {
-        return Ok(None);
-    }
-    let failed: Vec<(String, String)> = conn
-        .prepare(
-            "SELECT provider_id, model_id FROM agent_runs
-             WHERE agent_id = ?1 AND end_reason IN ('QUOTA_EXHAUSTED','AUTH_ERROR')",
-        )?
-        .query_map([agent.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    let failed_provider = |p: &str| p == current_provider || failed.iter().any(|(fp, _)| fp == p);
-    let failed_model = |m: &str| m == current_model || failed.iter().any(|(_, fm)| fm == m);
-    let first_model =
-        |provider: &str, skip: &dyn Fn(&str) -> bool| -> Result<Option<EligibleModel>, RepoError> {
-            Ok(models_of(conn, provider)?
-                .into_iter()
-                .find(|m| !skip(&m.id))
-                .map(|m| EligibleModel {
-                    model_id: m.id,
-                    provider_id: m.provider_id,
-                    cli_model_id: m.cli_model_id,
-                }))
-        };
-    let ready = ready_providers(conn)?;
-    if policy == FailoverPolicy::Any {
-        for p in ready
-            .iter()
-            .filter(|p| !failed_provider(p) && has_adapter(p))
-        {
-            if let Some(m) = first_model(p, &|_| false)? {
-                return Ok(Some(m));
-            }
-        }
-    }
-    if auth_failure
-        || !ready.iter().any(|p| p == current_provider)
-        || !has_adapter(current_provider)
-    {
-        return Ok(None);
-    }
-    first_model(current_provider, &failed_model)
 }
 
 // --- conversación y tool calls ----------------------------------------------

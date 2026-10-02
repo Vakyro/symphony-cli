@@ -179,6 +179,10 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
         Ok(config) => {
             bus.set_health_config(crate::health::HealthConfig::from_config(&config));
+            // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
+            if config.routing.default_profile.starts_with('@') {
+                runtime.set_default_profile(&config.routing.default_profile);
+            }
             runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
         }
         Err(e) => {
@@ -357,7 +361,23 @@ async fn dispatch(req: Request, state: &State) -> Response {
         }),
         "agent.history" => agent_view(req, state, crate::views::history),
         "models.list" => read_view(req, state, |c| {
-            crate::views::models(c).map(|v| json!({ "models": v }))
+            crate::views::models(c, now_ms()).map(|v| json!({ "models": v }))
+        }),
+        "profiles.list" => read_view(req, state, |c| {
+            let rows = crate::routing::list_profiles(c).map_err(rusqlite::Error::from)?;
+            Ok(
+                json!({ "profiles": rows.into_iter().map(|(id, description, weights)| json!({
+                "id": id,
+                "description": description,
+                "weights": serde_json::from_str::<Value>(&weights).unwrap_or(Value::Null),
+            })).collect::<Vec<_>>() }),
+            )
+        }),
+        "route.explain" => agent_view(req, state, |c, agent| {
+            let id = agent.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            crate::routing::explain(c, id, 5)
+                .map(|d| json!({ "agent_id": agent, "decisions": d }))
+                .map_err(rusqlite::Error::from)
         }),
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
@@ -649,11 +669,25 @@ async fn agent_switch(req: Request, state: &State) -> Response {
         Ok(id) => id,
         Err(e) => return Response::error(req.id, "agent_not_found", e),
     };
+    let message = req.params.get("message").and_then(Value::as_str);
+    // Por profile (FLOW §8.3): el router elige el modelo.
+    if let Some(profile) = req.params.get("profile").and_then(Value::as_str) {
+        return match state
+            .runtime
+            .switch_to_profile(agent_id, profile, message)
+            .await
+        {
+            Ok((run_id, model)) => Response::ok(
+                req.id,
+                json!({ "ok": true, "run_id": run_id.to_string(), "model": model, "profile": profile }),
+            ),
+            Err(e) => Response::error(req.id, "agent_error", e.0),
+        };
+    }
     let model = match req.params.get("model").and_then(Value::as_str) {
         Some(m) => m,
-        None => return Response::error(req.id, "invalid_params", "falta `model`"),
+        None => return Response::error(req.id, "invalid_params", "falta `model` o `profile`"),
     };
-    let message = req.params.get("message").and_then(Value::as_str);
     match state
         .runtime
         .switch_with_message(agent_id, model, message)

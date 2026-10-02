@@ -130,6 +130,8 @@ pub async fn save(
                     repo::upsert_model(tx, m, now)?;
                 }
             }
+            // Ventana, velocidad y puntajes iniciales por profile de los modelos nuevos.
+            crate::routing::bootstrap(tx)?;
             Ok(())
         }))
         .await

@@ -44,12 +44,28 @@
 - **Cómo se verificó:** `cargo xtask check` → 338 passed. Tests de la máquina (`Estimate` nunca agota ni pisa `KNOWN`, ahora dentro de las propiedades), L2 `a_token_budget_in_the_config_gives_an_estimated_quota_never_a_percentage`, snapshots de la TUI (cuota conocida con %, estimada sin %, desconocida; límite temporal con «reintenta en 45 s»), CLI `usage` y `providers`.
 - **Pendiente / notas:** la estimación suma tokens de entrada + salida de los runs en la ventana (las ventanas reales de cada plan son más finas); por eso solo se activa si el usuario da un presupuesto.
 
+### P10.S4 · Router determinista — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-02
+- **Qué se hizo:** crate `symphony-router` (puro: sin E/S ni LLM). Filtro de disponibilidad con los ocho motivos de la DB (`DISABLED`, `OFFLINE`, `AUTH`, `EXHAUSTED`, `COOLDOWN`, `CAPABILITY`, `CONTEXT`, `RESERVE`) y puntaje = suma de ocho factores ponderados por el profile (`fit`, `context`, `health`, `quota`, `scarcity`, `failures`, `load`, `speed`). Reserva: un profile automático nunca gasta una cuota `KNOWN` dentro de la reserva (ni una estimada ya marcada `QUOTA_LOW`); un `QUOTA_LOW` sin cifra (aviso del proveedor) no descarta, solo penaliza; una elección manual sí puede gastarla. Explicación generada desde los factores (formato de FLOW §8.4, en español). Desempate por id: la decisión no depende del orden de entrada.
+- **Archivos clave:** `crates/router/src/{lib,tests}.rs`, `crates/router/benches/router.rs`
+- **Cómo se verificó:** 13 tests, 4 proptest (un modelo no elegible nunca gana y el elegido tiene el máximo puntaje; independiente del orden; un profile automático nunca gasta una reserva informada; la explicación siempre nombra al elegido), el ejemplo de FLOW §8.4 como test dorado. **Benchmark** (`cargo bench -p symphony-router`): 5 candidatos ≈ 8 µs, 20 candidatos ≈ 23 µs.
+- **Pendiente / notas:** los puntajes iniciales por modelo (`routing::traits`) son una heurística por familia (Opus/Sol/Pro altos en razonamiento, Haiku/Luna/Flash en velocidad y conservación): editables en `profile_models`, no verdades.
+
+### P10.S5 · Failover completo y Model Picker — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-02
+- **Qué se hizo:** el router reemplaza a `repo::next_executor` (eliminada). **Spawn por profile** (`Execution::Profile`, antes «llega en P10»): el agente guarda solo el profile y el modelo vive en el run (AGENT ≠ MODEL). **Failover:** primero se escribe el fallo y la salud, luego el router elige con la política (`NONE` no cambia; `SAME_PROVIDER` solo ese proveedor; `ANY` todos) y se excluye lo que el agente ya agotó o donde le rechazaron el login; sin reemplazo, `WAITING_PROVIDER` y recovery. **Cada decisión se guarda** (`routing_decisions` + `routing_candidates` con motivo y factores), atada al run; el spawn exacto y el cambio manual también dejan su decisión («Modelo exacto elegido por el usuario… no se sustituye en silencio»). Cambio por profile (`agent.switch {profile}`). IPC: `profiles.list`, `route.explain`, `models.list` con salud. TUI: Model Picker con PROFILES y MODELOS EXACTOS con su estado de salud, Nuevo agente con tres modos (exacto / profile / decidir después), vista **Explain Route** (tecla `?` o `:explain-route`). CLI: `symphony explain-route <agente>` y `symphony switch --profile`.
+- **Archivos clave:** `crates/daemon/src/{routing,executor,runtime,server}.rs`, `crates/tui/src/{app,ui}.rs`, `crates/cli/src/main.rs`
+- **Cómo se verificó:** `cargo xtask check` → 365 passed. **Journey C con cada política** sobre `fake-agent`: `failover_any_goes_to_the_best_other_provider_and_records_why`, `failover_none_leaves_the_agent_waiting…`, `failover_same_provider_does_not_leave_a_provider_that_is_exhausted`; reserva (`an_automatic_failover_never_spends_the_reserve_of_another_provider`); spawn por profile que salta un proveedor agotado; un profile sin candidatos explica por qué y conserva la tarea; un modelo exacto se obedece aun con cuota baja; el cambio manual y el cambio por profile quedan registrados; 5 tests nuevos de la TUI con snapshots (picker, Explain Route) y el flujo de creación por profile.
+- **Pendiente / notas:** el failover usa el profile del agente o `routing.default_profile`; `needed_context` (tamaño del handoff) aún no se pasa al router; «checkpoint obsoleto» (FLOW §13.3) no se avisa todavía.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
 | Migración 001 → 002 sobre datos reales sin pérdida | test + copia de la base real | ✅ |
 | La salud sigue a los runs: 429 → `RATE_LIMITED`, cuota → `EXHAUSTED` con reinicio, cuota conocida → `QUOTA_LOW` | L2 en el daemon + proptest | ✅ |
 | Uso informado frente a estimado | L2 | ✅ |
+| El router decide en ~8–23 µs y un modelo no elegible nunca gana | proptest + bench | ✅ |
+| Journey C con `NONE`, `SAME_PROVIDER` y `ANY`; reserva respetada; spawn por profile | L2 en el daemon | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |

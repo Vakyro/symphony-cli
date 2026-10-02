@@ -2575,6 +2575,7 @@ dependencies = [
  "symphony-object-store",
  "symphony-process",
  "symphony-protocol",
+ "symphony-router",
  "symphony-store",
  "symphony-testkit",
  "tempfile",

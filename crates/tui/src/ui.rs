@@ -9,8 +9,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use serde_json::Value;
 
 use crate::app::{
-    AgentView, App, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab, ago,
-    state_phrase,
+    AgentView, App, Exec, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab,
+    ago, state_phrase,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -77,6 +77,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::NewAgent => "· Nuevo agente",
         Screen::ModelPicker => "· Elegir ejecución",
         Screen::Agent => "· Agente",
+        Screen::ExplainRoute => "· Por qué este modelo",
         Screen::Providers => "· Proveedores",
         Screen::Recovery => "· Recovery Center",
     };
@@ -100,6 +101,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::NewAgent => new_agent(app, f, body),
         Screen::ModelPicker => model_picker(app, f, body),
         Screen::Agent => agent(app, f, body),
+        Screen::ExplainRoute => explain_route(app, f, body),
         Screen::Recovery => recovery(app, f, body),
     }
 
@@ -125,10 +127,11 @@ fn hints(app: &App) -> &'static str {
         }
         Screen::NewAgent => "↑↓ campo · ←→ opción · Enter siguiente/crear · Esc cancelar",
         Screen::ModelPicker => "↑↓ elegir · Enter usar · Esc volver",
+        Screen::ExplainRoute => "Esc volver al agente",
         Screen::Agent => match app.agent.as_ref() {
             Some(a) if a.typing => "Enter enviar · Esc cancelar",
             _ => {
-                "←→ pestaña · m mensaje · p pausa · s modelo · o CLI · e exportar · d diff · x detener · Esc"
+                "←→ pestaña · m mensaje · p pausa · s modelo · ? por qué · o CLI · e exportar · d diff · x detener · Esc"
             }
         },
         Screen::Recovery => {
@@ -510,6 +513,90 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
         "Proveedores"
     };
     paragraph(f, area, title, lines);
+}
+
+// --- 14 Explain Route -----------------------------------------------------------
+
+fn explain_route(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let decisions = app
+        .explain
+        .as_ref()
+        .and_then(|e| e["decisions"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    if app.explain.is_none() {
+        lines.push(Line::from(dim("Cargando…")));
+    } else if decisions.is_empty() {
+        lines.push(Line::raw(
+            "Este agente todavía no tiene decisiones de routing registradas.",
+        ));
+    }
+    if let Some(d) = decisions.first() {
+        let trigger = match d["trigger"].as_str().unwrap_or("") {
+            "SPAWN" => "al crear el agente",
+            "FAILOVER" => "en un failover",
+            "SWITCH" => "en un cambio de modelo",
+            _ => "por una sugerencia",
+        };
+        lines.push(Line::from(vec![
+            bold("Decisión más reciente: "),
+            Span::raw(format!(
+                "{trigger} · {} · hace {}",
+                d["profile"]
+                    .as_str()
+                    .map_or("modelo exacto".into(), str::to_string),
+                ago(app.now_ms, d["decided_at"].as_i64().unwrap_or(0))
+            )),
+        ]));
+        lines.push(Line::raw(""));
+        for l in d["explanation"].as_str().unwrap_or("").lines() {
+            lines.push(Line::raw(l.to_string()));
+        }
+        lines.push(Line::raw(""));
+        lines.push(section("CANDIDATOS"));
+        lines.push(Line::from(dim(format!(
+            "  {:<28} {:<10} {:>7}  MOTIVO",
+            "MODELO", "ESTADO", "PUNTAJE"
+        ))));
+        let selected = d["selected"].as_str().unwrap_or("");
+        for c in d["candidates"].as_array().cloned().unwrap_or_default() {
+            let id = text(&c["model_id"]);
+            let eligible = c["eligible"].as_bool().unwrap_or(false);
+            lines.push(Line::from(vec![
+                Span::raw(if id == selected { "▸ " } else { "  " }),
+                Span::raw(format!("{id:<28} ")),
+                colored(
+                    format!("{:<10} ", if eligible { "elegible" } else { "descartado" }),
+                    if eligible {
+                        Color::Green
+                    } else {
+                        Color::DarkGray
+                    },
+                ),
+                Span::raw(format!(
+                    "{:>7}  ",
+                    c["score"]
+                        .as_f64()
+                        .map_or("—".into(), |s| format!("{s:.2}"))
+                )),
+                dim(c["reject_reason"].as_str().unwrap_or("").to_string()),
+            ]));
+        }
+        if decisions.len() > 1 {
+            lines.push(Line::raw(""));
+            lines.push(section("DECISIONES ANTERIORES"));
+            for p in &decisions[1..] {
+                lines.push(Line::from(dim(format!(
+                    "  hace {} · {} → {}",
+                    ago(app.now_ms, p["decided_at"].as_i64().unwrap_or(0)),
+                    text(&p["trigger"]),
+                    p["selected"].as_str().unwrap_or("ninguno")
+                ))));
+            }
+        }
+    }
+    paragraph(f, area, "Explain Route", lines);
 }
 
 // --- 00 Chat ---------------------------------------------------------------
@@ -912,22 +999,28 @@ fn home(app: &App, f: &mut Frame, area: Rect) {
 
 fn new_agent(app: &App, f: &mut Frame, area: Rect) {
     let na = &app.new_agent;
-    let exec = if na.exact {
-        let model = na
-            .model
-            .clone()
-            .unwrap_or_else(|| "Enter para elegir".into());
-        Line::from(vec![
-            colored("(•) Modelo exacto: ", ACCENT),
-            bold(model),
-            dim("   ( ) Decidir después"),
-        ])
-    } else {
-        Line::from(vec![
-            dim("( ) Modelo exacto   "),
-            colored("(•) Decidir después", ACCENT),
-        ])
+    let pick = |on: bool, label: String| {
+        if on {
+            colored(format!("(•) {label}"), ACCENT)
+        } else {
+            dim(format!("( ) {label}"))
+        }
     };
+    let model = na
+        .model
+        .clone()
+        .unwrap_or_else(|| "Enter para elegir".into());
+    let profile = na
+        .profile
+        .clone()
+        .unwrap_or_else(|| "Enter para elegir".into());
+    let exec = Line::from(vec![
+        pick(na.exec == Exec::Exact, format!("Modelo exacto: {model}")),
+        Span::raw("   "),
+        pick(na.exec == Exec::Profile, format!("Profile: {profile}")),
+        Span::raw("   "),
+        pick(na.exec == Exec::Later, "Decidir después".into()),
+    ]);
     let lines = vec![
         field(
             "Tarea",
@@ -937,7 +1030,7 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
         Line::raw(""),
         field("Ejecución", exec, na.field == 1),
         Line::from(dim(
-            "                  Profiles (@code, @fast…) llegan en v0.5.",
+            "                  Un modelo exacto no se sustituye en silencio; un profile (@code, @fast…) deja elegir a Symphony.",
         )),
         field(
             "Failover",
@@ -963,34 +1056,43 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
     paragraph(f, area, "Nuevo agente", lines);
 }
 
+/// FLOW §8.1: el estado que se ve junto a cada modelo.
+fn model_status(m: &Value) -> (String, Color) {
+    if !m["available"].as_bool().unwrap_or(false) {
+        return (text(&m["setup_state"]), Color::Yellow);
+    }
+    match m["health"].as_str().unwrap_or("UNKNOWN") {
+        "HEALTHY" | "UNKNOWN" | "PROBING" => ("DISPONIBLE".into(), Color::Green),
+        other => (other.to_string(), health_color(other)),
+    }
+}
+
 fn model_picker(app: &App, f: &mut Frame, area: Rect) {
-    let mut lines = vec![
-        section("PROFILES"),
-        Line::from(dim(
-            "  @code @debug @fast @reasoning @docs @conserve — llegan en v0.5",
-        )),
-        Line::raw(""),
-        section("MODELOS EXACTOS"),
-    ];
-    for (i, m) in app.models.iter().enumerate() {
-        let available = m["available"].as_bool().unwrap_or(false);
-        let status = if available {
-            "DISPONIBLE".to_string()
-        } else {
-            text(&m["setup_state"])
-        };
+    let mut lines = vec![section(
+        "PROFILES (Symphony elige entre los modelos utilizables)",
+    )];
+    for (i, p) in app.profiles.iter().enumerate() {
         lines.push(Line::from(vec![
             marker(i == app.selected),
+            bold(format!("{:<12} ", text(&p["id"]))),
+            dim(text(&p["description"])),
+        ]));
+    }
+    if app.profiles.is_empty() {
+        lines.push(Line::from(dim("  Cargando profiles…")));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section(
+        "MODELOS EXACTOS (se obedecen; no se sustituyen en silencio)",
+    ));
+    let offset = app.profiles.len();
+    for (i, m) in app.models.iter().enumerate() {
+        let (status, color) = model_status(m);
+        lines.push(Line::from(vec![
+            marker(offset + i == app.selected),
             Span::raw(format!("{:<12} / ", text(&m["provider"]))),
             Span::raw(format!("{:<20} ", text(&m["display_name"]))),
-            colored(
-                status,
-                if available {
-                    Color::Green
-                } else {
-                    Color::Yellow
-                },
-            ),
+            colored(status, color),
         ]));
     }
     if app.models.is_empty() {

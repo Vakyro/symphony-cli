@@ -105,6 +105,14 @@ enum Cmd {
         model: Option<String>,
         /// Modelo posicional si no se usa `--model`.
         target_model: Option<String>,
+        /// En vez de un modelo, un profile (`@code`, `@fast`…): Symphony elige entre los utilizables.
+        #[arg(short, long, conflicts_with_all = ["model", "target_model"])]
+        profile: Option<String>,
+    },
+    /// Por qué se eligió el modelo de un agente: decisiones de routing y candidatos evaluados.
+    ExplainRoute {
+        /// ID o número del agente.
+        agent: String,
     },
     /// Muestra el git diff del worktree del agente contra su commit base.
     Diff {
@@ -302,22 +310,29 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
             agent,
             model,
             target_model,
+            profile,
         }) => {
-            let target = model.or(target_model).ok_or_else(|| {
-                miette::miette!("falta especificar el modelo (ej. `claude/sonnet`)")
-            })?;
             let mut conn = client::connect_or_start(home).await?;
-            let res = client::call(
-                &mut conn,
-                "agent.switch",
-                json!({ "agent": agent, "model": target }),
-            )
-            .await?;
+            let (params, target) = match (&profile, model.or(target_model)) {
+                (Some(p), _) => (json!({ "agent": agent, "profile": p }), p.clone()),
+                (None, Some(m)) => (json!({ "agent": agent, "model": m }), m),
+                (None, None) => {
+                    return Err(miette::miette!(
+                        "falta especificar el modelo (ej. `claude/sonnet`) o un `--profile`"
+                    ));
+                }
+            };
+            let res = client::call(&mut conn, "agent.switch", params).await?;
             println!(
                 "agente {agent} cambiado a {} (run {})",
                 res["model"].as_str().unwrap_or(&target),
                 res["run_id"].as_str().unwrap_or("?")
             );
+        }
+        Some(Cmd::ExplainRoute { agent }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            let res = client::call(&mut conn, "route.explain", json!({ "agent": agent })).await?;
+            print_route(&res);
         }
         Some(Cmd::Diff { agent }) => {
             let mut conn = client::connect_or_start(home).await?;
@@ -568,6 +583,44 @@ fn print_providers(v: &Value) {
             p["models"],
             text("cli_path")
         );
+    }
+}
+
+fn print_route(v: &Value) {
+    let empty = Vec::new();
+    let decisions = v["decisions"].as_array().unwrap_or(&empty);
+    let Some(d) = decisions.first() else {
+        println!("Este agente todavía no tiene decisiones de routing registradas.");
+        return;
+    };
+    println!(
+        "Decisión más reciente: {} · {}\n",
+        d["trigger"].as_str().unwrap_or("?"),
+        d["profile"].as_str().unwrap_or("modelo exacto")
+    );
+    println!("{}\n", d["explanation"].as_str().unwrap_or(""));
+    println!("{:<30} {:<11} {:>7}  MOTIVO", "MODELO", "ESTADO", "PUNTAJE");
+    for c in d["candidates"].as_array().unwrap_or(&empty) {
+        let eligible = c["eligible"].as_bool().unwrap_or(false);
+        println!(
+            "{:<30} {:<11} {:>7}  {}",
+            c["model_id"].as_str().unwrap_or("?"),
+            if eligible { "elegible" } else { "descartado" },
+            c["score"]
+                .as_f64()
+                .map_or("—".into(), |s| format!("{s:.2}")),
+            c["reject_reason"].as_str().unwrap_or("")
+        );
+    }
+    if decisions.len() > 1 {
+        println!("\nDecisiones anteriores:");
+        for p in &decisions[1..] {
+            println!(
+                "  {} → {}",
+                p["trigger"].as_str().unwrap_or("?"),
+                p["selected"].as_str().unwrap_or("ninguno")
+            );
+        }
     }
 }
 

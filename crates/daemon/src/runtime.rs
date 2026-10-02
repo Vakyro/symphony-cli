@@ -72,8 +72,16 @@ pub enum CreateError {
         #[source]
         source: GitError,
     },
-    #[error("los profiles llegan con el routing (P10); usa un modelo exacto o «decidir después»")]
-    ProfilesNotSupported { task: String },
+    #[error(
+        "el profile `{profile}` no existe. Disponibles: @code, @debug, @fast, @reasoning, @docs, @review, @conserve"
+    )]
+    UnknownProfile { profile: String, task: String },
+    #[error("ningún modelo es elegible para {profile} ahora.\n{explanation}")]
+    NoEligibleModel {
+        profile: String,
+        explanation: String,
+        task: String,
+    },
     #[error(
         "no hay ningún proveedor listo; configura uno en Provider Setup (la tarea no se perdió)"
     )]
@@ -100,7 +108,8 @@ impl CreateError {
         match self {
             Self::EmptyTask => "empty_task",
             Self::NotARepo { .. } => "not_a_repo",
-            Self::ProfilesNotSupported { .. } => "profiles_not_supported",
+            Self::UnknownProfile { .. } => "unknown_profile",
+            Self::NoEligibleModel { .. } => "no_eligible_model",
             Self::NoEligibleProvider { .. } => "no_eligible_provider",
             Self::ExactModelUnavailable { .. } => "exact_model_unavailable",
             Self::Workspace { .. } => "workspace_failed",
@@ -148,6 +157,8 @@ pub struct Inner {
     pub(crate) activity: Mutex<HashMap<RunId, Instant>>,
     /// Umbral de tokens para rotar el proveedor del chat (P07.5.S6). 0 = apagado.
     pub(crate) chat_switch_tokens: AtomicU64,
+    /// Profile con el que se evalúa un failover cuando el agente no tiene uno (`routing.default_profile`).
+    pub(crate) default_profile: Mutex<String>,
 }
 
 /// Persistencia del latido por defecto (producción).
@@ -216,12 +227,38 @@ impl Runtime {
                 stale_after: watchdog.stale_after,
                 activity: Mutex::default(),
                 chat_switch_tokens: AtomicU64::new(0),
+                default_profile: Mutex::new("@code".into()),
             }),
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(rt.clone().watchdog());
         }
         rt
+    }
+
+    /// El profile por defecto (`routing.default_profile` de `config.toml`).
+    pub fn set_default_profile(&self, profile: &str) {
+        if let Ok(mut p) = self.default_profile.lock() {
+            *p = profile.to_string();
+        }
+    }
+
+    pub(crate) fn default_profile(&self) -> String {
+        self.default_profile
+            .lock()
+            .map(|p| p.clone())
+            .unwrap_or_else(|_| "@code".into())
+    }
+
+    /// Evalúa a todos los modelos con el router (sin guardar nada).
+    pub(crate) fn evaluate(
+        &self,
+        conn: &rusqlite::Connection,
+        choose: &crate::routing::Choose,
+    ) -> Result<symphony_router::Decision, repo::RepoError> {
+        let cfg = self.bus.health_config();
+        let has_adapter = |p: &str| self.adapter(p).is_some();
+        crate::routing::choose(conn, &has_adapter, &cfg, now_ms(), choose)
     }
 
     /// Activa (`Some`) o apaga (`None`) el cambio de proveedor del chat por uso de contexto.
@@ -325,9 +362,49 @@ impl Runtime {
         let task_text = title.clone();
 
         // 1. Executor elegible (antes de tocar nada).
+        let mut pending: Option<crate::routing::Pending> = None;
         let executor = match &req.execution {
-            Execution::Profile(_) => {
-                return Err(CreateError::ProfilesNotSupported { task: task_text });
+            Execution::Profile(profile) => {
+                // FLOW §8.3: filtrar a los no utilizables, comparar, elegir y poder explicarlo.
+                let known = self.read(|c| routing_profile_exists(c, profile))?;
+                if !known {
+                    return Err(CreateError::UnknownProfile {
+                        profile: profile.clone(),
+                        task: task_text,
+                    });
+                }
+                let choose = crate::routing::Choose {
+                    profile: profile.clone(),
+                    ..Default::default()
+                };
+                let decision = self.read(|c| self.evaluate(c, &choose))?;
+                let Some(model_id) = decision.selected.clone() else {
+                    return Err(CreateError::NoEligibleModel {
+                        profile: profile.clone(),
+                        explanation: decision.explanation,
+                        task: task_text,
+                    });
+                };
+                let chosen =
+                    self.read(|c| repo::eligible_model(c, &model_id))?
+                        .map_err(|reason| CreateError::ExactModelUnavailable {
+                            model: model_id.clone(),
+                            reason,
+                            task: task_text.clone(),
+                        })?;
+                let adapter = self.adapter(&chosen.provider_id).ok_or_else(|| {
+                    CreateError::NoEligibleProvider {
+                        task: task_text.clone(),
+                    }
+                })?;
+                pending = Some(crate::routing::Pending {
+                    explanation: decision.explanation.clone(),
+                    selected: Some(model_id),
+                    profile: Some(profile.clone()),
+                    trigger: symphony_core::RoutingTrigger::Spawn,
+                    decision,
+                });
+                Some((chosen, adapter))
             }
             Execution::Exact(model) => {
                 let found = self.read(|c| repo::eligible_model(c, model))?;
@@ -344,6 +421,25 @@ impl Runtime {
                         reason,
                         task: task_text.clone(),
                     })?;
+                // El modelo exacto se obedece y no se sustituye; igual se deja constancia de cómo
+                // estaban los demás para que `/explain-route` lo cuente.
+                let choose = crate::routing::Choose {
+                    profile: self.default_profile(),
+                    allow_reserve: true,
+                    ..Default::default()
+                };
+                if let Ok(decision) = self.read(|c| self.evaluate(c, &choose)) {
+                    pending = Some(crate::routing::Pending {
+                        explanation: crate::routing::exact_explanation(
+                            model,
+                            &decision.explanation,
+                        ),
+                        selected: Some(model.clone()),
+                        profile: None,
+                        trigger: symphony_core::RoutingTrigger::Spawn,
+                        decision,
+                    });
+                }
                 Some(eligible)
             }
             Execution::DecideLater => {
@@ -491,6 +587,10 @@ impl Runtime {
             Some(d) if !d.trim().is_empty() => format!("{title}\n\n{}", d.trim()),
             _ => title.clone(),
         };
+        let requested_profile = match &req.execution {
+            Execution::Profile(p) => Some(p.clone()),
+            _ => None,
+        };
         let execution_mode = match req.execution {
             Execution::Exact(_) => ExecutionMode::Exact,
             Execution::Profile(_) => ExecutionMode::Profile,
@@ -536,8 +636,12 @@ impl Runtime {
                 state,
                 state_reason: None,
                 execution_mode,
-                requested_model_id: executor.as_ref().map(|(m, _)| m.model_id.clone()),
-                requested_profile_id: None,
+                // Un profile deja el modelo en el run, no en el agente (AGENT ≠ MODEL).
+                requested_model_id: executor
+                    .as_ref()
+                    .filter(|_| requested_profile.is_none())
+                    .map(|(m, _)| m.model_id.clone()),
+                requested_profile_id: requested_profile,
                 failover_policy: req.failover,
                 context_mode: req.context_mode,
                 priority: req.priority,
@@ -574,6 +678,7 @@ impl Runtime {
                     build_ms: 0,
                 }
             }),
+            decision: pending,
             now,
         };
         if let Err(e) = self.writer.write(Box::new(move |t| tx_data.apply(t))).await {
@@ -672,6 +777,8 @@ struct TxData {
     run: Option<(RunId, (String, String))>,
     /// Handoff del primer spawn: el prompt es el objetivo, sin checkpoint previo.
     handoff: Option<repo::NewHandoff>,
+    /// Cómo se eligió el modelo del primer run.
+    decision: Option<crate::routing::Pending>,
     now: i64,
 }
 
@@ -689,6 +796,9 @@ impl TxData {
         repo::insert_agent(t, &self.agent, now)?;
         if let Some((run_id, (provider, model))) = &self.run {
             repo::open_run(t, *run_id, self.agent.id, provider, model, now)?;
+            if let Some(d) = &self.decision {
+                d.save(t, self.agent.id, Some(*run_id), now)?;
+            }
         }
         if let Some(h) = &self.handoff {
             repo::insert_handoff(t, h, now)?;
@@ -696,6 +806,14 @@ impl TxData {
         repo::insert_checkpoint(t, &self.checkpoint, now)?;
         Ok(())
     }
+}
+
+/// ¿Existe el profile? (la tabla `profiles` la siembra la migración 002).
+fn routing_profile_exists(
+    conn: &rusqlite::Connection,
+    profile: &str,
+) -> Result<bool, repo::RepoError> {
+    Ok(crate::routing::profile_weights(conn, profile)?.is_some())
 }
 
 pub(crate) fn now_ms() -> i64 {

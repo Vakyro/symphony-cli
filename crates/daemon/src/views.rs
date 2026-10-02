@@ -6,24 +6,40 @@ use serde_json::{Value, json};
 
 /// Modelos exactos para el Model Picker (vista 13). `available` = proveedor
 /// `READY` y habilitado, y modelo habilitado.
-pub fn models(conn: &Connection) -> rusqlite::Result<Value> {
+/// Modelos para el Model Picker (FLOW §8.1), con la salud vigente de su proveedor.
+pub fn models(conn: &Connection, now: i64) -> rusqlite::Result<Value> {
     let mut stmt = conn.prepare(
         "SELECT m.id, m.display_name, p.id, p.display_name, p.setup_state,
                 p.enabled = 1 AND m.enabled = 1 AND p.setup_state = 'READY'
          FROM models m JOIN providers p ON p.id = m.provider_id
          ORDER BY p.display_name, m.display_name",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(json!({
-            "id": r.get::<_, String>(0)?,
-            "display_name": r.get::<_, String>(1)?,
-            "provider_id": r.get::<_, String>(2)?,
-            "provider": r.get::<_, String>(3)?,
-            "setup_state": r.get::<_, String>(4)?,
-            "available": r.get::<_, bool>(5)?,
-        }))
-    })?;
-    Ok(Value::Array(rows.collect::<Result<_, _>>()?))
+    let rows: Vec<(String, Value)> = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(2)?,
+                json!({
+                    "id": r.get::<_, String>(0)?,
+                    "display_name": r.get::<_, String>(1)?,
+                    "provider_id": r.get::<_, String>(2)?,
+                    "provider": r.get::<_, String>(3)?,
+                    "setup_state": r.get::<_, String>(4)?,
+                    "available": r.get::<_, bool>(5)?,
+                }),
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (provider, mut m) in rows {
+        // Disponible ≠ sano: un modelo con la cuota baja se puede elegir a mano, pero se ve.
+        m["health"] = json!(
+            symphony_store::health::get_health(conn, &provider, None)
+                .map_err(rusqlite::Error::from)?
+                .map_or("UNKNOWN", |h| h.effective_state(now).as_str())
+        );
+        out.push(m);
+    }
+    Ok(Value::Array(out))
 }
 
 /// Timeline de la vista Activity (08): tool calls y checkpoints, lo más nuevo primero.
