@@ -59,6 +59,10 @@ pub enum HealthEvent {
         reset_at: Option<i64>,
         reserve: f64,
     },
+    /// Estimación propia (tokens consumidos frente al presupuesto de la config) para un
+    /// proveedor cuyo CLI no informa su cuota. Nunca es un porcentaje (el CHECK de la base lo
+    /// impide), nunca agota (no hay certeza) y nunca pisa una cuota `KNOWN`.
+    Estimate { used_fraction: f64, reserve: f64 },
     /// El usuario volvió a iniciar sesión o a detectar el CLI: se olvida lo anterior.
     Reset,
 }
@@ -163,6 +167,37 @@ impl Health {
                             next.retry_after_at = retry(DEGRADED_COOLDOWN_MS);
                         }
                     }
+                }
+            }
+            HealthEvent::Estimate {
+                used_fraction,
+                reserve,
+            } => {
+                // Lo que el CLI informó vale más que cualquier estimación.
+                if self.certainty == QuotaCertainty::Known {
+                    return self.clone();
+                }
+                let used = if used_fraction.is_finite() {
+                    *used_fraction
+                } else {
+                    0.0
+                };
+                next.certainty = QuotaCertainty::Estimated;
+                next.remaining = None;
+                let low = (1.0 - used) <= reserve.clamp(0.0, 1.0);
+                let in_cooldown = !matches!(
+                    self.state,
+                    ProviderState::Healthy
+                        | ProviderState::QuotaLow
+                        | ProviderState::Unknown
+                        | ProviderState::Probing
+                );
+                if low && !in_cooldown {
+                    next.state = ProviderState::QuotaLow;
+                    next.evidence = Some(format!("estimated {:.0}% of the budget", used * 100.0));
+                } else if !low && self.state == ProviderState::QuotaLow {
+                    next.state = ProviderState::Healthy;
+                    next.evidence = None;
                 }
             }
             HealthEvent::Quota {
@@ -415,6 +450,54 @@ mod tests {
     }
 
     #[test]
+    fn an_estimate_is_labelled_estimated_never_a_percentage_and_never_exhausts() {
+        let e = |used: f64| HealthEvent::Estimate {
+            used_fraction: used,
+            reserve: 0.2,
+        };
+        let h = Health::unknown(NOW).apply(&e(0.5), NOW);
+        assert_eq!(h.certainty, QuotaCertainty::Estimated);
+        assert_eq!(h.remaining, None);
+        assert_eq!(h.state, ProviderState::Unknown);
+        let low = h.apply(&e(0.9), NOW + 1);
+        assert_eq!(low.state, ProviderState::QuotaLow);
+        assert_eq!(low.remaining, None);
+        // Aunque la estimación pase del 100 %, no hay certeza para declararlo agotado.
+        assert_eq!(h.apply(&e(3.0), NOW + 2).state, ProviderState::QuotaLow);
+        // Y vuelve a sano si el consumo estimado baja.
+        assert_eq!(low.apply(&e(0.1), NOW + 3).state, ProviderState::Healthy);
+    }
+
+    #[test]
+    fn an_estimate_never_overrides_a_known_quota_or_a_cooldown() {
+        let known = Health::unknown(NOW).apply(
+            &HealthEvent::Quota {
+                used_fraction: 0.1,
+                reserve: 0.2,
+                reset_at: None,
+            },
+            NOW,
+        );
+        let after = known.apply(
+            &HealthEvent::Estimate {
+                used_fraction: 0.99,
+                reserve: 0.2,
+            },
+            NOW + 1,
+        );
+        assert_eq!(after, known, "lo que informó el CLI manda");
+        let limited = Health::unknown(NOW).apply(&fail(FailureType::TempRateLimit, 0), NOW);
+        let est = limited.apply(
+            &HealthEvent::Estimate {
+                used_fraction: 0.99,
+                reserve: 0.2,
+            },
+            NOW + 1,
+        );
+        assert_eq!(est.state, ProviderState::RateLimited);
+    }
+
+    #[test]
     fn success_after_exhaustion_forgets_the_stale_quota() {
         let h = Health {
             certainty: QuotaCertainty::Known,
@@ -438,6 +521,12 @@ mod tests {
         prop_oneof![
             Just(HealthEvent::Success),
             Just(HealthEvent::Reset),
+            (-1.0f64..4.0, -1.0f64..2.0).prop_map(|(used_fraction, reserve)| {
+                HealthEvent::Estimate {
+                    used_fraction,
+                    reserve,
+                }
+            }),
             (
                 arb_failure(),
                 proptest::option::of(-10_000_000i64..10_000_000),

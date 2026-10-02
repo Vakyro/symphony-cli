@@ -37,6 +37,13 @@
 - **Cómo se verificó:** 14 tests de la máquina (4 proptest: un 429 nunca produce `EXHAUSTED`, el porcentaje solo con certeza `KNOWN`, cooldowns siempre en el futuro y se vuelven `PROBING`, `AUTH_ERROR` no caduca); 6 de store; 4 L2 en el daemon (`a_429_rate_limits…`, `exhausted_quota_marks…` con su hora de reinicio en ms, cuota conocida → `QUOTA_LOW` con 10 % real, uso `REPORTED` frente a `ESTIMATED`); 4 de propiedades de los parsers de los cinco adapters (nunca entran en pánico, mensajes redactados, un 429 nunca es cuota agotada, el `retry_after` se lee del texto). Sustituyen a los fuzz targets del PLAN (corren en CI sin nightly).
 - **Pendiente / notas:** los textos de cuota/auth de Kimi, Antigravity y Copilot siguen siendo sintéticos. Dos cambios de infraestructura de tests: `START_TIMEOUT` del cliente y de los tests de daemon de 10 s a 30 s (con cinco CLIs que detectar, `copilot --version` tarda ~2 s y bajo carga el daemon pasaba de 10 s), y `pinned_bin` copia una sola vez por versión con un archivo de bloqueo.
 
+### P10.S3 · Cuota y uso — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-02
+- **Qué se hizo:** `HealthEvent::Estimate` (cuota `ESTIMATED` a partir de un presupuesto opcional por proveedor: `[providers.limits.<id>] window_hours` + `window_tokens`): nunca es un porcentaje, nunca agota y nunca pisa una cuota `KNOWN`. `daemon::health::on_run_finished` registra el uso (estimado si el CLI no informó tokens) y refresca la estimación al terminar un run. `providers.list` devuelve por proveedor su salud vigente (estado, certeza, restante solo si `KNOWN`, evidencia, reintento/reinicio, reserva), agentes activos, modelos, último fallo y uso de 7 días; método nuevo `usage.get`. TUI: la pantalla de Proveedores muestra SALUD y CUOTA y un detalle con lo que pide FLOW §12.1; CLI: `symphony providers` con las dos columnas y `symphony usage [--days N]` (informado frente a estimado).
+- **Archivos clave:** `crates/core/src/health.rs`, `crates/daemon/src/{health,providers,server}.rs`, `crates/tui/src/ui.rs`, `crates/cli/src/main.rs`
+- **Cómo se verificó:** `cargo xtask check` → 338 passed. Tests de la máquina (`Estimate` nunca agota ni pisa `KNOWN`, ahora dentro de las propiedades), L2 `a_token_budget_in_the_config_gives_an_estimated_quota_never_a_percentage`, snapshots de la TUI (cuota conocida con %, estimada sin %, desconocida; límite temporal con «reintenta en 45 s»), CLI `usage` y `providers`.
+- **Pendiente / notas:** la estimación suma tokens de entrada + salida de los runs en la ventana (las ventanas reales de cada plan son más finas); por eso solo se activa si el usuario da un presupuesto.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

@@ -56,9 +56,25 @@ fn status(initialized: bool, recovery: i64) -> Value {
 fn providers() -> Value {
     json!({ "providers": [
         { "id": "anthropic", "display_name": "Claude", "setup_state": "READY", "cli_version": "2.1.0",
-          "cli_path": "/usr/bin/claude", "enabled": true, "models": 4 },
+          "cli_path": "/usr/bin/claude", "enabled": true, "models": 4,
+          "model_names": ["Claude Haiku", "Claude Opus", "Claude Sonnet"], "agents_active": 1,
+          "health": { "state": "QUOTA_LOW", "stored_state": "QUOTA_LOW", "certainty": "KNOWN", "remaining": 0.15,
+                      "evidence": "provider quota report", "retry_after_at": null, "reset_at": NOW + 7_200_000, "reserve": 0.2 },
+          "last_failure": null,
+          "usage_7d": { "reported_tokens": 1_234_567, "estimated_tokens": 0 } },
         { "id": "openai", "display_name": "Codex", "setup_state": "LOGIN_REQUIRED", "cli_version": "0.40.0",
-          "cli_path": "/usr/bin/codex", "enabled": true, "models": 0 },
+          "cli_path": "/usr/bin/codex", "enabled": true, "models": 0,
+          "model_names": [], "agents_active": 0,
+          "health": { "state": "UNKNOWN", "stored_state": "UNKNOWN", "certainty": "UNKNOWN", "remaining": null,
+                      "evidence": null, "retry_after_at": null, "reset_at": null, "reserve": 0.2 },
+          "last_failure": null, "usage_7d": { "reported_tokens": 0, "estimated_tokens": 0 } },
+        { "id": "github", "display_name": "Copilot", "setup_state": "READY", "cli_version": "1.0.60",
+          "cli_path": "/usr/bin/copilot", "enabled": true, "models": 1,
+          "model_names": ["Copilot (automático)"], "agents_active": 0,
+          "health": { "state": "RATE_LIMITED", "stored_state": "RATE_LIMITED", "certainty": "ESTIMATED", "remaining": null,
+                      "evidence": "TEMP_RATE_LIMIT x1", "retry_after_at": NOW + 45_000, "reset_at": null, "reserve": 0.2 },
+          "last_failure": { "type": "TEMP_RATE_LIMIT", "message": "429 Too Many Requests", "at": NOW - 180_000 },
+          "usage_7d": { "reported_tokens": 0, "estimated_tokens": 48_000 } },
     ]})
 }
 
@@ -345,6 +361,16 @@ fn view_22_providers() {
     let mut app = home_app();
     let calls = press(&mut app, KeyCode::Char('p'));
     assert_eq!(methods(&calls), ["providers.list"]);
+    insta::assert_snapshot!(draw(&app));
+}
+
+#[test]
+fn view_22_provider_detail_with_a_temporary_limit_and_estimated_quota() {
+    let mut app = home_app();
+    press(&mut app, KeyCode::Char('p'));
+    ok(&mut app, Req::Providers, providers());
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
     insta::assert_snapshot!(draw(&app));
 }
 

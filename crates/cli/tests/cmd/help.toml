@@ -9,6 +9,7 @@ Commands:
   status     Estado del daemon (lo arranca si no está vivo)
   daemon     Controla el daemon `symphonyd`
   providers  CLIs de IA detectados (Claude Code, Codex, …)
+  usage      Uso de tokens por proveedor y modelo: lo que informa cada CLI frente a lo que se estima
   spawn      Crea un agente nuevo con su tarea y workspace aislado
   agents     Lista los agentes del proyecto
   send       Envía un mensaje o instrucción al executor vivo del agente

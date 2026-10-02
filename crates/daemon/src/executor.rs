@@ -452,6 +452,7 @@ impl Runtime {
             self.commit_chat_turn(l).await;
             let (agent, task, run) = (l.agent_id, l.task_id, l.run_id);
             let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
+            let health_cfg = self.bus.health_config();
             let result = self
                 .writer
                 .write(Box::new(move |t| {
@@ -468,7 +469,7 @@ impl Runtime {
                     // Un turno terminó bien: el proveedor está sano y se anota el uso estimado
                     // si su CLI no informó tokens.
                     crate::health::on_success(t, &provider, Some(&model), now)?;
-                    crate::health::finish_usage(t, run, now)?;
+                    crate::health::on_run_finished(t, run, &health_cfg, now)?;
                     if repo::get_task(t, task)?.code == repo::CHAT_TASK_CODE {
                         repo::set_agent_state(
                             t,

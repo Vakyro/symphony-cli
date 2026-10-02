@@ -339,10 +339,109 @@ fn provider_advice(state: &str, name: &str) -> String {
     }
 }
 
+/// Color de un estado de salud (FLOW §12.2).
+fn health_color(state: &str) -> Color {
+    match state {
+        "HEALTHY" => Color::Green,
+        "EXHAUSTED" | "AUTH_ERROR" | "OFFLINE" => Color::Red,
+        "UNKNOWN" => Color::DarkGray,
+        _ => Color::Yellow,
+    }
+}
+
+/// Cuota con su certeza, sin inventar nunca un porcentaje (FLOW §12.3).
+fn quota_text(h: &Value) -> String {
+    match h["certainty"].as_str() {
+        Some("KNOWN") => h["remaining"]
+            .as_f64()
+            .map_or("restante desconocido".into(), |r| {
+                format!("{:.0} % restante", r * 100.0)
+            }),
+        Some("ESTIMATED") => "estimada (sin %)".into(),
+        _ => "restante desconocido".into(),
+    }
+}
+
+/// `12345` → `12,3k`; `1234567` → `1,2M`.
+fn tokens_text(n: i64) -> String {
+    match n {
+        0..1000 => n.to_string(),
+        1000..1_000_000 => format!("{:.1}k", n as f64 / 1000.0).replace('.', ","),
+        _ => format!("{:.1}M", n as f64 / 1_000_000.0).replace('.', ","),
+    }
+}
+
+/// Detalle del proveedor seleccionado (FLOW §12.1).
+fn provider_detail(app: &App, p: &Value, lines: &mut Vec<Line<'static>>) {
+    let h = &p["health"];
+    if h.is_null() {
+        return;
+    }
+    let state = h["state"].as_str().unwrap_or("UNKNOWN");
+    let mut health = format!("Salud: {state}");
+    if let Some(e) = h["evidence"].as_str() {
+        health.push_str(&format!(" · evidencia: {e}"));
+    }
+    if let Some(at) = h["retry_after_at"].as_i64().filter(|t| *t > app.now_ms) {
+        health.push_str(&format!(" · reintenta en {}", ago(at, app.now_ms)));
+    }
+    if let Some(at) = h["reset_at"].as_i64().filter(|t| *t > app.now_ms) {
+        health.push_str(&format!(" · se reinicia en {}", ago(at, app.now_ms)));
+    }
+    lines.push(Line::from(colored(health, health_color(state))));
+    lines.push(Line::raw(format!(
+        "Cuota: {} ({}) · reserva {:.0} %",
+        quota_text(h),
+        h["certainty"].as_str().unwrap_or("UNKNOWN"),
+        h["reserve"].as_f64().unwrap_or(0.2) * 100.0
+    )));
+    let names: Vec<String> = p["model_names"]
+        .as_array()
+        .map(|a| a.iter().map(text).collect())
+        .unwrap_or_default();
+    if !names.is_empty() {
+        lines.push(Line::raw(format!(
+            "Modelos ({}): {}",
+            names.len(),
+            names.join(", ")
+        )));
+    }
+    lines.push(Line::raw(format!(
+        "Agentes que lo usan ahora: {}",
+        num(&p["agents_active"])
+    )));
+    let f = &p["last_failure"];
+    if f.is_object() {
+        let msg = f["message"].as_str().unwrap_or("");
+        lines.push(Line::from(dim(format!(
+            "Último error: {}{} · hace {}",
+            text(&f["type"]),
+            if msg.is_empty() {
+                String::new()
+            } else {
+                format!(" — {msg}")
+            },
+            ago(app.now_ms, f["at"].as_i64().unwrap_or(0))
+        ))));
+    }
+    let u = &p["usage_7d"];
+    let (rep, est) = (
+        u["reported_tokens"].as_i64().unwrap_or(0),
+        u["estimated_tokens"].as_i64().unwrap_or(0),
+    );
+    if rep > 0 || est > 0 {
+        lines.push(Line::from(dim(format!(
+            "Uso (7 días): {} tokens informados · {} estimados",
+            tokens_text(rep),
+            tokens_text(est)
+        ))));
+    }
+}
+
 fn providers(app: &App, f: &mut Frame, area: Rect) {
     let mut lines = vec![Line::from(dim(format!(
-        "  {:<12} {:<16} {:<12} {:>7}",
-        "PROVEEDOR", "ESTADO", "VERSIÓN", "MODELOS"
+        "  {:<11} {:<15} {:<13} {:<21} {:<9} {:>7}",
+        "PROVEEDOR", "ESTADO", "SALUD", "CUOTA", "VERSIÓN", "MODELOS"
     )))];
     for (i, p) in app.providers.iter().enumerate() {
         let enabled = p["enabled"].as_bool().unwrap_or(true);
@@ -352,19 +451,30 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
         } else {
             "DESACTIVADO".into()
         };
+        let health = &p["health"];
+        let health_state = health["state"].as_str().unwrap_or("UNKNOWN").to_string();
         lines.push(Line::from(vec![
             marker(i == app.selected),
-            Span::raw(format!("{:<12} ", text(&p["display_name"]))),
+            Span::raw(format!("{:<11} ", text(&p["display_name"]))),
             colored(
-                format!("{shown:<16} "),
+                format!("{shown:<15} "),
                 if enabled {
                     state_color(&state)
                 } else {
                     Color::DarkGray
                 },
             ),
+            colored(
+                format!("{health_state:<13} "),
+                if enabled && state == "READY" {
+                    health_color(&health_state)
+                } else {
+                    Color::DarkGray
+                },
+            ),
+            dim(format!("{:<21} ", quota_text(health))),
             Span::raw(format!(
-                "{:<12} {:>7}",
+                "{:<9} {:>7}",
                 text(&p["cli_version"]),
                 num(&p["models"])
             )),
@@ -383,6 +493,9 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
         )));
         if let Some(path) = p["cli_path"].as_str() {
             lines.push(Line::from(dim(format!("Ruta: {path}"))));
+        }
+        if app.screen == Screen::Providers {
+            provider_detail(app, p, &mut lines);
         }
     }
     if app.screen == Screen::ProviderSetup {

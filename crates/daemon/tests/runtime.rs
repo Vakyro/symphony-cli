@@ -2430,6 +2430,42 @@ async fn usage_is_reported_when_the_cli_gives_it_and_estimated_when_it_does_not(
     e.writer.shutdown();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_token_budget_in_the_config_gives_an_estimated_quota_never_a_percentage() {
+    let heavy =
+        "[[step]]\nkind = \"usage\"\ntokens = 900\n[[step]]\nkind = \"say\"\ntext = \"listo\"\n";
+    let e = env_with(&[("alpha", heavy), ("beta", heavy)], None).await;
+    // Solo alpha tiene presupuesto: 1000 tokens por ventana de una hora, reserva 0.20.
+    let mut cfg = symphony_daemon::health::HealthConfig::default();
+    cfg.budgets.insert("alpha".into(), (1, 1000));
+    e.bus.set_health_config(cfg);
+    for (title, model) in [
+        ("con presupuesto", "alpha/fast"),
+        ("sin presupuesto", "beta/fast"),
+    ] {
+        e.runtime
+            .create_agent(req(&e, title, Execution::Exact(model.into())))
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+    }
+    e.writer.handle().flush().await.unwrap();
+
+    let (state, certainty, remaining, _, _) = health_of(&e, "alpha");
+    assert_eq!(certainty, "ESTIMATED");
+    assert_eq!(
+        remaining, None,
+        "una estimación nunca se muestra como porcentaje"
+    );
+    assert_eq!(state, "QUOTA_LOW", "900 de 1000 con reserva 0.20");
+    let (state, certainty, remaining, _, _) = health_of(&e, "beta");
+    assert_eq!(
+        (state.as_str(), certainty.as_str(), remaining),
+        ("HEALTHY", "UNKNOWN", None)
+    );
+    e.writer.shutdown();
+}
+
 /// Un CLI que falla (login, cuota) antes de leer su prompt deja un `EPIPE` al escribirlo: no es un
 /// fallo de arranque; su salida y su código de salida mandan y el failover sigue su curso.
 #[tokio::test(flavor = "multi_thread")]

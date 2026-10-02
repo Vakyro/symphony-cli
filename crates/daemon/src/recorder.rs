@@ -71,7 +71,7 @@ impl Recorder {
         }
     }
 
-    fn health_config(&self) -> Arc<HealthConfig> {
+    pub fn health_config(&self) -> Arc<HealthConfig> {
         self.health.lock().map(|h| h.clone()).unwrap_or_default()
     }
 

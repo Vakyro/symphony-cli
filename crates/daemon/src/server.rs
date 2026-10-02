@@ -332,6 +332,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         }
         "hook.emit" => hook_emit(req, state).await,
         "providers.list" => providers_list(req, state),
+        "usage.get" => usage_get(req, state),
         "providers.refresh" => match refresh_providers(&state.writer).await {
             Ok(()) => providers_list(req, state),
             Err(e) => Response::error(req.id, "store_error", e.to_string()),
@@ -1068,8 +1069,28 @@ async fn refresh_providers(
     crate::providers::save(writer, detected, now_ms()).await
 }
 
+/// Uso de tokens de los últimos `days` días (por defecto 7), informado y estimado por separado.
+fn usage_get(req: Request, state: &State) -> Response {
+    let days = req.params.get("days").and_then(Value::as_i64).unwrap_or(7);
+    let listed = state
+        .reader
+        .lock()
+        .ok()
+        .map(|c| crate::providers::usage(&c, days, now_ms()));
+    match listed {
+        Some(Ok(v)) => Response::ok(req.id, json!({ "days": days, "usage": v })),
+        Some(Err(e)) => Response::error(req.id, "store_error", e.to_string()),
+        None => Response::error(req.id, "store_error", "lector de la base no disponible"),
+    }
+}
+
 fn providers_list(req: Request, state: &State) -> Response {
-    let listed = state.reader.lock().ok().map(|c| crate::providers::list(&c));
+    let cfg = state.bus.health_config();
+    let listed = state
+        .reader
+        .lock()
+        .ok()
+        .map(|c| crate::providers::list(&c, &cfg, now_ms()));
     match listed {
         Some(Ok(v)) => Response::ok(req.id, json!({ "providers": v })),
         Some(Err(e)) => Response::error(req.id, "store_error", e.to_string()),

@@ -31,6 +31,12 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<ProvidersCmd>,
     },
+    /// Uso de tokens por proveedor y modelo: lo que informa cada CLI frente a lo que se estima.
+    Usage {
+        /// Cuántos días hacia atrás (por defecto 7).
+        #[arg(long, default_value_t = 7)]
+        days: i64,
+    },
     /// Crea un agente nuevo con su tarea y workspace aislado.
     Spawn {
         /// Tarea u objetivo del agente.
@@ -207,6 +213,10 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
             };
             let mut conn = client::connect_or_start(home).await?;
             print_providers(&client::call(&mut conn, method, json!({})).await?);
+        }
+        Some(Cmd::Usage { days }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            print_usage(&client::call(&mut conn, "usage.get", json!({ "days": days })).await?);
         }
         Some(Cmd::Status) => {
             let mut conn = client::connect_or_start(home).await?;
@@ -522,6 +532,19 @@ fn print_status(status: &Value) {
     println!("  home:     {}", status["home"].as_str().unwrap_or("?"));
 }
 
+/// Cuota con su certeza: nunca un porcentaje que el CLI no informó (FLOW §12.3).
+fn quota_label(health: &Value) -> String {
+    match health["certainty"].as_str() {
+        Some("KNOWN") => health["remaining"]
+            .as_f64()
+            .map_or("desconocida".into(), |r| {
+                format!("{:.0} % restante", r * 100.0)
+            }),
+        Some("ESTIMATED") => "estimada".into(),
+        _ => "desconocida".into(),
+    }
+}
+
 fn print_providers(v: &Value) {
     let empty = Vec::new();
     let rows = v["providers"].as_array().unwrap_or(&empty);
@@ -530,20 +553,54 @@ fn print_providers(v: &Value) {
         return;
     }
     println!(
-        "{:<10} {:<10} {:<10} {:>7}  RUTA",
-        "PROVEEDOR", "ESTADO", "VERSIÓN", "MODELOS"
+        "{:<10} {:<10} {:<13} {:<14} {:<10} {:>7}  RUTA",
+        "PROVEEDOR", "ESTADO", "SALUD", "CUOTA", "VERSIÓN", "MODELOS"
     );
     for p in rows {
         let text = |k: &str| p[k].as_str().unwrap_or("—").to_string();
         println!(
-            "{:<10} {:<10} {:<10} {:>7}  {}",
+            "{:<10} {:<10} {:<13} {:<14} {:<10} {:>7}  {}",
             text("display_name"),
             text("setup_state"),
+            p["health"]["state"].as_str().unwrap_or("UNKNOWN"),
+            quota_label(&p["health"]),
             text("cli_version"),
             p["models"],
             text("cli_path")
         );
     }
+}
+
+fn print_usage(v: &Value) {
+    let empty = Vec::new();
+    let rows = v["usage"].as_array().unwrap_or(&empty);
+    if rows.is_empty() {
+        println!("Sin uso registrado en los últimos {} días.", v["days"]);
+        return;
+    }
+    println!(
+        "{:<12} {:<26} {:<10} {:>5} {:>12} {:>12}",
+        "PROVEEDOR", "MODELO", "ORIGEN", "RUNS", "ENTRADA", "SALIDA"
+    );
+    for u in rows {
+        let text = |k: &str| u[k].as_str().unwrap_or("—").to_string();
+        println!(
+            "{:<12} {:<26} {:<10} {:>5} {:>12} {:>12}",
+            text("provider_id"),
+            text("model_id"),
+            if u["source"] == "REPORTED" {
+                "informado"
+            } else {
+                "estimado"
+            },
+            u["runs"],
+            u["tokens_in"],
+            u["tokens_out"]
+        );
+    }
+    println!(
+        "«estimado»: el CLI no informó tokens; es una aproximación (~4 caracteres por token)."
+    );
 }
 
 /// `same-provider` → `SAME_PROVIDER`: los flags aceptan la forma de CLI, la DB la suya.

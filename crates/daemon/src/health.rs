@@ -209,6 +209,44 @@ pub fn on_usage(
     )
 }
 
+/// Estimación de cuota para un proveedor con presupuesto en la config: tokens usados en la
+/// ventana frente a `window_tokens`. Es `ESTIMATED`, nunca un porcentaje, y no pisa lo que el CLI
+/// informa (la máquina de estados lo garantiza).
+pub fn refresh_estimate(
+    conn: &Connection,
+    provider: &str,
+    cfg: &HealthConfig,
+    now: i64,
+) -> Result<(), RepoError> {
+    let Some(&(hours, tokens)) = cfg.budgets.get(provider) else {
+        return Ok(());
+    };
+    let since = now
+        - i64::try_from(hours)
+            .unwrap_or(i64::MAX / 4)
+            .saturating_mul(3_600_000);
+    let used = db::provider_tokens_since(conn, provider, since)?;
+    let event = HealthEvent::Estimate {
+        used_fraction: used as f64 / tokens as f64,
+        reserve: cfg.reserve_for(provider),
+    };
+    let next = load(conn, provider, None, now)?.apply(&event, now);
+    db::put_health(conn, provider, None, &next)
+}
+
+/// Un run terminó: se registra su uso (estimado si el CLI no lo informó) y se refresca la
+/// estimación de cuota de su proveedor.
+pub fn on_run_finished(
+    conn: &Connection,
+    run: RunId,
+    cfg: &HealthConfig,
+    now: i64,
+) -> Result<(), RepoError> {
+    finish_usage(conn, run, now)?;
+    let (provider, _) = db::run_scope(conn, run)?;
+    refresh_estimate(conn, &provider, cfg, now)
+}
+
 /// Al terminar un run cuyo CLI no informó tokens se registra una estimación (`ESTIMATED`).
 pub fn finish_usage(conn: &Connection, run: RunId, now: i64) -> Result<(), RepoError> {
     if db::run_has_reported_usage(conn, run)? {
