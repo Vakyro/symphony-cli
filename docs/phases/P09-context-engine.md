@@ -39,6 +39,11 @@ Persistencia: `handoff_items` se llena en cada cambio de executor (`repo::insert
 Verificado: `raw_omits_nothing_and_modes_are_monotonic_with_a_realistic_checkpoint` (raw ≥ safe ≥ balanced ≥ aggressive en tokens con un diff de 3.000 líneas de lockfile, 60 mensajes y 6 archivos nuevos; RAW sin un solo recorte y todo a fidelidad 5), `balanced_reduces_the_diff_and_points_to_the_original`, snapshots v1 sin cambios (un diff pequeño no se resume), L2 del daemon (`handoff_items` tras un switch), CLI de punta a punta contra un daemon real.
 Desvío: `/context inspect|stats|raw` del PLAN son subcomandos `symphony context …` (la TUI no tiene todavía un punto de entrada de comandos con barra).
 
+### P09.S4 · AST por niveles (hecho)
+`context::ast` con tree-sitter 0.27 y las gramáticas de Rust (0.24), Python (0.25), JavaScript (0.25) y TypeScript/TSX (0.23). Niveles: L0 nada · L1 nombre · L2 símbolos (tipo, nombre, línea) · L3 firmas y tipos sin cuerpos (los tipos de ≤ 12 líneas van enteros) · L4 firmas más las funciones completas cuyo nombre o cuerpo contiene un término de búsqueda · L5 archivo completo. Sin gramática, L2–L4 devuelven `None` (el llamador usa chunks). Un recorrido genérico con una tabla de nodos por lenguaje (sin consultas `.scm`); `export …` y los decoradores de Python se tratan como envoltorios. Código roto no falla: tree-sitter tolera errores.
+En el handoff: en BALANCED/AGGRESSIVE, un archivo nuevo que no cabe en su espacio va como esqueleto L3 (fidelidad 2) si hay gramática y el esqueleto entra; si no, se recorta como antes. RAW y SAFE no cambian.
+Verificado: snapshots L3 de Rust, Python y TypeScript y L2 de TypeScript; L4 con un término; JS y TSX rotos; un archivo de 200 funciones baja a menos de la mitad; test de handoff (80 handlers en AGGRESSIVE → esqueleto; en SAFE, entero). `cargo deny` ok (licencias MIT). Gramáticas nuevas en el workspace (STACK §14.1 nombra tree-sitter; las gramáticas son su complemento).
+
 ### P09.S10 · Evaluación del handoff (hecho en L2; el live queda pendiente)
 Test `handoff_evaluation_forced_kill_by_context_mode` (`crates/daemon/tests/runtime.rs`; la tabla sale con `--nocapture`): el forced kill de P06.S8 (A se cuelga, el watchdog lo mata sin cleanup y B continúa solo con el handoff) con un checkpoint pesado: `package-lock.json` tocado (3.000 líneas), dos mensajes largos, un cambio real en el README, un archivo nuevo y el «Next:» del último mensaje. Un agente por modo.
 
@@ -70,4 +75,4 @@ Límites: retrievals y misses dan 0 porque todavía no hay broker MCP (S8); con 
 | PLAN P09.S1 | «Migración 003» | `003_context.sql` | ya era la siguiente en el orden de ejecución |
 
 ## Dependencias agregadas
-`regex` y `serde_json` (ya aprobadas, workspace) en `symphony-context`; `criterion` como dev-dependency.
+`regex` y `serde_json` (ya aprobadas, workspace) en `symphony-context`; `criterion` como dev-dependency. S4: `tree-sitter` 0.27 (ADR-0001) y las gramáticas `tree-sitter-rust` 0.24.2, `tree-sitter-python` 0.25.0, `tree-sitter-javascript` 0.25.0 y `tree-sitter-typescript` 0.23.2 (MIT; compilan C con `cc`).

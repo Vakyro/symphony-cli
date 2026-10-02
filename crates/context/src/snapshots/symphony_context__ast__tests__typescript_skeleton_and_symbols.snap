@@ -1,0 +1,13 @@
+---
+source: crates/context/src/ast.rs
+expression: "reduce(\"src/users.ts\", TS, &Level::Signatures).unwrap()"
+---
+// src/users.ts · firmas y tipos (L3) · 23 líneas en el original
+export interface User { id: string; email: string }
+export type Role = 'admin' | 'user';
+export class UserStore {
+    add(u: User): void { … }
+    find(id: string): User | undefined { … }
+}
+export function validateEmail(e: string): boolean { … }
+export const hashPassword = (p: string): string => { … }

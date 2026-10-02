@@ -1,0 +1,9 @@
+---
+source: crates/context/src/ast.rs
+expression: "reduce(\"auth/session.py\", PY, &Level::Signatures).unwrap()"
+---
+# auth/session.py · firmas y tipos (L3) · 14 líneas en el original
+class Session:
+    def __init__(self, token: str) -> None: …
+    @property def valid(self) -> bool: …
+def refresh(session: Session) -> Session: …

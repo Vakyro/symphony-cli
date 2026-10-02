@@ -1,0 +1,12 @@
+---
+source: crates/context/src/ast.rs
+expression: "reduce(\"src/users.ts\", TS, &Level::Symbols).unwrap()"
+---
+// src/users.ts · símbolos (L2) · 23 líneas
+interface User :3
+type Role :5
+class UserStore :7
+method add :9
+method find :12
+function validateEmail :17
+const hashPassword :21

@@ -8,6 +8,7 @@
 
 use symphony_core::ContextMode;
 
+use crate::ast;
 use crate::compress::{Compressor, Hint, compress};
 
 /// Qué tan fiel al original es una parte del prompt (`handoff_items.fidelity`, 0–5).
@@ -276,6 +277,8 @@ pub fn assemble(input: &HandoffInput, mode: ContextMode) -> Handoff {
         }
     };
 
+    // BALANCED y AGGRESSIVE resumen (diff reducido, esqueletos); RAW y SAFE nunca.
+    let summarize = !matches!(mode, ContextMode::Raw | ContextMode::Safe);
     let mut items: Vec<Item> = Vec::new();
     let mut budget = files_total;
     let new_files: Vec<String> = input
@@ -295,14 +298,25 @@ pub fn assemble(input: &HandoffInput, mode: ContextMode) -> Handoff {
                         (Some(each), Some(left)) => Some(each.min(left)),
                         _ => None,
                     };
-                    let shown = clip(body, room, None);
+                    // Si no cabe, en BALANCED/AGGRESSIVE va su esqueleto (L3) cuando hay
+                    // gramática y entra en el espacio; si no, el principio recortado.
+                    let skeleton = (summarize && is_clipped(body, room))
+                        .then(|| ast::reduce(&f.path, body, &ast::Level::Signatures))
+                        .flatten()
+                        .filter(|s| !is_clipped(s, room));
+                    let used = skeleton.as_deref().unwrap_or(body);
                     if let (Some(left), Some(room)) = (budget.as_mut(), room) {
-                        *left -= room.min(body.chars().count());
+                        *left -= room.min(used.chars().count());
                     }
-                    let fid = if is_clipped(body, room) {
-                        fidelity::CLIPPED
-                    } else {
-                        fidelity::FULL
+                    let (shown, fid) = match skeleton {
+                        Some(s) => (
+                            format!("{s}[esqueleto: el archivo completo está en el worktree]"),
+                            fidelity::SKELETON,
+                        ),
+                        None if is_clipped(body, room) => {
+                            (clip(body, room, None), fidelity::CLIPPED)
+                        }
+                        None => (body.clone(), fidelity::FULL),
                     };
                     (
                         format!("--- {} (archivo nuevo)\n{}", f.path, shown.trim_end()),
@@ -340,12 +354,8 @@ El último mensaje del usuario puede estar sin responder o a medias: revisa el w
         )
     };
 
-    let (diff, diff_fidelity) = render_diff(
-        &input.diff,
-        diff_max,
-        input.diff_uri.as_deref(),
-        !matches!(mode, ContextMode::Raw | ContextMode::Safe),
-    );
+    let (diff, diff_fidelity) =
+        render_diff(&input.diff, diff_max, input.diff_uri.as_deref(), summarize);
 
     let prompt = format!(
         "Retomas una tarea de código que otro executor dejó a medias. {reason}
@@ -737,6 +747,54 @@ mod tests {
         assert_eq!(png.path.as_deref(), Some("fixtures/logo.png"));
         assert_eq!(png.fidelity, fidelity::OMITTED);
         assert!(h.items[..5].iter().all(|i| i.fidelity == fidelity::FULL));
+    }
+
+    #[test]
+    fn a_big_new_source_file_goes_as_its_skeleton_when_it_does_not_fit() {
+        let mut src = String::new();
+        for i in 0..80 {
+            src.push_str(&format!(
+                "pub fn handler_{i}(req: Request) -> Response {{
+    let body = req.body();
+    Response::ok(body)
+}}
+
+"
+            ));
+        }
+        let mut input = fixed();
+        input.new_files = vec![NewFile {
+            path: "src/handlers.rs".into(),
+            content: Some(src),
+        }];
+        let aggressive = assemble(&input, ContextMode::Aggressive);
+        assert!(
+            aggressive.prompt.contains("firmas y tipos (L3)"),
+            "{}",
+            aggressive.prompt
+        );
+        assert!(
+            aggressive
+                .prompt
+                .contains("pub fn handler_79(req: Request) -> Response { … }")
+        );
+        assert!(
+            aggressive
+                .prompt
+                .contains("[esqueleto: el archivo completo está en el worktree]")
+        );
+        let code = |h: &Handoff| {
+            h.items
+                .iter()
+                .find(|i| i.section == Section::Code)
+                .unwrap()
+                .fidelity
+        };
+        assert_eq!(code(&aggressive), fidelity::SKELETON);
+        // SAFE nunca resume: el archivo cabe en su límite y va entero.
+        let safe = assemble(&input, ContextMode::Safe);
+        assert_eq!(code(&safe), fidelity::FULL);
+        assert!(safe.tokens_sent > aggressive.tokens_sent);
     }
 
     #[test]
