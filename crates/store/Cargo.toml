@@ -18,6 +18,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+symphony-context = { path = "../context" }
 criterion.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

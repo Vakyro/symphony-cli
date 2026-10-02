@@ -2896,6 +2896,60 @@ async fn switching_by_profile_lets_the_router_choose_among_the_usable_models() {
     e.writer.shutdown();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn long_messages_and_diffs_become_searchable_context_objects() {
+    // Un mensaje de más de 4 KB va al object store; un archivo nuevo deja un diff en el checkpoint.
+    let long = format!(
+        "{} palabraunicadelmensaje {}",
+        "relleno ".repeat(700),
+        "fin ".repeat(100)
+    );
+    let script = format!(
+        "[[step]]\nkind = \"edit\"\npath = \"README.md\"\ncontent = \"identificadorraro actualizado\"\n[[step]]\nkind = \"say\"\ntext = \"{long}\"\n"
+    );
+    let e = env(&script, None).await;
+    e.runtime
+        .create_agent(req(&e, "indexar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let project: String = one(&e, "SELECT id FROM projects");
+
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let find = |word: &str| {
+        let q = symphony_context::chunk::fts_query(word).unwrap();
+        symphony_store::context::search(&conn, &project, &q, None, 10).unwrap()
+    };
+    let dbg: (i64, i64, String, i64) = (
+        one(&e, "SELECT COUNT(*) FROM context_objects"),
+        one(&e, "SELECT COUNT(*) FROM context_chunks"),
+        one(&e, "SELECT state || COALESCE(state_reason, '') FROM agents"),
+        one(&e, "SELECT MAX(LENGTH(content)) FROM messages"),
+    );
+    let msg = find("palabraunicadelmensaje");
+    assert_eq!(msg.len(), 1, "{msg:?} objetos/chunks={dbg:?}");
+    assert!(msg[0].uri.starts_with("ctx://message/"), "{}", msg[0].uri);
+    // El original completo sigue recuperable por su dirección.
+    let obj = symphony_store::context::object_by_uri(&conn, &msg[0].uri)
+        .unwrap()
+        .unwrap();
+    let bytes = symphony_object_store::ObjectStore::new(e.home.join("objects"))
+        .get(&obj.blob_hash)
+        .unwrap();
+    assert!(
+        String::from_utf8(bytes)
+            .unwrap()
+            .contains("palabraunicadelmensaje")
+    );
+    let diff = find("identificadorraro");
+    assert!(
+        !diff.is_empty() && diff[0].uri.starts_with("ctx://diff/"),
+        "{diff:?}"
+    );
+    e.writer.shutdown();
+}
+
 /// Un CLI que falla (login, cuota) antes de leer su prompt deja un `EPIPE` al escribirlo: no es un
 /// fallo de arranque; su salida y su código de salida mandan y el failover sigue su curso.
 #[tokio::test(flavor = "multi_thread")]

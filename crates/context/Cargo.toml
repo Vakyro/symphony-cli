@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 symphony-core = { path = "../core" }
+thiserror.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+proptest.workspace = true

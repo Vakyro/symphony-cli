@@ -335,6 +335,7 @@ async fn take(
                     repo::diff_object(t, project, agent, checkpoint.run_id, &blob.hash, now)?;
                 if created {
                     objects.add_ref(t, &blob.hash).map_err(sql)?;
+                    crate::context_index::index_text(t, id, &diff)?;
                 }
                 checkpoint.diff_object_id = Some(id);
             }
