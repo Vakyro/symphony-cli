@@ -2537,8 +2537,13 @@ dependencies = [
 name = "symphony-context"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "insta",
+ "proptest",
+ "regex",
+ "serde_json",
  "symphony-core",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2650,6 +2655,7 @@ dependencies = [
  "rusqlite",
  "rusqlite_migration",
  "serde_json",
+ "symphony-context",
  "symphony-core",
  "tempfile",
  "thiserror 2.0.21",

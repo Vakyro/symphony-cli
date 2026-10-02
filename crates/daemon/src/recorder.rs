@@ -260,7 +260,12 @@ impl Recorder {
                     now,
                 )?;
                 // Buscable por el MCP de contexto (P09): el original sigue en su blob.
-                crate::context_index::index_text(t, object, &text)?;
+                crate::context_index::index_text(
+                    t,
+                    object,
+                    &text,
+                    symphony_context::compress::Hint::Auto,
+                )?;
                 (None, Some(object))
             } else {
                 (Some(text), None)

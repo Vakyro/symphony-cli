@@ -23,6 +23,16 @@
 
 ## Pasos
 
+### P09.S1 · Migración 003 (hecho, `c9239cf`)
+`context_chunks` + `context_fts` (FTS5 de contenido externo con triggers), `handoff_items`, `context_retrievals`, `project_facts` (índice único parcial para un solo hecho CURRENT por clave), `skills`, `mcp_servers`. Probada sobre una copia de la base real de Leo (v2→v3 conserva los datos, `foreign_key_check` = 0).
+
+### P09.S2 · Direcciones `ctx://` y búsqueda (hecho, `222e08d`)
+`CtxUri` estricta (sin `%`, `..` ni `\`; `file_under` valida que el archivo caiga dentro del worktree), `chunk_text` por líneas, `fts_query` (términos entre comillas: el texto del usuario no puede romper la consulta), `store::context` (reemplazo de chunks, búsqueda BM25 con snippet, retrievals). El daemon indexa los mensajes largos y los diffs de los checkpoints (`context_index.rs`).
+
+### P09.S3 · Compresores deterministas (hecho)
+`context::compress`: `LogCollapser` (ANSI y líneas `` fuera, repeticiones «×N», recorte del medio; las líneas de error/panic/Traceback **siempre** se conservan), `TestSummaryCompressor` (cargo, vitest/jest, pytest → «896 pruebas: 895 pasaron, 1 falló» + nombres de fallos), `JsonStructuralCompressor` (esquema, conteos, rangos, ejemplos, campos opcionales marcados «solo en N de M»), `Deduplicator` (bloques/líneas largas repetidos → «igual a la línea N»), `GitDiffReducer` (lista de archivos con +/−, lockfiles y generados en una línea, hunks largos recortados). `compress()` elige por contenido (o por `Hint`) y **nunca infla**. El daemon guarda la versión comprimida junto al objeto (`set_compression`, desde 2 KB) y el original sigue en su blob. Etiquetas en DB: TestSummary→`LOG_COLLAPSE`, GitDiff→`DEDUP` (el CHECK solo admite cinco). Verificado: unit con corpus sintético por formato, proptest «no entra en pánico y no infla», proptest «la línea de error sobrevive al colapso», bench 1 MB de log ≈ 30 ms.
+Desvío: el corpus dorado se genera en los tests en vez de `fixtures/context/` + snapshots (más corto de mantener y las aserciones son más precisas que un snapshot de texto comprimido).
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
@@ -40,4 +50,4 @@
 | PLAN P09.S1 | «Migración 003» | `003_context.sql` | ya era la siguiente en el orden de ejecución |
 
 ## Dependencias agregadas
-Ninguna todavía.
+`regex` y `serde_json` (ya aprobadas, workspace) en `symphony-context`; `criterion` como dev-dependency.
