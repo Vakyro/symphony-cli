@@ -49,6 +49,15 @@ Verificado: snapshots L3 de Rust, Python y TypeScript y L2 de TypeScript; L4 con
 Persistencia: `context::upsert_file` y `context::delete_file` en el store. En `003_context.sql`, la unicidad de `context_objects` pasa a `(project_id, uri)` para permitir que distintos proyectos tengan la misma ruta relativa (ej. `ctx://file/src/main.rs`).
 Verificado: unitario con ignorados/ocultos/binarios en tempdir; L2 del daemon (`project_files_stay_searchable_as_they_change`), creación, modificación con debounce y borrado de archivo indexado; `files_can_be_upserted_replaced_and_deleted_by_project` en store; `cargo deny` ok con `CC0-1.0` permitido.
 
+### P09.S7 · Hechos consolidados / project_facts (hecho)
+Consolidación de hechos del proyecto (`project_facts`) con estados `CURRENT`, `SUPERSEDED`, `CONFLICT`.
+- `ids::FactId` (`fact_...`) y tipos en core y store (`FactRow`, `set_fact`, `set_fact_conflict`, `list_facts`, `get_current_facts`).
+- Inclusión de hechos vigentes en el handoff conversacional (`ProjectFact`, sección `## Hechos vigentes del proyecto` con `Section::Decisions`).
+- Métodos IPC en daemon: `fact.set` y `fact.list`.
+- Subcomandos CLI: `symphony fact set <key> <value> [--kind <kind>]` y `symphony fact list [--all]`.
+- Verificado: tests de repositorio en `store::context` (transiciones de estado y unicidad lógica de `CURRENT`), L2 en `daemon::runtime` (`handoff_includes_current_project_facts` y llamadas IPC), snapshot actualizado de help en CLI. Total 427 tests verdes.
+
+
 ### P09.S10 · Evaluación del handoff (hecho en L2; el live queda pendiente)
 Test `handoff_evaluation_forced_kill_by_context_mode` (`crates/daemon/tests/runtime.rs`; la tabla sale con `--nocapture`): el forced kill de P06.S8 (A se cuelga, el watchdog lo mata sin cleanup y B continúa solo con el handoff) con un checkpoint pesado: `package-lock.json` tocado (3.000 líneas), dos mensajes largos, un cambio real en el README, un archivo nuevo y el «Next:» del último mensaje. Un agente por modo.
 

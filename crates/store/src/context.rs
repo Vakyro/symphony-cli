@@ -1,7 +1,7 @@
 //! Objetos de contexto, chunks con búsqueda FTS5/BM25 y retrievals (DB §3.G, migración 003).
 
 use rusqlite::{Connection, OptionalExtension, params};
-use symphony_core::{ContextObjectId, RunId};
+use symphony_core::{ContextObjectId, FactId, RunId};
 
 use crate::repo::RepoError;
 
@@ -271,4 +271,115 @@ pub fn retrieval_stats(conn: &Connection, run: RunId) -> Result<(i64, i64, i64),
         [run.to_string()],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactRow {
+    pub id: String,
+    pub project_id: String,
+    pub key: String,
+    pub value: String,
+    pub kind: String,
+    pub status: String,
+    pub superseded_by_id: Option<String>,
+    pub source_agent_id: Option<String>,
+    pub source_event_id: Option<i64>,
+    pub created_at: i64,
+}
+
+fn fact_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FactRow> {
+    Ok(FactRow {
+        id: r.get(0)?,
+        project_id: r.get(1)?,
+        key: r.get(2)?,
+        value: r.get(3)?,
+        kind: r.get(4)?,
+        status: r.get(5)?,
+        superseded_by_id: r.get(6)?,
+        source_agent_id: r.get(7)?,
+        source_event_id: r.get(8)?,
+        created_at: r.get(9)?,
+    })
+}
+
+const FACT_COLS: &str = "id, project_id, key, value, kind, status, superseded_by_id, source_agent_id, source_event_id, created_at";
+
+/// Registra un hecho vigente sobre el proyecto (`CURRENT`). Si ya existía un hecho `CURRENT` con esa
+/// clave, pasa a `SUPERSEDED` y apunta al nuevo con `superseded_by_id`.
+#[allow(clippy::too_many_arguments)]
+pub fn set_fact(
+    conn: &Connection,
+    project_id: &str,
+    key: &str,
+    value: &str,
+    kind: &str,
+    source_agent_id: Option<&str>,
+    source_event_id: Option<i64>,
+    now: i64,
+) -> Result<FactRow, RepoError> {
+    let new_id = FactId::new().to_string();
+    conn.execute(
+        "UPDATE project_facts SET status = 'SUPERSEDED'
+         WHERE project_id = ?1 AND key = ?2 AND status = 'CURRENT'",
+        params![project_id, key],
+    )?;
+    conn.execute(
+        "INSERT INTO project_facts (id, project_id, key, value, kind, status, source_agent_id, source_event_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'CURRENT', ?6, ?7, ?8)",
+        params![new_id, project_id, key, value, kind, source_agent_id, source_event_id, now],
+    )?;
+    conn.execute(
+        "UPDATE project_facts SET superseded_by_id = ?1
+         WHERE project_id = ?2 AND key = ?3 AND status = 'SUPERSEDED' AND superseded_by_id IS NULL",
+        params![new_id, project_id, key],
+    )?;
+    Ok(FactRow {
+        id: new_id,
+        project_id: project_id.to_string(),
+        key: key.to_string(),
+        value: value.to_string(),
+        kind: kind.to_string(),
+        status: "CURRENT".to_string(),
+        superseded_by_id: None,
+        source_agent_id: source_agent_id.map(str::to_string),
+        source_event_id,
+        created_at: now,
+    })
+}
+
+/// Marca un hecho en conflicto (`CONFLICT`), por ejemplo cuando dos fuentes se contradicen.
+pub fn set_fact_conflict(conn: &Connection, fact_id: &str) -> Result<bool, RepoError> {
+    let changed = conn.execute(
+        "UPDATE project_facts SET status = 'CONFLICT' WHERE id = ?1",
+        params![fact_id],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Lista los hechos de un proyecto. Con `status` solo los de ese estado (`CURRENT`, `SUPERSEDED`, `CONFLICT`).
+/// Sin `status`, primero `CURRENT`, luego `CONFLICT`, luego `SUPERSEDED`.
+pub fn list_facts(
+    conn: &Connection,
+    project_id: &str,
+    status: Option<&str>,
+) -> Result<Vec<FactRow>, RepoError> {
+    if let Some(st) = status {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {FACT_COLS} FROM project_facts WHERE project_id = ?1 AND status = ?2 ORDER BY key, created_at DESC"
+        ))?;
+        let rows = stmt.query_map(params![project_id, st], fact_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    } else {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {FACT_COLS} FROM project_facts WHERE project_id = ?1
+             ORDER BY CASE status WHEN 'CURRENT' THEN 0 WHEN 'CONFLICT' THEN 1 ELSE 2 END, key, created_at DESC"
+        ))?;
+        let rows = stmt.query_map(params![project_id], fact_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+}
+
+/// Hechos vigentes (`CURRENT`) de un proyecto.
+pub fn get_current_facts(conn: &Connection, project_id: &str) -> Result<Vec<FactRow>, RepoError> {
+    list_facts(conn, project_id, Some("CURRENT"))
 }

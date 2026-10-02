@@ -92,6 +92,14 @@ pub struct ChatMessage {
     pub text: String,
 }
 
+/// Un hecho consolidado del proyecto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectFact {
+    pub key: String,
+    pub value: String,
+    pub kind: String,
+}
+
 /// Todo lo que entra al handoff, ya redactado.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HandoffInput {
@@ -113,6 +121,8 @@ pub struct HandoffInput {
     pub new_files: Vec<NewFile>,
     /// Lo dicho hasta ahora, en orden cronológico. Vacío = sin sección de conversación.
     pub conversation: Vec<ChatMessage>,
+    /// Hechos vigentes del proyecto (`CURRENT`).
+    pub facts: Vec<ProjectFact>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -334,6 +344,23 @@ pub fn assemble(input: &HandoffInput, mode: ContextMode) -> Handoff {
         })
         .collect();
 
+    let facts = if input.facts.is_empty() {
+        String::new()
+    } else {
+        let mut s = String::from("## Hechos vigentes del proyecto\n");
+        for f in &input.facts {
+            s.push_str(&format!("- **[{}] {}:** {}\n", f.kind, f.key, f.value));
+        }
+        s.push('\n');
+        items.push(Item {
+            section: Section::Decisions,
+            path: None,
+            fidelity: fidelity::FULL,
+            tokens: estimate_tokens(&s),
+        });
+        s
+    };
+
     let conversation = if input.conversation.is_empty() {
         String::new()
     } else {
@@ -364,7 +391,7 @@ Ya estás en su worktree, con su rama y sus cambios. No empieces de cero: revisa
 ## Objetivo
 {objective}
 
-{conversation}## Último plan del executor anterior
+{facts}{conversation}## Último plan del executor anterior
 {plan}
 
 ## En qué estaba
@@ -498,6 +525,7 @@ mod tests {
                 },
             ],
             conversation: Vec::new(),
+            facts: Vec::new(),
         }
     }
 

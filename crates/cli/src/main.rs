@@ -119,6 +119,11 @@ enum Cmd {
         #[command(subcommand)]
         action: ContextCmd,
     },
+    /// Hechos consolidados del proyecto (arquitectura, decisiones, restricciones, convenciones).
+    Fact {
+        #[command(subcommand)]
+        action: FactCmd,
+    },
     /// Muestra el git diff del worktree del agente contra su commit base.
     Diff {
         /// ID o número del agente.
@@ -157,6 +162,26 @@ enum Cmd {
 enum ProvidersCmd {
     /// Vuelve a detectar los CLIs instalados.
     Refresh,
+}
+
+#[derive(Subcommand)]
+enum FactCmd {
+    /// Registra un hecho vigente (`CURRENT`) sobre el proyecto.
+    Set {
+        /// Clave única del hecho (ej. `auth_storage`, `db_engine`).
+        key: String,
+        /// Valor o descripción del hecho.
+        value: String,
+        /// Tipo de hecho: ARCHITECTURE, DECISION, CONSTRAINT, CONVENTION (default: DECISION).
+        #[arg(short, long, default_value = "DECISION")]
+        kind: String,
+    },
+    /// Lista los hechos registrados para el proyecto.
+    List {
+        /// Incluye hechos reemplazados (SUPERSEDED) y en conflicto (CONFLICT).
+        #[arg(short, long)]
+        all: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -370,6 +395,47 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                 ContextCmd::Raw { uri } => {
                     let res = client::call(&mut conn, "context.raw", json!({ "uri": uri })).await?;
                     print!("{}", res["text"].as_str().unwrap_or(""));
+                }
+            }
+        }
+        Some(Cmd::Fact { action }) => {
+            let cwd_str = std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .display()
+                .to_string();
+            let mut conn = client::connect_or_start(home).await?;
+            match action {
+                FactCmd::Set { key, value, kind } => {
+                    let res = client::call(
+                        &mut conn,
+                        "fact.set",
+                        json!({
+                            "project_root": cwd_str,
+                            "key": key,
+                            "value": value,
+                            "kind": kind,
+                        }),
+                    )
+                    .await?;
+                    println!(
+                        "hecho registrado: [{}] {} = {} ({})",
+                        res["kind"].as_str().unwrap_or(""),
+                        res["key"].as_str().unwrap_or(""),
+                        res["value"].as_str().unwrap_or(""),
+                        res["status"].as_str().unwrap_or("CURRENT")
+                    );
+                }
+                FactCmd::List { all } => {
+                    let res = client::call(
+                        &mut conn,
+                        "fact.list",
+                        json!({
+                            "project_root": cwd_str,
+                            "all": all,
+                        }),
+                    )
+                    .await?;
+                    print_facts(&res);
                 }
             }
         }
@@ -741,6 +807,26 @@ fn print_context_stats(v: &Value) {
         "  recuperaciones: {} ({} sin resultado) · {} tokens devueltos",
         r["total"], r["misses"], r["tokens_returned"]
     );
+}
+
+fn print_facts(res: &Value) {
+    let empty = Vec::new();
+    let rows = res["facts"].as_array().unwrap_or(&empty);
+    if rows.is_empty() {
+        println!("No hay hechos registrados para este proyecto.");
+        return;
+    }
+    println!("{:<14} {:<20} {:<12} VALOR", "TIPO", "CLAVE", "ESTADO");
+    for f in rows {
+        let text = |k: &str| f[k].as_str().unwrap_or("—").to_string();
+        println!(
+            "{:<14} {:<20} {:<12} {}",
+            text("kind"),
+            text("key"),
+            text("status"),
+            text("value")
+        );
+    }
 }
 
 fn print_usage(v: &Value) {

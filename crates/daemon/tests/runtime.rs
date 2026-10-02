@@ -3172,3 +3172,67 @@ async fn project_files_stay_searchable_as_they_change() {
     wait_for("rotarnuevo", false);
     e.writer.shutdown();
 }
+
+/// P09.S7: `project_facts` se incluyen en el handoff y registran su item en Decisions.
+#[tokio::test(flavor = "multi_thread")]
+async fn project_facts_ipc_and_handoff_integration() {
+    let script = r#"
+[[step]]
+kind = "say"
+text = "primer paso listo"
+"#;
+    let e = env(script, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "test facts", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+
+    let project: String = one(&e, "SELECT id FROM projects");
+
+    // Registrar un hecho vía store
+    let proj_clone = project.clone();
+    e.writer
+        .handle()
+        .write(Box::new(move |t| {
+            symphony_store::context::set_fact(
+                t,
+                &proj_clone,
+                "token_storage",
+                "httpOnly cookies",
+                "DECISION",
+                None,
+                None,
+                100,
+            )?;
+            Ok(())
+        }))
+        .await
+        .unwrap();
+
+    let handoff = e
+        .runtime
+        .prepare_handoff(created.agent_id, "cambio de modelo")
+        .await
+        .unwrap();
+    assert!(
+        handoff.prompt.contains("## Hechos vigentes del proyecto"),
+        "el prompt debe incluir los hechos vigentes: {}",
+        handoff.prompt
+    );
+    assert!(
+        handoff
+            .prompt
+            .contains("- **[DECISION] token_storage:** httpOnly cookies"),
+        "{}",
+        handoff.prompt
+    );
+    assert!(
+        handoff.items.iter().any(|i| i.section == "DECISIONS"),
+        "debe registrar un item en la sección DECISIONS: {:?}",
+        handoff.items
+    );
+
+    e.writer.shutdown();
+}

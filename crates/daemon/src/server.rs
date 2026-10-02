@@ -383,6 +383,8 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "context.inspect" => agent_view(req, state, crate::context_views::inspect),
         "context.stats" => read_view(req, state, crate::context_views::stats),
         "context.raw" => context_raw(req, state),
+        "fact.set" => fact_set(req, state).await,
+        "fact.list" => fact_list(req, state),
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
@@ -939,6 +941,125 @@ fn project_root_param(p: &Value) -> PathBuf {
         Some(r) => PathBuf::from(r),
         None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     }
+}
+
+fn resolve_project(state: &State, p: &Value) -> Result<repo::Project, String> {
+    if let Some(id) = p.get("project_id").and_then(Value::as_str) {
+        let conn = state.reader.lock().map_err(|_| "lector no disponible")?;
+        let pid = id
+            .parse::<symphony_core::ProjectId>()
+            .map_err(|e| e.to_string())?;
+        return repo::get_project(&conn, pid).map_err(|e| e.to_string());
+    }
+    let root = project_root_param(p);
+    let probe = root.clone();
+    let repo_root = symphony_git::Repo::discover(&probe)
+        .map(|r| r.root().display().to_string())
+        .unwrap_or_else(|_| root.display().to_string());
+    let conn = state.reader.lock().map_err(|_| "lector no disponible")?;
+    repo::project_by_root(&conn, &repo_root)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no hay un proyecto registrado para `{repo_root}`"))
+}
+
+async fn fact_set(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let (key, value) = match (
+        p.get("key").and_then(Value::as_str),
+        p.get("value").and_then(Value::as_str),
+    ) {
+        (Some(k), Some(v)) if !k.trim().is_empty() && !v.trim().is_empty() => {
+            (k.trim().to_string(), v.trim().to_string())
+        }
+        _ => return Response::error(req.id, "invalid_params", "faltan `key` y `value`"),
+    };
+    let kind = p
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("DECISION")
+        .to_ascii_uppercase();
+    if !matches!(
+        kind.as_str(),
+        "ARCHITECTURE" | "DECISION" | "CONSTRAINT" | "CONVENTION"
+    ) {
+        return Response::error(
+            req.id,
+            "invalid_params",
+            "`kind` tiene que ser ARCHITECTURE, DECISION, CONSTRAINT o CONVENTION",
+        );
+    }
+    let project = match resolve_project(state, p) {
+        Ok(pr) => pr,
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let project_id = project.id.to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let now = now_ms();
+    let (k, v, kd) = (key.clone(), value.clone(), kind.clone());
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let row =
+                symphony_store::context::set_fact(t, &project_id, &k, &v, &kd, None, None, now)?;
+            let _ = tx.send(row);
+            Ok(())
+        }))
+        .await;
+    match (written, rx.await) {
+        (Ok(()), Ok(fact)) => Response::ok(
+            req.id,
+            json!({
+                "id": fact.id,
+                "project_id": fact.project_id,
+                "key": fact.key,
+                "value": fact.value,
+                "kind": fact.kind,
+                "status": fact.status,
+                "created_at": fact.created_at,
+            }),
+        ),
+        (Err(e), _) => Response::error(req.id, "store_error", e.to_string()),
+        (_, Err(_)) => Response::error(req.id, "internal", "no se pudo registrar el hecho"),
+    }
+}
+
+fn fact_list(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let project = match resolve_project(state, p) {
+        Ok(pr) => pr,
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let all = p.get("all").and_then(Value::as_bool).unwrap_or(false);
+    let status = if all {
+        None
+    } else {
+        p.get("status").and_then(Value::as_str).or(Some("CURRENT"))
+    };
+    let facts = match state.reader.lock() {
+        Ok(conn) => {
+            match symphony_store::context::list_facts(&conn, &project.id.to_string(), status) {
+                Ok(f) => f,
+                Err(e) => return Response::error(req.id, "store_error", e.to_string()),
+            }
+        }
+        Err(_) => return Response::error(req.id, "store_error", "lector no disponible"),
+    };
+    let list: Vec<Value> = facts
+        .into_iter()
+        .map(|f| {
+            json!({
+                "id": f.id,
+                "project_id": f.project_id,
+                "key": f.key,
+                "value": f.value,
+                "kind": f.kind,
+                "status": f.status,
+                "superseded_by_id": f.superseded_by_id,
+                "created_at": f.created_at,
+            })
+        })
+        .collect();
+    Response::ok(req.id, json!({ "facts": list }))
 }
 
 /// Launch (FLOW §4.1): ¿es un repo?, ¿está inicializado?, ¿hay algo que recuperar?

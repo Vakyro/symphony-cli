@@ -272,3 +272,99 @@ fn project_files_are_upserted_per_project_and_deleted_with_their_chunks() {
         None
     );
 }
+
+#[test]
+fn project_facts_can_be_set_superseded_and_listed() {
+    let (conn, _, _, _) = seeded();
+    let f1 = ctx::set_fact(
+        &conn,
+        "p1",
+        "auth_storage",
+        "localStorage",
+        "DECISION",
+        None,
+        None,
+        100,
+    )
+    .unwrap();
+    assert_eq!(f1.key, "auth_storage");
+    assert_eq!(f1.value, "localStorage");
+    assert_eq!(f1.status, "CURRENT");
+    assert_eq!(f1.superseded_by_id, None);
+
+    // Un segundo hecho con otra clave
+    let f2 = ctx::set_fact(
+        &conn,
+        "p1",
+        "db_engine",
+        "sqlite",
+        "ARCHITECTURE",
+        None,
+        None,
+        200,
+    )
+    .unwrap();
+    assert_eq!(f2.status, "CURRENT");
+
+    let current = ctx::get_current_facts(&conn, "p1").unwrap();
+    assert_eq!(current.len(), 2);
+
+    // Actualizar `auth_storage` a `httpOnly cookie`
+    let f3 = ctx::set_fact(
+        &conn,
+        "p1",
+        "auth_storage",
+        "httpOnly cookie",
+        "DECISION",
+        None,
+        None,
+        300,
+    )
+    .unwrap();
+    assert_eq!(f3.status, "CURRENT");
+
+    // Ahora sólo hay 2 CURRENT: f2 y f3
+    let current = ctx::get_current_facts(&conn, "p1").unwrap();
+    assert_eq!(current.len(), 2);
+    assert_eq!(current[0].value, "httpOnly cookie");
+    assert_eq!(current[1].value, "sqlite");
+
+    // Listar todos los hechos
+    let all = ctx::list_facts(&conn, "p1", None).unwrap();
+    assert_eq!(all.len(), 3);
+    let superseded = all.iter().find(|f| f.id == f1.id).unwrap();
+    assert_eq!(superseded.status, "SUPERSEDED");
+    assert_eq!(superseded.superseded_by_id.as_deref(), Some(f3.id.as_str()));
+
+    // Marcar conflicto
+    assert!(ctx::set_fact_conflict(&conn, &f3.id).unwrap());
+    let current_after_conflict = ctx::get_current_facts(&conn, "p1").unwrap();
+    assert_eq!(current_after_conflict.len(), 1);
+    assert_eq!(current_after_conflict[0].key, "db_engine");
+}
+
+#[test]
+fn project_facts_enforces_single_current_per_key_in_db() {
+    let (conn, _, _, _) = seeded();
+    ctx::set_fact(
+        &conn,
+        "p1",
+        "singleton_key",
+        "v1",
+        "CONVENTION",
+        None,
+        None,
+        1,
+    )
+    .unwrap();
+    // Intento directo de insertar otro CURRENT para la misma clave falla por índice único parcial
+    let err = conn.execute(
+        "INSERT INTO project_facts (id, project_id, key, value, kind, status, created_at)
+         VALUES ('raw_id', 'p1', 'singleton_key', 'v2', 'CONVENTION', 'CURRENT', 2)",
+        [],
+    );
+    assert!(
+        err.is_err(),
+        "el índice único parcial project_facts_one_current debe rechazar 2 CURRENT"
+    );
+}

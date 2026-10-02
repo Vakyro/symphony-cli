@@ -77,7 +77,8 @@ ulid_id!(
     ExecutorChangeId,
     ProviderHealthId,
     UsageRecordId,
-    RoutingDecisionId
+    RoutingDecisionId,
+    FactId,
 );
 
 #[cfg(test)]
