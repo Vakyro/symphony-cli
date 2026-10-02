@@ -1,0 +1,67 @@
+# CLIs de P11 · Kimi Code, Copilot CLI y Antigravity (P11.S1)
+
+- **Fecha:** 2026-10-01 · **Agente:** claude-code/sonnet-5.5 · **Entorno:** Windows 11, los tres CLIs ya instalados y con sesión iniciada. No se leyeron credenciales.
+- **Pruebas en vivo:** autorizadas por Leo el 2026-10-01 (un turno mínimo, un `resume` y un modelo inexistente por CLI, más un `--session-id` en Copilot). Prompt: «Responde solo con la palabra: ok», en un directorio vacío. Salidas sanitizadas en `fixtures/providers/{kimi,copilot,antigravity}/`.
+- Desviación del PLAN: un solo archivo en vez de tres `cli-*.md`, porque los tres comparten el mismo contrato.
+
+OpenCode (`1.15.13`) también está instalado; queda fuera del alcance (ADR-0008).
+
+## Comparativa
+
+| | Kimi Code 1.44.0 | Copilot CLI 1.0.60 | Antigravity `agy` 1.2.11 |
+|---|---|---|---|
+| Turno headless | `kimi --print --output-format stream-json` (prompt por stdin) | `copilot --output-format json --no-ask-user` (prompt por stdin) | `agy --print= --input-format stream-json --output-format stream-json` (prompt por stdin como JSON) |
+| Duración del turno mínimo | 20,9 s | 20,6 s | 10,1 s (modelo: 3,2 s) |
+| Formato | **un** JSON al final del turno (`role`/`content[]`: `think`, `text`); sin deltas | JSONL de eventos con `type` (`user.message`, `assistant.turn_start`, `assistant.message_delta`, `assistant.message`, `assistant.turn_end`, `result`…) | NDJSON con `event`: `init`, `step_update` (con `text_delta`), `result` |
+| **Id de sesión** | **solo en stderr**: `To resume this session: kimi -r <uuid>` | solo en el evento final `result.sessionId`; **o se fija antes con `--session-id <uuid>`** (verificado: el `result` devuelve el mismo UUID) | en el primer evento `init.conversation_id` |
+| Resume | `kimi -r <id> --print -p …` ✅ conserva contexto | `copilot --resume=<id> -p …` ✅ conserva contexto | `agy --conversation <id> -p …` ✅ conserva contexto |
+| Uso/tokens | no aparece | solo `premiumRequests` (0,33 por turno) y duración; sin tokens | `usage` por paso y en `result` (22.001 entrada abriendo; 27.983 al retomar) |
+| Herramientas / permisos | `--yolo`; no probado | `--allow-all-tools`, `--no-ask-user`; no probado | `permission_mode: request-review` por defecto; `--mode accept-edits`, `--dangerously-skip-permissions`; no probado |
+| Lista de modelos | no probado (`-m`, valor desde config) | `--model` (hay `auto`) | `agy models` (Gemini 3.x, Claude Sonnet/Opus 4.6, GPT-OSS 120B) |
+| Modelo inexistente | stdout `LLM not set`, id de sesión en stderr; el exit code no se capturó | stderr `Error: Model "x" from --model flag is not available.` | `result.status = "ERROR"` con el texto y la lista de modelos disponibles; el id de conversación viene vacío |
+| Cierre de stdin | no hizo falta (con `</dev/null`) | idem | idem |
+
+## Lo que cambia para el adapter
+1. **Kimi** necesita leer stderr para el id de sesión (no sale por stdout); `parse_stream_line` no basta. Sin deltas: el chat verá la respuesta de golpe.
+2. **Copilot**: usar `--session-id <uuid>` generado por Symphony; así el id se conoce antes del primer evento y no hace falta parsear el `result`.
+3. **Copilot cambió de modelo al retomar** (`claude-haiku-4.5` → `gpt-5.4-mini`) porque el default es `auto`: el adapter debe pasar siempre `--model` explícito, o Symphony pierde el principio «modelo exacto nunca sobrescrito».
+4. **Antigravity** es el más parecido a Claude (`init` con id, deltas, uso por turno). `--input-format stream-json` permite varios turnos con un solo proceso, pero no se probó.
+5. Los tres respetan `AGENT ≠ MODEL`: el modelo se pasa por flag en cada llamada.
+6. **Coste de abrir sesión**: Antigravity gastó ~22k tokens de entrada solo en abrir (Codex ~18k, Claude ~27k, STATUS). Copilot no reporta tokens; Kimi tampoco.
+
+## Kimi: hallazgos de P11.S2 (2026-10-01)
+- **Prompt por stdin:** `kimi --print --output-format stream-json` lee el prompt hasta EOF (sin `-p`). Es lo que exige el contrato (el prompt nunca va como argumento).
+- **`-S <uuid>` crea la sesión con ese id** (verificado con un UUID nuevo) y la retoma si existe: sirve para `spawn` y para `resume`. El id sigue saliendo solo por stderr (`To resume this session: kimi -r <uuid>`); `--verbose` no lo mueve a stdout.
+- **`--print` auto-aprueba las herramientas** (el `--help` lo dice) y Kimi no tiene sandbox: el agente puede ejecutar cualquier comando. Riesgo a decidir antes de ofrecerlo en el chat.
+- **Un JSON por mensaje**, no solo al final: `assistant` (`content` texto o lista `think`/`text`, más `tool_calls[].function{name,arguments}`) y `tool` (`tool_call_id`, `content`). Herramientas vistas: `WriteFile`, `Shell`, `ReadFile`. Un fallo llega como `<system>ERROR: …</system>` (`Command failed with exit code: 3.`, `` `x` does not exist.``). Sin tokens de uso ni evento de fin de turno.
+- Fixtures: `fixtures/providers/kimi/tools.jsonl` y `tools-error.jsonl`.
+
+## Antigravity: hallazgos de P11.S3 (2026-10-01)
+- **El prompt no puede ir por stdin con `--print`**: `--print` exige el prompt como valor. La salida es `--print= --input-format stream-json --output-format stream-json` y un mensaje por línea de stdin: **`{"event":"user","message":{"content":"…"}}`** (`message` es un objeto; `text` da «has no content»; otros eventos se ignoran con un aviso). Al cerrar stdin el proceso termina.
+- **Permisos en headless:** lo que pide permiso se **deniega solo**. Con el modo por defecto ni siquiera se puede escribir un archivo; el `result` llega como `SUCCESS` con `response` vacío y `denied_actions`. `--mode accept-edits` permite editar y deniega el shell (el paso `run_command` figura `DONE` aunque se haya denegado: solo `denied_actions` lo delata). `--dangerously-skip-permissions` permite todo y no tiene sandbox. **`--sandbox` se cuelga en Windows** al ejecutar un comando (hubo que cortarlo a los 180 s).
+- **Eventos:** `init{conversation_id,tools,permission_mode}`; `step_update{step_type: user_input|agent_response|tool|system_message, state: ACTIVE|DONE|ERROR, tool_name, tool_info.parameters, usage}`; `result{status, response, usage, denied_actions, error}`. Herramientas vistas: `write_to_file` (`TargetFile`), `run_command` (`CommandLine`), `manage_task`. Los `text_delta` llegan troceados por paso (a veces un `DONE` trae el texto entero, a veces `ACTIVE` + `DONE` con un salto de línea): el adapter usa `result.response`.
+- **Tokens:** el `result.usage` **suma** todos los pasos (44.631 de entrada en un turno de 2 pasos de ~22.000); el contexto real está en el `usage` del último paso `agent_response`. Abrir sesión cuesta ~22k tokens de entrada.
+- `--model` acepta el slug de `agy models` (`gemini-3.8-flash-low`, verificado en vivo).
+- `agy` se **actualizó solo** de 1.2.11 a 1.2.14 durante la sesión.
+- Fixtures: `fixtures/providers/antigravity/tools.jsonl` y `tools-denied.jsonl`.
+
+## Copilot: hallazgos de P11.S4 (2026-10-01)
+- **El prompt va por stdin sin `-p`:** con stdin entubado, `copilot --output-format json --no-ask-user` corre no interactivo y lee el prompt (el `user.message` recibido fue el texto + `\n`). `-p ""` y `-p -` no sirven (`-` se toma como texto).
+- **Id de sesión solo en el `result` final** (`sessionId`), no antes: el adapter lo emite como `SessionStarted` al final del turno, que basta porque `resume` solo hace falta después. `--session-id <uuid>` lo fija si el runtime lo pide; `--resume=<id>` (con `=`) retoma.
+- **Eventos:** `assistant.message` (`content`, `toolRequests`, `model`), `tool.execution_start{toolCallId,toolName,arguments}`, `tool.execution_complete{toolCallId,success,error{code,message},result.content}`, `result{sessionId,exitCode,usage.premiumRequests}`; además `subagent.*`, `session.*`, `assistant.reasoning*`. Sin tokens de uso. Herramientas vistas: `create`, `apply_patch` (los argumentos son el texto del parche), `powershell` (`bash` fuera de Windows), `report_intent`, `task`. Un comando de shell dice `<shellId: N completed with exit code C>`.
+- **Permisos en headless:** por defecto deniega las escrituras (`success:false`, `code:"denied"`; el archivo no se crea) y deja pasar comandos de solo lectura (`echo`, `Get-Command`). **`--allow-tool=write`** permite editar y mantiene el shell en solo lectura: `git --version` fue denegado y el modelo probó cuatro rodeos que también se denegaron. Es el equivalente de `acceptEdits`. `--allow-all-tools` lo permite todo.
+- **`--model` solo aceptó `auto`** en esta cuenta: `claude-haiku-4.5`, `claude-sonnet-4.5/4.6`, `gpt-5.2`, `gpt-5.4-mini`, `gpt-5-mini`, `gemini-3.5-flash` y `gpt-4.1` dan `Error: Model "x" from --model flag is not available.` por stderr (sin coste; falla antes de llamar al servicio). `copilot help config` documenta 17 ids; cuáles valen depende del plan. Con `auto`, Copilot cambia de modelo entre turnos (vimos `claude-haiku-4.5` y `gpt-5.4-mini`).
+- **Arranque lento:** `copilot --version` tarda 1,7–3,4 s (el shim de npm, ~2 s). Es 4–8 veces lo de los otros CLIs; el daemon detecta los proveedores en paralelo para que el arranque no sume.
+- `copilot.exe` nativo en `WinGet\Packages\GitHub.Copilot_*`; el adapter evita el shim `copilot.cmd`.
+- Fixtures: `fixtures/providers/copilot/{stdin,tools-denied,tools-write}.jsonl`.
+
+## Hooks y Test C (`hooks_can_hold`)
+Sin verificar y no hace falta para el chat: el trait admite `supports_hooks() = false` y `hooks_can_hold() = None`. Se retoma si P08 vuelve. Los `--help` de los tres no mencionan hooks.
+
+## Sin verificar
+1. **Errores de cuota, rate limit y auth** (no se pueden provocar sin agotar la cuota). `parse_error` empezará con los textos de modelo inexistente de arriba y quedará con fixtures sintéticas, como Claude y Codex (`fixtures/providers/README.md`).
+2. Eventos de herramientas (`tool_call`, edición de archivos) en los tres: el prompt mínimo no usó ninguna. Falta un turno que edite un archivo, probablemente en el live de S2–S4.
+3. Exit code de Kimi con modelo inválido; comportamiento con Ctrl+C / kill del árbol en Windows.
+4. Skills nativas: dónde están (`~/.copilot/skills`, `~/.gemini/skills`, `--skills-dir` en Kimi) y qué prefijo usa cada una para invocarlas.
+5. **ToS (`tos.md`)**: no cubre a estos tres. Pendiente de Leo; `agy` ofrece modelos de Anthropic y OpenAI, lo que hace más importante revisar cómo cuenta la cuota.
+6. Copilot y Antigravity consumen «solicitudes premium» o cuota propia: medir con uso real antes de ofrecerlos como destino de failover.

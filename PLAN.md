@@ -12,6 +12,7 @@
 | 2026-09-24 | P01.S2 investiga el **modo de interacción** (headless o PTY) y P01.S8 produce **ADR-0005** | Ningún documento decidía cómo ve e interviene Leo en la sesión de cada CLI. Headless pierde la TUI del CLI; PTY dentro de ratatui obliga a emular una terminal. Cambia P04, P05 y P07 |
 | 2026-09-24 | **P08–P16 son provisionales.** Nuevo gate **P07.S10 · Replanificación** tras v0.1: uso real ≥ 2 semanas con 2 proveedores, y luego revisión de P08–P16 con ADR | El detalle de P08–P16 se escribió sin evidencia de uso; el spike y el uso diario lo van a cambiar. Evita construir 5 adapters y una GUI sobre supuestos |
 | 2026-09-28 | Nueva fase **P07.5 · Chat general** antes de P08 (ADR-0006, aceptado): chat agéntico en la vista inicial, con worktree propio pre-main y cambio de proveedor sin perder contexto. P08–P10 quedan diferidas y pendientes de rediseño | El uso real de v0.1 mostró que el valor está en un chat simple con continuidad entre proveedores, no en orquestar varios agentes. El chat reutiliza casi todo P05–P07 |
+| 2026-10-01 | **P11 se adelanta** tras P07.S10; P09 y P10 se recortan al chat (ADR-0008, aceptado). Orden: P07.S10 → P11 → P10 recortada → P09 recortada → P08 | El core ya es genérico y los 3 CLIs están instalados; el chat no usa P08–P10 |
 
 ---
 
@@ -916,7 +917,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 ## P08 · Runtime multiagente
 
 **Objetivo:** 3 agentes en paralelo sin que la máquina se trabe.
-**Prerrequisito:** P07.5 cerrada y ADR de replanificación de P07.S10 aprobado. **Rediseño pendiente** por ADR-0006: el destino de integración pasa a ser la rama del chat y se reevalúa el alcance. Si el ADR cambió esta fase, gana el ADR (§1.2).
+**Prerrequisito:** P07.5 cerrada, P11 cerrada (ADR-0008) y ADR de replanificación de P07.S10 aprobado. **Rediseño pendiente** por ADR-0006: el destino de integración pasa a ser la rama del chat y se reevalúa el alcance. Si el ADR cambió esta fase, gana el ADR (§1.2).
 **Docs:** IDEA §5.4, §5.9–§5.11; STACK §7.2, §8, §23, §25.2; DB §3.B, §3.F, §3.H, §6 (Fase 2); FLOW §9, §10, §14, §15, Journeys B y D; ADR-0003.
 **Tecnologías:** `tokio::sync::Semaphore`, BinaryHeap, sysinfo, Job Objects / cgroups v2 / process groups, notify (en P09), cargo-llvm-cov.
 **Skills:** `test-driven-development`, `performance-optimization`, `deprecation-and-migration`, `the-council` (si el benchmark falla).
@@ -1047,6 +1048,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 ## P11 · Proveedores restantes
 
 **Objetivo:** Kimi Code, Antigravity y Copilot CLI con el mismo contrato.
+**Orden (ADR-0008):** se ejecuta justo después de P07.S10, **antes de P08–P10**. Acotada al chat: adapter, fixtures, contrato, registro y skills por proveedor; `hooks_can_hold` solo se investiga. Punto de partida: `docs/research/cli-p11.md`. Live L3 con permiso de Leo (dado el 2026-10-01 para S1).
 **Docs:** STACK §18.4–§18.6; P01.S2 como modelo de investigación.
 **Skills:** `investigate`, `incremental-implementation`.
 

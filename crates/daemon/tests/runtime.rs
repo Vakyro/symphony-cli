@@ -33,8 +33,10 @@ fn fake_agent() -> PathBuf {
                 .unwrap()
                 .success();
             assert!(ok, "no se pudo construir fake-agent");
-            PathBuf::from(env!("CARGO_BIN_EXE_symphonyd"))
-                .with_file_name(format!("fake-agent{}", std::env::consts::EXE_SUFFIX))
+            symphony_testkit::pinned_bin(
+                &PathBuf::from(env!("CARGO_BIN_EXE_symphonyd"))
+                    .with_file_name(format!("fake-agent{}", std::env::consts::EXE_SUFFIX)),
+            )
         })
         .clone()
 }
@@ -1783,6 +1785,47 @@ ms = 1500
     e.writer.shutdown();
 }
 
+/// ADR-0009: un CLI que da su id de sesión solo por stderr (Kimi) lo deja guardado y
+/// permite retomar la sesión con ese mismo id.
+#[tokio::test(flavor = "multi_thread")]
+async fn session_id_from_stderr_is_stored_and_resumed() {
+    let script = "[[step]]
+kind = \"say\"
+text = \"listo\"
+";
+    let e = env_with(&[("fake-stderr", script)], None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "id por stderr",
+            Execution::Exact("fake-stderr/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let agent = created.agent_id;
+    let first: String = one(
+        &e,
+        &format!("SELECT cli_session_id FROM agent_runs WHERE agent_id = '{agent}'"),
+    );
+    assert!(
+        first.starts_with("fake-"),
+        "id de stderr sin guardar: {first}"
+    );
+
+    let run = e.runtime.continue_session(agent, "sigue").await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let second: String = one(
+        &e,
+        &format!("SELECT cli_session_id FROM agent_runs WHERE id = '{run}'"),
+    );
+    assert_eq!(second, first, "el run nuevo debe retomar la misma sesión");
+    e.writer.shutdown();
+}
+
 /// P07.5.S1: un mensaje después del turno retoma la sesión del CLI (mismo modelo y
 /// mismo session id, sin handoff) y reabre al agente `COMPLETED`.
 #[tokio::test(flavor = "multi_thread")]
@@ -2067,6 +2110,179 @@ text = "Tarea completada con éxito: módulo users y tests agregados."
     );
 
     e.writer.shutdown();
+}
+
+/// Los cinco proveedores de v0.1 + P11, con sus ids reales.
+const MATRIX: [&str; 5] = ["anthropic", "openai", "moonshot", "google", "github"];
+
+const MATRIX_A: &str = r#"
+[[step]]
+kind = "edit"
+path = "email.js"
+content = "export function validateEmail(e) { return e.includes('@'); }\n"
+[[step]]
+kind = "edit"
+path = "password.js"
+content = "export function hashPassword(p) { return 'hash:' + p; }\n"
+[[step]]
+kind = "say"
+text = "Creados módulos email y password.\nNext: implementar UserStore en users.js y tests en users_test.js"
+[[step]]
+kind = "hang"
+"#;
+
+const MATRIX_B: &str = r#"
+[[step]]
+kind = "edit"
+path = "users.js"
+content = "import { validateEmail } from './email.js';\nexport class UserStore { constructor() { this.users = []; } }\n"
+[[step]]
+kind = "edit"
+path = "users_test.js"
+content = "import { UserStore } from './users.js';\n// tests passed\n"
+[[step]]
+kind = "say"
+text = "Tarea completada con éxito: módulo users y tests agregados."
+"#;
+
+/// P11.S5: forced kill cruzado (Test D) del proveedor `from` hacia cada uno de los otros cuatro.
+/// A trabaja y se cuelga; el watchdog lo mata sin cleanup; B continúa solo con el handoff.
+async fn handoff_matrix_from(from: &'static str) {
+    let targets: Vec<&'static str> = MATRIX.iter().copied().filter(|p| *p != from).collect();
+    let mut providers: Vec<(&'static str, &str)> = vec![(from, MATRIX_A)];
+    providers.extend(targets.iter().map(|t| (*t, MATRIX_B)));
+    let e = env_with_watchdog(
+        &providers,
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+
+    for to in targets {
+        let pair = format!("{from} -> {to}");
+        let title = format!("Sistema de usuarios {from}-{to}");
+        let created = e
+            .runtime
+            .create_agent(req(&e, &title, Execution::Exact(format!("{from}/fast"))))
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+        e.writer.handle().flush().await.unwrap();
+        let agent = created.agent_id;
+        let q = |sql: &str| sql.replace("{agent}", &agent.to_string());
+
+        assert_eq!(
+            one::<String>(
+                &e,
+                &q("SELECT end_reason FROM agent_runs WHERE agent_id = '{agent}' AND seq = 1")
+            ),
+            "NO_HEARTBEAT",
+            "{pair}: el run de origen debe morir por NO_HEARTBEAT"
+        );
+        assert_eq!(
+            one::<String>(&e, &q("SELECT state FROM agents WHERE id = '{agent}'")),
+            "FAILED",
+            "{pair}"
+        );
+
+        e.runtime
+            .switch(agent, &format!("{to}/fast"))
+            .await
+            .unwrap_or_else(|err| panic!("{pair}: el cambio falló: {}", err.0));
+        e.runtime.wait_executors().await;
+        e.writer.handle().flush().await.unwrap();
+
+        assert_eq!(
+            one::<String>(&e, &q("SELECT state FROM agents WHERE id = '{agent}'")),
+            "COMPLETED",
+            "{pair}: B debe terminar la tarea"
+        );
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        let runs: Vec<(String, String, Option<String>)> = conn
+            .prepare(&q(
+                "SELECT provider_id, status, end_reason FROM agent_runs WHERE agent_id = '{agent}' ORDER BY seq",
+            ))
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            runs,
+            vec![
+                (from.into(), "FAILED".into(), Some("NO_HEARTBEAT".into())),
+                (to.into(), "EXITED".into(), Some("COMPLETED".into())),
+            ],
+            "{pair}"
+        );
+        assert_eq!(
+            one::<i64>(
+                &e,
+                &q(
+                    "SELECT COUNT(*) FROM handoffs WHERE outcome = 'CONTINUED' AND agent_id = '{agent}'"
+                )
+            ),
+            1,
+            "{pair}: un handoff continuado"
+        );
+
+        // Lo que B recibió: solo el handoff, con objetivo, el qué seguía y los archivos de A.
+        let prompts: Vec<String> = conn
+            .prepare(&q(
+                "SELECT content FROM messages WHERE role = 'USER' AND agent_id = '{agent}' ORDER BY created_at",
+            ))
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(prompts.len(), 2, "{pair}");
+        let handoff = &prompts[1];
+        assert!(handoff.contains(&title), "{pair}: falta el objetivo");
+        assert!(
+            handoff.contains("implementar UserStore en users.js y tests en users_test.js"),
+            "{pair}: falta el qué seguía"
+        );
+        assert!(
+            handoff.contains("email.js") && handoff.contains("password.js"),
+            "{pair}: faltan los archivos de A"
+        );
+        for f in ["email.js", "password.js", "users.js", "users_test.js"] {
+            assert!(created.worktree.join(f).is_file(), "{pair}: falta {f}");
+        }
+        assert_eq!(
+            git(&created.worktree, &["branch", "--show-current"]),
+            created.branch,
+            "{pair}"
+        );
+    }
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_matrix_from_anthropic() {
+    handoff_matrix_from("anthropic").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_matrix_from_openai() {
+    handoff_matrix_from("openai").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_matrix_from_moonshot() {
+    handoff_matrix_from("moonshot").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_matrix_from_google() {
+    handoff_matrix_from("google").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_matrix_from_github() {
+    handoff_matrix_from("github").await;
 }
 
 /// Un CLI que falla (login, cuota) antes de leer su prompt deja un `EPIPE` al escribirlo: no es un

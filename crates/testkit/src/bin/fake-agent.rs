@@ -27,6 +27,8 @@ struct Agent {
     /// `--stdin stream`: como `claude -p --input-format stream-json`, no sale
     /// hasta que le cierran stdin (aunque el turno ya haya terminado).
     stdin_stream: bool,
+    /// `--session-on stderr`: el id de sesión sale por stderr y no en `system/init` (como Kimi).
+    session_on_stderr: bool,
 }
 
 fn emit(v: &Value) {
@@ -129,8 +131,14 @@ impl Agent {
     }
 
     fn run(&mut self, steps: &[Step]) -> ExitCode {
+        let init_session = if self.session_on_stderr {
+            let _ = writeln!(std::io::stderr(), "FAKE_SESSION {}", self.session_id);
+            Value::Null
+        } else {
+            json!(self.session_id)
+        };
         emit(
-            &json!({"type": "system", "subtype": "init", "session_id": self.session_id, "model": self.model, "cwd": self.cwd}),
+            &json!({"type": "system", "subtype": "init", "session_id": init_session, "model": self.model, "cwd": self.cwd}),
         );
         self.hook("SessionStart", json!({"source": "startup"}));
         self.hook("UserPromptSubmit", json!({}));
@@ -277,7 +285,7 @@ fn main() -> ExitCode {
             let (mut script, mut hook, mut hook_args, mut transcript) =
                 (None, None, Vec::new(), None);
             let (mut model, mut session): (Option<String>, Option<String>) = (None, None);
-            let mut stdin_stream = false;
+            let (mut stdin_stream, mut session_on_stderr) = (false, false);
             let mut it = args.iter().skip(1);
             while let Some(a) = it.next() {
                 match (a.as_str(), it.next()) {
@@ -288,6 +296,7 @@ fn main() -> ExitCode {
                     ("--model", Some(v)) => model = Some(v.clone()),
                     ("--session-id", Some(v)) => session = Some(v.clone()),
                     ("--stdin", Some(v)) if v == "stream" => stdin_stream = true,
+                    ("--session-on", Some(v)) if v == "stderr" => session_on_stderr = true,
                     _ => return usage(),
                 }
             }
@@ -314,6 +323,7 @@ fn main() -> ExitCode {
                 transcript,
                 turns: 0,
                 stdin_stream,
+                session_on_stderr,
             };
             std::thread::sleep(Duration::from_millis(script.startup_delay_ms));
             agent.run(&script.steps)

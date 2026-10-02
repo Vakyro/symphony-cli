@@ -9,7 +9,12 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-const BIN: &str = env!("CARGO_BIN_EXE_fake-agent");
+/// Copia fija del binario (ver `symphony_testkit::pinned_bin`).
+static BIN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    symphony_testkit::pinned_bin(std::path::Path::new(env!("CARGO_BIN_EXE_fake-agent")))
+        .to_string_lossy()
+        .into_owned()
+});
 
 struct Run {
     dir: tempfile::TempDir,
@@ -32,10 +37,16 @@ impl Run {
     fn command(&self, script: &str) -> Command {
         let path = self.dir.path().join("script.toml");
         std::fs::write(&path, script).unwrap();
-        let mut cmd = Command::new(BIN);
+        let mut cmd = Command::new(BIN.as_str());
         cmd.args(["run", "--script"])
             .arg(&path)
-            .args(["--hook", BIN, "--hook-arg", "record-hook", "--hook-arg"])
+            .args([
+                "--hook",
+                BIN.as_str(),
+                "--hook-arg",
+                "record-hook",
+                "--hook-arg",
+            ])
             .arg(&self.hooks)
             .arg("--transcript")
             .arg(&self.transcript)

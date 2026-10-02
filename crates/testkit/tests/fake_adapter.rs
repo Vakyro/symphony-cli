@@ -11,7 +11,12 @@ use symphony_core::FailureType;
 use symphony_process::{OutputLine, spawn};
 use symphony_testkit::FakeAdapter;
 
-const BIN: &str = env!("CARGO_BIN_EXE_fake-agent");
+/// Copia fija del binario (ver `symphony_testkit::pinned_bin`).
+static BIN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    symphony_testkit::pinned_bin(std::path::Path::new(env!("CARGO_BIN_EXE_fake-agent")))
+        .to_string_lossy()
+        .into_owned()
+});
 
 fn fixtures() -> Fixtures {
     Fixtures {
@@ -40,7 +45,7 @@ fn fixtures() -> Fixtures {
 #[test]
 fn fake_adapter_passes_the_contract_suite() {
     let dir = tempfile::tempdir().unwrap();
-    let adapter = FakeAdapter::new(BIN, dir.path().join("s.toml"));
+    let adapter = FakeAdapter::new(BIN.as_str(), dir.path().join("s.toml"));
     let failures = contract::check(&adapter, &fixtures());
     assert!(
         failures.is_empty(),
@@ -60,14 +65,14 @@ async fn fake_adapter_end_to_end_stream_and_hooks() {
     )
     .unwrap();
     let hooks = dir.path().join("hooks.jsonl");
-    let adapter = FakeAdapter::new(BIN, &script);
+    let adapter = FakeAdapter::new(BIN.as_str(), &script);
     let req = SpawnRequest {
         worktree: dir.path().to_path_buf(),
         model: "smart".into(),
         prompt: "creá a.js".into(),
         session_id: Some("sess-1".into()),
         hook: Some(HookCommand {
-            program: BIN.into(),
+            program: BIN.as_str().into(),
             args: vec!["record-hook".into(), hooks.display().to_string()],
         }),
         env: vec![("SYMPHONY_AGENT_ID".into(), "agent-1".into())],

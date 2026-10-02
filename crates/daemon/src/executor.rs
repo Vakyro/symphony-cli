@@ -282,7 +282,17 @@ impl Runtime {
                             let _ = proc.close_stdin().await;
                         }
                     }
-                    Some(OutputLine::Stderr(_)) => self.beat(l.run_id),
+                    Some(OutputLine::Stderr(line)) => {
+                        self.beat(l.run_id);
+                        let mut end_turn = false;
+                        let events = l.adapter.parse_stderr_line(&line);
+                        if !self.apply_events(&l, &proc, events, &mut fatal, &mut end_turn).await {
+                            break None;
+                        }
+                        if end_turn {
+                            let _ = proc.close_stdin().await;
+                        }
+                    }
                 },
                 ctl = rx.recv(), if control_open => match ctl {
                     None => control_open = false,
@@ -382,7 +392,20 @@ impl Runtime {
         fatal: &mut Option<ProviderError>,
         end_turn: &mut bool,
     ) -> bool {
-        for event in l.adapter.parse_stream_line(line) {
+        let events = l.adapter.parse_stream_line(line);
+        self.apply_events(l, proc, events, fatal, end_turn).await
+    }
+
+    /// Eventos de stdout o de stderr (ADR-0009) al bus. `false` si la base ya no acepta escrituras.
+    async fn apply_events(
+        &self,
+        l: &Launch,
+        proc: &Supervised,
+        events: Vec<AgentEvent>,
+        fatal: &mut Option<ProviderError>,
+        end_turn: &mut bool,
+    ) -> bool {
+        for event in events {
             match &event {
                 AgentEvent::SessionStarted {
                     cli_session_id: Some(cli),

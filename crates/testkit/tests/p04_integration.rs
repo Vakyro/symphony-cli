@@ -56,12 +56,14 @@ async fn agent_in_worktree_is_streamed_killed_and_cleaned_up() {
     )
     .unwrap();
     let mut agent = spawn(
-        ProcessSpec::new(env!("CARGO_BIN_EXE_fake-agent"))
-            .arg("run")
-            .arg("--script")
-            .arg(&script)
-            .cwd(wt.root())
-            .env("SYMPHONY_AGENT_ID", "agent-001"),
+        ProcessSpec::new(symphony_testkit::pinned_bin(std::path::Path::new(env!(
+            "CARGO_BIN_EXE_fake-agent"
+        ))))
+        .arg("run")
+        .arg("--script")
+        .arg(&script)
+        .cwd(wt.root())
+        .env("SYMPHONY_AGENT_ID", "agent-001"),
     )
     .await
     .unwrap();

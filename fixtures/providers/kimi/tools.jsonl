@@ -1,0 +1,4 @@
+{"role":"assistant","content":[{"type":"think","think":"Simple task. Working directory is empty.","encrypted":null}],"tool_calls":[{"type":"function","id":"tool_MfenCKeOUn6PDWX5nCGhR6By","function":{"name":"WriteFile","arguments":"{\"path\":\"hola.txt\",\"content\":\"hola\\n\"}"}},{"type":"function","id":"tool_ol09M8RK7dTl2BoXzGs0MLxZ","function":{"name":"Shell","arguments":"{\"command\":\"echo listo\"}"}}]}
+{"role":"tool","content":"<system>File successfully overwritten. Current size: 5 bytes.</system>","tool_call_id":"tool_MfenCKeOUn6PDWX5nCGhR6By"}
+{"role":"tool","content":[{"type":"text","text":"<system>Command executed successfully.</system>"},{"type":"text","text":"listo\n"}],"tool_call_id":"tool_ol09M8RK7dTl2BoXzGs0MLxZ"}
+{"role":"assistant","content":"hecho"}

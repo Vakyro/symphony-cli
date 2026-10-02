@@ -29,6 +29,7 @@ symphony-adapter-claude = { path = "../adapters/claude" }
 symphony-adapter-codex = { path = "../adapters/codex" }
 symphony-adapter-common = { path = "../adapters/common" }
 symphony-store = { path = "../store" }
+symphony-testkit = { path = "../testkit" }
 tempfile.workspace = true
 trycmd.workspace = true
 

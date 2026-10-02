@@ -7,9 +7,9 @@
 ![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-blue)
 ![Licencia MIT](https://img.shields.io/badge/licencia-MIT-green)
 
-**v0.1.0 disponible, y el chat general (P07.5) ya está en `main`.** Abres `symphony` en cualquier carpeta, conversas con Claude Code o Codex y puedes pasar de uno a otro a mitad de conversación sin repetir nada. Incluye TUI, worktrees, handoff y recovery.
+**v0.1.0 disponible, y el chat general (P07.5) ya está en `main`.** Abres `symphony` en cualquier carpeta, conversas con Claude Code, Codex, Kimi Code, Antigravity o Copilot y puedes pasar de uno a otro a mitad de conversación sin repetir nada. Incluye TUI, worktrees, handoff y recovery.
 
-Symphony es un runtime local, escrito en Rust, que coordina los CLIs oficiales de IA para código desde una sola terminal. Hoy funcionan **Claude Code y Codex**; Antigravity, Kimi Code y Copilot están en el roadmap.
+Symphony es un runtime local, escrito en Rust, que coordina los CLIs oficiales de IA para código desde una sola terminal. Hoy funcionan **Claude Code, Codex, Kimi Code, Antigravity (`agy`) y Copilot**. Los tres últimos llegaron en P11: el cambio de proveedor con handoff está probado con CLIs reales, pero sus skills nativas aún no funcionan en el chat y cada uno tiene sus límites de permisos (ver el [QUICKSTART](QUICKSTART.md#proveedores-y-permisos)).
 
 **El problema.** Si usas varios de estos CLIs, los tienes en terminales separadas. Cuando a uno se le acaba la cuota, abres otro y le vuelves a explicar todo: la tarea, qué archivos tocaste, qué faltaba. Y si corres tres agentes a la vez, cada uno lanza sus builds y tests y la computadora se traba.
 
@@ -61,7 +61,7 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
  ├── Event bus ..... hooks de cada CLI normalizados a un solo stream
  ├── Checkpoints ... incrementales, escritos antes de fallar, no después
  ├── Handoff ....... arma el prompt para el siguiente modelo (con la conversación)
- ├── Adapters ...... Claude Code · Codex  (Antigravity · Kimi · Copilot: planeados)
+ ├── Adapters ...... Claude Code · Codex · Kimi · Antigravity · Copilot
  ├── Scheduler ..... planeado (P08): clases de operación 0–4 + límites del SO
  └── Context engine  planeado (P09): handoff comprimido y MCP de contexto
         │
@@ -90,11 +90,11 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
 | P01 · Spike | Evidencia de hooks, handoff y consumo con Claude Code + Codex | ✅ p01-done |
 | P02–P07 · Core → **v0.1** | Daemon, SQLite, worktrees, adapters, checkpoints, handoff, TUI | ✅ **v0.1.0** |
 | P07.5 · Chat general | Chat como vista inicial, cambio de proveedor sin perder contexto, skills, exportar | ✅ p075-done |
-| P07.S10 | Replanificación de P08–P16 con lo aprendido en el uso (ADR-0007) | 🟡 en curso |
+| P07.S10 | Replanificación de P08–P16 con lo aprendido en el uso (ADR-0007, ADR-0008: P11 se adelantó) | 🟡 P08–P10 siguen diferidas |
 | P08 · Multiagente | Scheduler de recursos, DAG, validación | ⏳ (diferido a P07.S10) |
 | P09 · Context engine | Handoff comprimido, MCP de contexto | ⏳ |
 | P10 · Failover → **v0.5** | Salud de proveedores, failover automático, profiles | ⏳ |
-| P11 · Más proveedores | Antigravity, Kimi, Copilot | ⏳ |
+| P11 · Más proveedores | Kimi, Antigravity y Copilot con el mismo contrato; matriz de handoff entre los cinco | ✅ p11-done |
 | P12–P13 → **v0.9** | Plugins, endurecimiento | ⏳ |
 | P14–P16 → **v1.0** | Sugerencias de modelo, GUI (Tauri), validación final | ⏳ |
 

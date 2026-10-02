@@ -20,6 +20,32 @@ use serde_json::Value;
 use symphony_core::FailureType;
 pub use symphony_process::ProcessSpec;
 
+/// El primer `<dir>/<name><EXE_SUFFIX>` del `PATH` que sea un archivo.
+pub fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
+        .find(|p| p.is_file())
+}
+
+/// El campo de texto `key` de un objeto JSON.
+pub fn json_str(v: &Value, key: &str) -> Option<String> {
+    v.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+/// `true` si `token` aparece en `text` como palabra entera: `429` sí, `4290` y `a401b` no.
+pub fn has_token(text: &str, token: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric())
+        .any(|w| w == token)
+}
+
+/// Una línea de texto plano (stderr o stdout) que parece un error (`Error: …`, `fatal: …`).
+/// El resto es ruido y no debe clasificarse: un «429» en una ruta no es un límite de uso.
+pub fn looks_like_error(line: &str) -> bool {
+    let l = line.trim_start().to_lowercase();
+    l.starts_with("error") || l.starts_with("fatal")
+}
+
 /// Evento canónico (IDEA §5.3). Venga del stream o de un hook, se ve igual.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -237,6 +263,11 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// Una línea de stdout del CLI → eventos. Nunca falla: lo que no entiende lo ignora.
     fn parse_stream_line(&self, line: &str) -> Vec<AgentEvent>;
+    /// Una línea de stderr del CLI → eventos (ADR-0009). Por defecto, ninguno: solo la
+    /// implementan los CLIs que dan por stderr algo que Symphony necesita (id de sesión, errores).
+    fn parse_stderr_line(&self, _line: &str) -> Vec<AgentEvent> {
+        Vec::new()
+    }
     /// El payload JSON de un hook → eventos.
     fn parse_hook(&self, payload: &Value) -> Vec<AgentEvent>;
     /// Texto de error (stderr, mensaje de fallo) → error clasificado, si lo reconoce.

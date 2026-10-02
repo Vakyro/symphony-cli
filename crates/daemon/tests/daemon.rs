@@ -11,13 +11,15 @@ use symphony_protocol::transport;
 use symphony_protocol::{Message, Outcome, Request};
 
 fn spawn_daemon(home: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_symphonyd"))
-        .env("SYMPHONY_HOME", home)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("arrancar symphonyd")
+    Command::new(symphony_testkit::pinned_bin(Path::new(env!(
+        "CARGO_BIN_EXE_symphonyd"
+    ))))
+    .env("SYMPHONY_HOME", home)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("arrancar symphonyd")
 }
 
 async fn call(home: &Path, method: &str, params: Value) -> Outcome {
