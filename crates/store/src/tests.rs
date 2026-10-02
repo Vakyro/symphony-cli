@@ -36,6 +36,18 @@ const PHASE4_TABLES: [&str; 7] = [
     "routing_candidates",
 ];
 
+/// Tablas que añade la migración 003 (contexto, hechos, skills y MCP). `context_fts` es virtual
+/// y SQLite crea sus tablas de apoyo (`context_fts_data`, `_idx`, `_docsize`, `_config`).
+const PHASE3_TABLES: [&str; 7] = [
+    "context_chunks",
+    "context_fts",
+    "handoff_items",
+    "context_retrievals",
+    "project_facts",
+    "skills",
+    "mcp_servers",
+];
+
 /// Proyecto, sesión, dos tasks, un proveedor y un modelo.
 fn seeded() -> Connection {
     let conn = open_in_memory().unwrap();
@@ -98,9 +110,12 @@ fn file_db_has_the_schema_and_pragmas() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
+    // Las tablas de apoyo de FTS5 no son del esquema propio.
+    tables.retain(|t| !t.starts_with("context_fts_"));
     let mut expected: Vec<String> = PHASE1_TABLES
         .iter()
         .chain(PHASE4_TABLES.iter())
+        .chain(PHASE3_TABLES.iter())
         .map(|s| s.to_string())
         .collect();
     tables.sort();
@@ -118,7 +133,7 @@ fn file_db_has_the_schema_and_pragmas() {
         })
         .unwrap()
     };
-    assert_eq!(pragma("user_version"), "2");
+    assert_eq!(pragma("user_version"), "3");
     assert_eq!(pragma("journal_mode"), "wal");
     assert_eq!(pragma("foreign_keys"), "1");
     assert_eq!(pragma("synchronous"), "1"); // NORMAL
@@ -136,8 +151,134 @@ fn file_db_has_the_schema_and_pragmas() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
+}
+
+#[test]
+fn context_search_finds_chunks_and_follows_inserts_updates_and_deletes() {
+    let conn = seeded();
+    conn.execute_batch(
+        "INSERT INTO blobs (hash, size_bytes, stored_bytes, created_at) VALUES ('h1', 10, 5, 0);
+         INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at)
+             VALUES ('o1', 'ctx://file/auth.ts', 'p1', 'FILE', 'h1', 0);
+         INSERT INTO context_chunks (object_id, seq, start_line, end_line, text) VALUES
+             ('o1', 0, 1, 20, 'export function refresh(token) { return rotate(token); }'),
+             ('o1', 1, 21, 40, 'class SessionStore { constructor() { this.cache = new Map(); } }');",
+    )
+    .unwrap();
+    let hits = |q: &str| -> Vec<i64> {
+        conn.prepare(
+            "SELECT rowid FROM context_fts WHERE context_fts MATCH ?1 ORDER BY bm25(context_fts)",
+        )
+        .unwrap()
+        .query_map([q], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    assert_eq!(hits("refresh").len(), 1);
+    assert_eq!(hits("SessionStore").len(), 1);
+    assert!(hits("inexistente").is_empty());
+
+    // Actualizar el texto reindexa; borrar el chunk lo saca del índice.
+    conn.execute(
+        "UPDATE context_chunks SET text = 'handler del login con cookies' WHERE seq = 0",
+        [],
+    )
+    .unwrap();
+    assert!(hits("refresh").is_empty());
+    assert_eq!(hits("cookies").len(), 1);
+    conn.execute("DELETE FROM context_chunks WHERE seq = 0", [])
+        .unwrap();
+    assert!(hits("cookies").is_empty());
+    // El índice sigue íntegro.
+    conn.execute(
+        "INSERT INTO context_fts(context_fts) VALUES ('integrity-check')",
+        [],
+    )
+    .unwrap();
+}
+
+#[test]
+fn only_one_current_fact_per_key_and_a_superseded_one_can_coexist() {
+    let conn = seeded();
+    let ins = |id: &str, status: &str| {
+        conn.execute(
+            &format!("INSERT INTO project_facts (id, project_id, key, value, kind, status, created_at) VALUES ('{id}','p1','auth_storage','v','DECISION','{status}',0)"),
+            [],
+        )
+    };
+    assert!(ins("f1", "CURRENT").is_ok());
+    assert!(
+        ins("f2", "CURRENT").is_err(),
+        "un solo valor vigente por clave"
+    );
+    assert!(ins("f3", "SUPERSEDED").is_ok());
+    assert!(ins("f4", "CONFLICT").is_ok());
+    assert!(ins("f5", "HECHO").is_err());
+}
+
+#[test]
+fn skills_and_mcp_servers_are_unique_per_scope_and_project_scope_needs_a_project() {
+    let conn = seeded();
+    let skill = |id: &str, scope: &str, project: &str| {
+        conn.execute(
+            &format!("INSERT INTO skills (id, name, scope, project_id, path, updated_at) VALUES ('{id}','review','{scope}',{project},'/x',0)"),
+            [],
+        )
+    };
+    assert!(skill("s1", "USER", "NULL").is_ok());
+    assert!(
+        skill("s2", "USER", "NULL").is_err(),
+        "mismo nombre y ámbito"
+    );
+    assert!(
+        skill("s3", "PROJECT", "'p1'").is_ok(),
+        "un PROJECT con el mismo nombre convive con el USER"
+    );
+    assert!(
+        skill("s4", "PROJECT", "NULL").is_err(),
+        "PROJECT exige proyecto"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO mcp_servers (id, name, scope, transport, share_mode) VALUES ('m1','github','USER','STDIO','SHARED')",
+            []
+        )
+        .is_ok()
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO mcp_servers (id, name, scope, transport, share_mode) VALUES ('m2','github','USER','STDIO','SHARED')",
+            []
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn migration_003_leaves_a_populated_v2_database_intact() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    MIGRATIONS.to_version(&mut conn, 2).unwrap();
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p1','demo','/repo','main',0);
+         INSERT INTO blobs (hash, size_bytes, stored_bytes, created_at) VALUES ('h1', 1, 1, 0);
+         INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES ('o1','ctx://file/a','p1','FILE','h1',0);",
+    )
+    .unwrap();
+    MIGRATIONS.to_latest(&mut conn).unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM context_objects", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+    let fk: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(fk, 0);
 }
 
 /// Una base de v0.1 (migración 001) con datos reales pasa a la 002 sin perder nada y con las
