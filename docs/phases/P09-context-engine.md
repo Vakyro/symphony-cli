@@ -39,6 +39,19 @@ Persistencia: `handoff_items` se llena en cada cambio de executor (`repo::insert
 Verificado: `raw_omits_nothing_and_modes_are_monotonic_with_a_realistic_checkpoint` (raw ≥ safe ≥ balanced ≥ aggressive en tokens con un diff de 3.000 líneas de lockfile, 60 mensajes y 6 archivos nuevos; RAW sin un solo recorte y todo a fidelidad 5), `balanced_reduces_the_diff_and_points_to_the_original`, snapshots v1 sin cambios (un diff pequeño no se resume), L2 del daemon (`handoff_items` tras un switch), CLI de punta a punta contra un daemon real.
 Desvío: `/context inspect|stats|raw` del PLAN son subcomandos `symphony context …` (la TUI no tiene todavía un punto de entrada de comandos con barra).
 
+### P09.S10 · Evaluación del handoff (hecho en L2; el live queda pendiente)
+Test `handoff_evaluation_forced_kill_by_context_mode` (`crates/daemon/tests/runtime.rs`; la tabla sale con `--nocapture`): el forced kill de P06.S8 (A se cuelga, el watchdog lo mata sin cleanup y B continúa solo con el handoff) con un checkpoint pesado: `package-lock.json` tocado (3.000 líneas), dos mensajes largos, un cambio real en el README, un archivo nuevo y el «Next:» del último mensaje. Un agente por modo.
+
+| Modo | Tokens enviados | Tokens RAW | % de RAW | Retrievals | Misses | ¿Terminó? |
+|---|---|---|---|---|---|---|
+| RAW | 21.512 | 21.512 | 100 % | 0 | 0 | sí |
+| SAFE | 21.512 | 21.512 | 100 % | 0 | 0 | sí |
+| BALANCED | 1.412 | 21.514 | 6,6 % | 0 | 0 | sí |
+| AGGRESSIVE | 788 | 21.515 | 3,7 % | 0 | 0 | sí |
+
+En los cuatro modos el prompt lleva el objetivo, el «qué seguía», los archivos tocados (también el lockfile) y el cambio real del README. BALANCED y AGGRESSIVE resumen el lockfile en una línea y apuntan al `ctx://` del diff. **Conclusión: en este caso BALANCED no pierde efectividad y cuesta unas 15 veces menos que RAW. Los defaults no cambian y no hace falta ADR.** SAFE no ahorra aquí porque el diff (≈ 80.000 caracteres) cabe en su límite de 120.000, que es lo esperable de un modo «seguro».
+Límites: retrievals y misses dan 0 porque todavía no hay broker MCP (S8); con el broker, esa columna dirá si BALANCED obliga a ir a buscar. El CLI es falso (determinista): mide el coste y si lo esencial está presente, no si un modelo real puede continuar con menos contexto. La corrida **live** RAW contra BALANCED gasta cuota y necesita permiso de Leo. Los pares live de P11.S5 ya usaron BALANCED (el default) y continuaron.
+
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|

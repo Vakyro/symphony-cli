@@ -2991,3 +2991,121 @@ async fn cli_that_quits_before_reading_its_prompt_still_fails_over() {
     assert_eq!(count(&e, "agent_runs"), 2);
     e.writer.shutdown();
 }
+
+/// P09.S10: evaluación del handoff. El forced kill de P06.S8 con un checkpoint pesado (un
+/// lockfile de 3.000 líneas tocado, una conversación larga y un cambio real en README) y los
+/// cuatro modos. Lo que se mide: tokens enviados, retrievals y misses (todavía sin MCP:
+/// siempre 0) y si B terminó la tarea. `--nocapture` imprime la tabla de la bitácora.
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_evaluation_forced_kill_by_context_mode() {
+    let lock: String = (0..3000)
+        .map(|i| format!("    \"dep{i}\": \"1.0.{i}\"\n"))
+        .collect();
+    let long_say = "Revisé el módulo de sesiones y sus casos borde. ".repeat(60);
+    let script_a = format!(
+        "[[step]]\nkind = \"edit\"\npath = \"package-lock.json\"\ncontent = '''\n{lock}'''\n\
+         [[step]]\nkind = \"edit\"\npath = \"README.md\"\ncontent = \"demo rotacion de tokens revisada\"\n\
+         [[step]]\nkind = \"edit\"\npath = \"src_auth.js\"\ncontent = \"export const rotate = 1\"\n\
+         [[step]]\nkind = \"say\"\ntext = \"{long_say}\"\n\
+         [[step]]\nkind = \"say\"\ntext = \"{long_say}\"\n\
+         [[step]]\nkind = \"say\"\ntext = \"Next: escribir las pruebas de rotación en rotate_test.js\"\n\
+         [[step]]\nkind = \"hang\"\n"
+    );
+    let script_b = "[[step]]\nkind = \"edit\"\npath = \"rotate_test.js\"\ncontent = \"// pruebas\"\n[[step]]\nkind = \"say\"\ntext = \"Tarea completada con éxito.\"\n";
+    let e = env_with_watchdog(
+        &[("claude", &script_a), ("codex", script_b)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(3000),
+    )
+    .await;
+    std::fs::write(e.repo.join("package-lock.json"), "{\n}\n").unwrap();
+    git(&e.repo, &["add", "."]);
+    git(&e.repo, &["commit", "-q", "-m", "lock"]);
+
+    println!("modo       | tokens enviados | tokens RAW | retrievals | misses | terminó");
+    let mut sent = Vec::new();
+    for mode in [
+        ContextMode::Raw,
+        ContextMode::Safe,
+        ContextMode::Balanced,
+        ContextMode::Aggressive,
+    ] {
+        let mut r = req(
+            &e,
+            &format!("Rotación de tokens {mode:?}"),
+            Execution::Exact("claude/fast".into()),
+        );
+        r.context_mode = mode;
+        let created = e.runtime.create_agent(r).await.unwrap();
+        e.runtime.wait_executors().await;
+        e.writer.handle().flush().await.unwrap();
+        e.runtime
+            .switch(created.agent_id, "codex/fast")
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+        e.writer.handle().flush().await.unwrap();
+
+        let agent = created.agent_id.to_string();
+        let state: String = one(
+            &e,
+            &format!("SELECT state FROM agents WHERE id = '{agent}'"),
+        );
+        let (tokens_sent, tokens_raw): (i64, i64) = {
+            let conn = symphony_store::open_reader(&e.db).unwrap();
+            conn.query_row(
+                &format!(
+                    "SELECT tokens_sent, tokens_raw_estimate FROM handoffs WHERE agent_id = '{agent}' AND checkpoint_id IS NOT NULL"
+                ),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        // Un mensaje largo vive en el object store; uno corto, en la fila.
+        let (inline, object): (Option<String>, Option<String>) = {
+            let conn = symphony_store::open_reader(&e.db).unwrap();
+            conn.query_row(
+                &format!("SELECT content, content_object_id FROM messages WHERE role = 'USER' AND agent_id = '{agent}' ORDER BY created_at DESC LIMIT 1"),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        let prompt = inline.unwrap_or_else(|| diff_text(&e, &object.unwrap()));
+        println!(
+            "{:<10} | {:>15} | {:>10} | {:>10} | {:>6} | {}",
+            format!("{mode:?}"),
+            tokens_sent,
+            tokens_raw,
+            0,
+            0,
+            state == "COMPLETED"
+        );
+        assert_eq!(state, "COMPLETED", "{mode:?}: B debe terminar la tarea");
+        // Lo esencial entra en todos los modos: objetivo, qué seguía, archivos y el cambio real.
+        for want in [
+            "Rotación de tokens",
+            "escribir las pruebas de rotación en rotate_test.js",
+            "src_auth.js",
+            "package-lock.json",
+            "+demo rotacion de tokens revisada",
+        ] {
+            assert!(prompt.contains(want), "{mode:?}: falta {want:?}");
+        }
+        sent.push(tokens_sent);
+    }
+    let [raw, safe, balanced, aggressive] = sent[..] else {
+        panic!("cuatro modos")
+    };
+    assert!(
+        raw >= safe && safe >= balanced && balanced >= aggressive,
+        "{sent:?}"
+    );
+    assert!(
+        balanced * 2 < raw,
+        "BALANCED debería costar menos de la mitad de RAW: {sent:?}"
+    );
+    e.writer.shutdown();
+}

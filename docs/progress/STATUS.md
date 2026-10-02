@@ -1,14 +1,14 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-01 · por claude-code/sonnet-5.5
+**Actualizado:** 2026-10-02 · por claude-code/opus-5.5
 **Fase actual:** P09 · Context Engine (ADR-0010: P10 → P09 → P08, completas). P10 cerrada (`p10-done`, `v0.5.0`); P11 cerrada; P07.S10 cerrada por ADR-0010
-**Paso actual:** P09.S1 · migración 003. P12–P16 siguen provisionales
+**Paso actual:** P09.S4 · AST por niveles. Hechos en `phase/p09-context-engine`: S1 (migración 003), S2 (`ctx://`, chunks + FTS5), S3 (compresores), S6 (handoff v2, `symphony context`), S10 (evaluación L2: BALANCED = 6,6 % de RAW sin perder la tarea). Faltan S4, S5, S7, S8, S9 y S11; después, P08 completa. P12–P16 siguen provisionales
 **Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
 **Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** —
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (250 tests; los live se omiten sin `SYMPHONY_LIVE=1`). Los tests intermitentes del chat y de cuota (fallaban en Linux en 4 de 5 corridas del CI) tenían dos causas, ya corregidas (LEARNINGS P07.5): choque de git sobre el índice y `EPIPE` al escribir el prompt a un CLI que ya salió.
+- `cargo xtask check`: ✅ (413 tests en `phase/p09-context-engine`; los live se omiten sin `SYMPHONY_LIVE=1`). Los tests intermitentes del chat y de cuota (fallaban en Linux en 4 de 5 corridas del CI) tenían dos causas, ya corregidas (LEARNINGS P07.5): choque de git sobre el índice y `EPIPE` al escribir el prompt a un CLI que ya salió.
 - `cargo deny check`: ✅ (solo avisos de duplicados)
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny). La rama `phase/p07-tui` y el tag `v0.1.0` se pushean en P07.S8.
 - Tests conocidos en rojo: ninguno.
@@ -37,6 +37,7 @@
 - [x] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
+00. **Lo que falta del pedido de Leo («todo lo diferido que iba antes de más proveedores», ADR-0010):** P09.S4 AST (tree-sitter) → S5 watcher (notify + ignore) → S7 hechos (`symphony fact`) → S8 broker MCP (rmcp, `context.search/lines/retrieve`) → S9 skills/MCP compartidos → S11 cierre (revisión de código, CI, merge, `p09-done`) → **P08** completa (migración 004, scheduler, DAG, validación, merge/conflictos, vistas TUI, benchmark con la opinión de Leo, `p08-done`). Live pendiente de S10 (RAW contra BALANCED con proveedores reales): necesita permiso por la cuota.
 0. **P11 ✅ cerrada (2026-10-01, tag `p11-done`):** Kimi, Antigravity y Copilot con el mismo contrato (bitácora `docs/phases/P11-proveedores.md`, investigación `docs/research/cli-p11.md`). Matriz de handoff: 20 pares con `fake-agent` y 3 pares live ✅; revisión de código (10 hallazgos: 7 corregidos, 3 documentados); CI verde en ubuntu, windows, macos, msrv y deny; 299 tests. **Pendiente de Leo:** (a) ToS de los tres proveedores; (b) permisos: Kimi no tiene sandbox (`--print` aprueba todo) y Antigravity/Copilot no ejecutan comandos salvo `skip_permissions`/`allow_all_tools`, hoy solo en código, sin `config.toml`; (c) skills nativas de los tres en el chat; (d) Copilot solo ofrece `auto` en esta cuenta; (e) elegir la próxima fase: P10 recortada (salud y failover con N proveedores), P09 recortada (coste del handoff largo) o la revisión de P08–P16 con uso real.
 1. **P07.S10:** revisar P08–P16 a partir de la propuesta «Chat agéntico con failover» (abajo) y de lo que Leo anote en `docs/research/uso-v0.1.md`; escribir el ADR de replanificación.
 1b. Coste real medido el 2026-09-30 (bitácora P07.5 § S9): un cambio de proveedor cuesta el arranque del CLI de destino (Claude ~27,5k, Codex ~18k tokens) más el handoff (~2,4k–2,9k); n = 1 y conversación corta. Falta: una conversación larga (≥ 100 mensajes) y entender por qué Codex «continuar» sube a 48k. Cambio menor sin aplicar: `scan_plugins` en `skills.rs` no necesita el parámetro `commands`.
