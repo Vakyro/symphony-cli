@@ -265,14 +265,32 @@ fn migration_003_leaves_a_populated_v2_database_intact() {
     conn.execute_batch(
         "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p1','demo','/repo','main',0);
          INSERT INTO blobs (hash, size_bytes, stored_bytes, created_at) VALUES ('h1', 1, 1, 0);
-         INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES ('o1','ctx://file/a','p1','FILE','h1',0);",
+         INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES ('o1','ctx://file/a','p1','FILE','h1',0);
+         INSERT INTO sessions (id, project_id, status, started_at) VALUES ('s1','p1','ACTIVE',0);
+         INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at) VALUES ('t1','p1','T-1','WORK','uno','RUNNING',0,0);
+         INSERT INTO providers (id, display_name, cli_name, adapter_mode, setup_state) VALUES ('anthropic','Claude','claude','CLI','READY');
+         INSERT INTO models (id, provider_id, cli_model_id, display_name, discovered_at) VALUES ('claude/sonnet','anthropic','sonnet','Sonnet',0);
+         INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_model_id, failover_policy, context_mode, created_at, updated_at)
+             VALUES ('a1','p1','s1','t1',1,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0);
+         INSERT INTO messages (id, agent_id, role, content_object_id, created_at) VALUES ('m1','a1','USER','o1',0);",
     )
     .unwrap();
+    // Con una fila hija que apunta al objeto: la reconstrucción de `context_objects` tiene
+    // que dejarla enlazada (con `RENAME` el COMMIT fallaba solo con datos reales).
     MIGRATIONS.to_latest(&mut conn).unwrap();
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM context_objects", [], |r| r.get(0))
         .unwrap();
     assert_eq!(n, 1);
+    // La misma dirección en otro proyecto ya no choca; en el mismo, sí.
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p2','otro','/otro','main',0);
+         INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES ('o2','ctx://file/a','p2','FILE','h1',0);",
+    )
+    .unwrap();
+    assert!(conn
+        .execute("INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES ('o3','ctx://file/a','p1','FILE','h1',0)", [])
+        .is_err());
     let fk: i64 = conn
         .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
             r.get(0)

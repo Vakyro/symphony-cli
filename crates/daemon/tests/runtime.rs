@@ -2946,7 +2946,7 @@ async fn long_messages_and_diffs_become_searchable_context_objects() {
     assert_eq!(msg.len(), 1, "{msg:?} objetos/chunks={dbg:?}");
     assert!(msg[0].uri.starts_with("ctx://message/"), "{}", msg[0].uri);
     // El original completo sigue recuperable por su dirección.
-    let obj = symphony_store::context::object_by_uri(&conn, &msg[0].uri)
+    let obj = symphony_store::context::object_by_uri(&conn, None, &msg[0].uri)
         .unwrap()
         .unwrap();
     let bytes = symphony_object_store::ObjectStore::new(e.home.join("objects"))
@@ -3107,5 +3107,68 @@ async fn handoff_evaluation_forced_kill_by_context_mode() {
         balanced * 2 < raw,
         "BALANCED debería costar menos de la mitad de RAW: {sent:?}"
     );
+    e.writer.shutdown();
+}
+
+/// P09.S5: el watcher del proyecto deja los archivos buscables y sigue sus cambios (con
+/// debounce), sin indexar lo ignorado por `.gitignore`.
+#[tokio::test(flavor = "multi_thread")]
+async fn project_files_stay_searchable_as_they_change() {
+    let e = env("[[step]]\nkind = \"say\"\ntext = \"ok\"\n", None).await;
+    std::fs::write(e.repo.join(".gitignore"), "build/\n").unwrap();
+    std::fs::create_dir_all(e.repo.join("src")).unwrap();
+    std::fs::create_dir_all(e.repo.join("build")).unwrap();
+    std::fs::write(
+        e.repo.join("src/auth.ts"),
+        "export function rotarviejo() {}\n",
+    )
+    .unwrap();
+    std::fs::write(e.repo.join("build/out.js"), "palabraignorada\n").unwrap();
+    e.runtime
+        .create_agent(req(&e, "watch", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    let project: String = one(&e, "SELECT id FROM projects");
+    let hits = |word: &str| {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        let q = symphony_context::chunk::fts_query(word).unwrap();
+        symphony_store::context::search(&conn, &project, &q, None, 5)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.uri)
+            .collect::<Vec<_>>()
+    };
+    let wait_for = |word: &'static str, present: bool| {
+        let started = std::time::Instant::now();
+        loop {
+            if hits(word).is_empty() != present {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "{word}: esperaba presente = {present}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+
+    wait_for("rotarviejo", true);
+    assert_eq!(hits("rotarviejo"), ["ctx://file/src/auth.ts"]);
+    assert!(
+        hits("palabraignorada").is_empty(),
+        "build/ está en .gitignore"
+    );
+
+    std::fs::write(
+        e.repo.join("src/auth.ts"),
+        "export function rotarnuevo() {}\n",
+    )
+    .unwrap();
+    wait_for("rotarnuevo", true);
+    wait_for("rotarviejo", false);
+
+    std::fs::remove_file(e.repo.join("src/auth.ts")).unwrap();
+    wait_for("rotarnuevo", false);
     e.writer.shutdown();
 }

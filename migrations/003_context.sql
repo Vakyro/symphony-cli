@@ -3,6 +3,35 @@
 
 -- G. Contexto ----------------------------------------------------------------
 
+-- `ctx://file/<ruta>` es relativo al proyecto: dos proyectos pueden tener `README.md`.
+-- La unicidad de la dirección pasa de global a por proyecto (desvío documentado en la
+-- bitácora de P09.S5). Reconstrucción dentro de la transacción, como en 002: con
+-- `defer_foreign_keys`, las filas hijas (checkpoints, mensajes, refs) quedan pendientes
+-- y se resuelven al reinsertar los objetos en la tabla con su nombre, antes del COMMIT
+-- (con `RENAME` el contador de violaciones diferidas no baja y el COMMIT falla).
+PRAGMA defer_foreign_keys = ON;
+CREATE TABLE context_objects_bak AS SELECT * FROM context_objects;
+DROP TABLE context_objects;
+CREATE TABLE context_objects (
+    id                 TEXT PRIMARY KEY,
+    uri                TEXT NOT NULL,
+    project_id         TEXT NOT NULL REFERENCES projects(id),
+    agent_id           TEXT REFERENCES agents(id),
+    run_id             TEXT REFERENCES agent_runs(id),
+    kind               TEXT NOT NULL CHECK (kind IN ('FILE','GIT_DIFF','TEST_OUTPUT','TOOL_OUTPUT','LOG','JSON','CONVERSATION','DECISION')),
+    blob_hash          TEXT NOT NULL REFERENCES blobs(hash),
+    compressed_text    TEXT,
+    compressor         TEXT CHECK (compressor IN ('LOG_COLLAPSE','JSON_STRUCT','AST','DEDUP','NONE')),
+    tokens_original    INTEGER,
+    tokens_compressed  INTEGER,
+    created_at         INTEGER NOT NULL,
+    UNIQUE (project_id, uri)
+) STRICT;
+INSERT INTO context_objects SELECT * FROM context_objects_bak;
+DROP TABLE context_objects_bak;
+CREATE INDEX context_objects_blob ON context_objects(blob_hash);
+CREATE INDEX context_objects_uri ON context_objects(uri);
+
 CREATE TABLE context_chunks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     object_id   TEXT NOT NULL REFERENCES context_objects(id),

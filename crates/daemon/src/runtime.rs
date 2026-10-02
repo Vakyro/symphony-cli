@@ -159,6 +159,8 @@ pub struct Inner {
     pub(crate) chat_switch_tokens: AtomicU64,
     /// Profile con el que se evalúa un failover cuando el agente no tiene uno (`routing.default_profile`).
     pub(crate) default_profile: Mutex<String>,
+    /// File watchers, uno por proyecto (P09.S5).
+    pub(crate) watchers: crate::watcher::Watchers,
 }
 
 /// Persistencia del latido por defecto (producción).
@@ -228,12 +230,48 @@ impl Runtime {
                 activity: Mutex::default(),
                 chat_switch_tokens: AtomicU64::new(0),
                 default_profile: Mutex::new("@code".into()),
+                watchers: crate::watcher::Watchers::default(),
             }),
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(rt.clone().watchdog());
         }
         rt
+    }
+
+    /// Vigila los archivos del proyecto (idempotente; ver `watcher.rs`).
+    pub fn watch_project(&self, project_id: &str, root: &Path) {
+        let objects = symphony_object_store::ObjectStore::new(
+            symphony_core::SymphonyHome::at(&self.home).objects_dir(),
+        );
+        self.watchers
+            .ensure(project_id, root, self.writer.clone(), objects);
+    }
+
+    /// Al arrancar el daemon: vigila los proyectos que tienen agentes sin terminar.
+    pub fn watch_active_projects(&self) {
+        let projects: Vec<(String, String)> = self
+            .reader
+            .lock()
+            .ok()
+            .and_then(|c| {
+                c.prepare(
+                    "SELECT DISTINCT p.id, p.root_path FROM projects p JOIN agents a ON a.project_id = p.id
+                     WHERE a.state NOT IN ('COMPLETED','FAILED','CANCELLED')",
+                )
+                .and_then(|mut s| {
+                    s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .ok()
+            })
+            .unwrap_or_default();
+        for (id, root) in projects {
+            let root = PathBuf::from(root);
+            if root.is_dir() {
+                self.watch_project(&id, &root);
+            }
+        }
     }
 
     /// El profile por defecto (`routing.default_profile` de `config.toml`).
@@ -686,6 +724,8 @@ impl Runtime {
             self.undo_worktree(&repo_root, &wt_path, &branch).await;
             return Err(store_err(e));
         }
+        // Los archivos del proyecto quedan buscables (P09.S5): un watcher por proyecto.
+        self.watch_project(&project_id.to_string(), &repo_root);
 
         let mut created = Created {
             agent_id,

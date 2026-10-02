@@ -18,16 +18,7 @@ pub fn index_text(
     text: &str,
     hint: Hint,
 ) -> Result<(), RepoError> {
-    let chunks: Vec<NewChunk> = symphony_context::chunk::chunk_text(text)
-        .into_iter()
-        .map(|c| NewChunk {
-            seq: i64::try_from(c.seq).unwrap_or(i64::MAX),
-            start_line: i64::try_from(c.start_line).unwrap_or(i64::MAX),
-            end_line: i64::try_from(c.end_line).unwrap_or(i64::MAX),
-            text: c.text,
-        })
-        .collect();
-    context::replace_chunks(conn, object, &chunks)?;
+    index_chunks(conn, object, text)?;
     if text.len() >= COMPRESS_FROM_BYTES {
         let c = compress(text, hint);
         if c.compressor != symphony_context::compress::Compressor::None {
@@ -42,4 +33,22 @@ pub fn index_text(
         }
     }
     Ok(())
+}
+
+/// Solo trocea y reemplaza los chunks (archivos del proyecto: el código no se «comprime»).
+pub fn index_chunks(
+    conn: &Connection,
+    object: ContextObjectId,
+    text: &str,
+) -> Result<(), RepoError> {
+    let chunks: Vec<NewChunk> = symphony_context::chunk::chunk_text(text)
+        .into_iter()
+        .map(|c| NewChunk {
+            seq: i64::try_from(c.seq).unwrap_or(i64::MAX),
+            start_line: i64::try_from(c.start_line).unwrap_or(i64::MAX),
+            end_line: i64::try_from(c.end_line).unwrap_or(i64::MAX),
+            text: c.text,
+        })
+        .collect();
+    context::replace_chunks(conn, object, &chunks)
 }

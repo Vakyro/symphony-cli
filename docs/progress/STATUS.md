@@ -1,14 +1,14 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-02 · por claude-code/opus-5.5
+**Actualizado:** 2026-10-02 · por antigravity/gemini-3.7-flash
 **Fase actual:** P09 · Context Engine (ADR-0010: P10 → P09 → P08, completas). P10 cerrada (`p10-done`, `v0.5.0`); P11 cerrada; P07.S10 cerrada por ADR-0010
-**Paso actual:** P09.S4 · AST por niveles. Hechos en `phase/p09-context-engine`: S1 (migración 003), S2 (`ctx://`, chunks + FTS5), S3 (compresores), S6 (handoff v2, `symphony context`), S10 (evaluación L2: BALANCED = 6,6 % de RAW sin perder la tarea). Faltan S4, S5, S7, S8, S9 y S11; después, P08 completa. P12–P16 siguen provisionales
+**Paso actual:** P09.S7 · Consolidación de hechos (`project_facts`, `symphony fact`). Hechos en `phase/p09-context-engine`: S1 (migración 003), S2 (`ctx://`, chunks + FTS5), S3 (compresores), S6 (handoff v2, `symphony context`), S10 (evaluación L2: BALANCED = 6,6 % de RAW sin perder la tarea), S4 (AST por niveles L0–L5 con tree-sitter), S5 (file watcher con notify + ignore). Faltan S7, S8, S9 y S11; después, P08 completa. P12–P16 siguen provisionales
 **Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
 **Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
-**En curso por:** —
+**En curso por:** antigravity/gemini-3.7-flash
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (413 tests en `phase/p09-context-engine`; los live se omiten sin `SYMPHONY_LIVE=1`). Los tests intermitentes del chat y de cuota (fallaban en Linux en 4 de 5 corridas del CI) tenían dos causas, ya corregidas (LEARNINGS P07.5): choque de git sobre el índice y `EPIPE` al escribir el prompt a un CLI que ya salió.
+- `cargo xtask check`: ✅ (424 tests en `phase/p09-context-engine`; los live se omiten sin `SYMPHONY_LIVE=1`). Los tests intermitentes del chat y de cuota (fallaban en Linux en 4 de 5 corridas del CI) tenían dos causas, ya corregidas (LEARNINGS P07.5): choque de git sobre el índice y `EPIPE` al escribir el prompt a un CLI que ya salió.
 - `cargo deny check`: ✅ (solo avisos de duplicados)
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny). La rama `phase/p07-tui` y el tag `v0.1.0` se pushean en P07.S8.
 - Tests conocidos en rojo: ninguno.

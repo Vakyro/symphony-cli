@@ -123,7 +123,7 @@ fn replacing_chunks_reindexes_and_compression_keeps_the_original_reference() {
     assert_eq!(find("nuevo"), 1);
 
     ctx::set_compression(&conn, o1, "896 passed, 1 failed", "LOG_COLLAPSE", 5000, 12).unwrap();
-    let row = ctx::object_by_uri(&conn, "ctx://file/auth.ts")
+    let row = ctx::object_by_uri(&conn, None, "ctx://file/auth.ts")
         .unwrap()
         .unwrap();
     assert_eq!(row.compressed_text.as_deref(), Some("896 passed, 1 failed"));
@@ -133,7 +133,7 @@ fn replacing_chunks_reindexes_and_compression_keeps_the_original_reference() {
         (Some(5000), Some(12))
     );
     assert!(
-        ctx::object_by_uri(&conn, "ctx://file/no-existe")
+        ctx::object_by_uri(&conn, None, "ctx://file/no-existe")
             .unwrap()
             .is_none()
     );
@@ -209,7 +209,7 @@ fn pruning_an_orphan_diff_takes_its_chunks_and_retrievals_with_it() {
     let hashes = symphony_store::repo::prune_checkpoints(&conn, agent, 5).unwrap();
     assert_eq!(hashes, ["h1"]);
     assert!(
-        ctx::object_by_uri(&conn, "ctx://diff/viejo")
+        ctx::object_by_uri(&conn, None, "ctx://diff/viejo")
             .unwrap()
             .is_none()
     );
@@ -219,4 +219,56 @@ fn pruning_an_orphan_diff_takes_its_chunks_and_retrievals_with_it() {
         .query_row("SELECT COUNT(*) FROM context_chunks", [], |r| r.get(0))
         .unwrap();
     assert_eq!(chunks, 0);
+}
+
+#[test]
+fn project_files_are_upserted_per_project_and_deleted_with_their_chunks() {
+    use symphony_store::context::FileUpsert;
+    let (conn, _, _, _) = seeded();
+    let ctx::FileUpsert::Stored { id, previous: None } =
+        ctx::upsert_file(&conn, "p1", "ctx://file/src/a.rs", "h1", 1).unwrap()
+    else {
+        panic!("nuevo")
+    };
+    assert_eq!(
+        ctx::upsert_file(&conn, "p1", "ctx://file/src/a.rs", "h1", 2).unwrap(),
+        FileUpsert::Unchanged
+    );
+    // La misma ruta en otro proyecto es otro objeto.
+    assert!(matches!(
+        ctx::upsert_file(&conn, "p2", "ctx://file/src/a.rs", "h1", 2).unwrap(),
+        FileUpsert::Stored { previous: None, .. }
+    ));
+    assert_eq!(
+        ctx::upsert_file(&conn, "p1", "ctx://file/src/a.rs", "h2", 3).unwrap(),
+        FileUpsert::Stored {
+            id,
+            previous: Some("h1".into())
+        }
+    );
+    ctx::replace_chunks(&conn, id, &[chunk(0, "fn rotar_token() {}")]).unwrap();
+    let q = symphony_context::chunk::fts_query("rotar_token").unwrap();
+    assert_eq!(ctx::search(&conn, "p1", &q, None, 5).unwrap().len(), 1);
+
+    assert_eq!(
+        ctx::delete_file(&conn, "p1", "ctx://file/src/a.rs")
+            .unwrap()
+            .as_deref(),
+        Some("h2")
+    );
+    assert!(ctx::search(&conn, "p1", &q, None, 5).unwrap().is_empty());
+    assert!(
+        ctx::object_by_uri(&conn, Some("p1"), "ctx://file/src/a.rs")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ctx::object_by_uri(&conn, Some("p2"), "ctx://file/src/a.rs")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        ctx::delete_file(&conn, "p1", "ctx://file/src/a.rs").unwrap(),
+        None
+    );
 }

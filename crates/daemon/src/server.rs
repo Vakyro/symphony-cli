@@ -175,6 +175,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         crate::providers::builtin_arc(),
         hook_cmd,
     );
+    runtime.watch_active_projects();
 
     match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
         Ok(config) => {

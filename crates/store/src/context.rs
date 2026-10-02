@@ -63,14 +63,103 @@ fn object_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ObjectRow> {
 
 const OBJECT_COLS: &str = "id, uri, project_id, agent_id, run_id, kind, blob_hash, compressed_text, compressor, tokens_original, tokens_compressed";
 
-pub fn object_by_uri(conn: &Connection, uri: &str) -> Result<Option<ObjectRow>, RepoError> {
+/// Un objeto por su dirección. `ctx://file/…` es relativo al proyecto: sin `project` se toma
+/// el más reciente con esa dirección.
+pub fn object_by_uri(
+    conn: &Connection,
+    project: Option<&str>,
+    uri: &str,
+) -> Result<Option<ObjectRow>, RepoError> {
     Ok(conn
         .query_row(
-            &format!("SELECT {OBJECT_COLS} FROM context_objects WHERE uri = ?1"),
-            [uri],
+            &format!(
+                "SELECT {OBJECT_COLS} FROM context_objects WHERE uri = ?1 AND (?2 IS NULL OR project_id = ?2)
+                 ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ),
+            params![uri, project],
             object_row,
         )
         .optional()?)
+}
+
+/// Lo que pasó al registrar un archivo del proyecto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileUpsert {
+    /// Mismo contenido que ya estaba: nada que hacer.
+    Unchanged,
+    /// Nuevo o cambiado; `previous` es el blob anterior, para soltar su referencia.
+    Stored {
+        id: ContextObjectId,
+        previous: Option<String>,
+    },
+}
+
+/// Registra (o actualiza) el archivo `ctx://file/<ruta>` del proyecto con su blob nuevo.
+/// Al cambiar, la versión comprimida anterior deja de valer.
+pub fn upsert_file(
+    conn: &Connection,
+    project: &str,
+    uri: &str,
+    blob_hash: &str,
+    now: i64,
+) -> Result<FileUpsert, RepoError> {
+    let current: Option<(String, String)> = conn
+        .query_row(
+            "SELECT id, blob_hash FROM context_objects WHERE project_id = ?1 AND uri = ?2",
+            params![project, uri],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    match current {
+        Some((_, hash)) if hash == blob_hash => Ok(FileUpsert::Unchanged),
+        Some((id, hash)) => {
+            conn.execute(
+                "UPDATE context_objects SET blob_hash = ?2, compressed_text = NULL, compressor = 'NONE',
+                        tokens_original = NULL, tokens_compressed = NULL, created_at = ?3 WHERE id = ?1",
+                params![id, blob_hash, now],
+            )?;
+            let id = id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            Ok(FileUpsert::Stored {
+                id,
+                previous: Some(hash),
+            })
+        }
+        None => {
+            let id = ContextObjectId::new();
+            conn.execute(
+                "INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, compressor, created_at)
+                 VALUES (?1, ?2, ?3, 'FILE', ?4, 'NONE', ?5)",
+                params![id.to_string(), uri, project, blob_hash, now],
+            )?;
+            Ok(FileUpsert::Stored { id, previous: None })
+        }
+    }
+}
+
+/// Borra el archivo `uri` del proyecto con sus chunks y recuperaciones. Devuelve su blob.
+pub fn delete_file(
+    conn: &Connection,
+    project: &str,
+    uri: &str,
+) -> Result<Option<String>, RepoError> {
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT id, blob_hash FROM context_objects WHERE project_id = ?1 AND uri = ?2 AND kind = 'FILE'",
+            params![project, uri],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((id, hash)) = row else {
+        return Ok(None);
+    };
+    conn.execute("DELETE FROM context_chunks WHERE object_id = ?1", [&id])?;
+    conn.execute("DELETE FROM context_retrievals WHERE object_id = ?1", [&id])?;
+    conn.execute(
+        "UPDATE handoff_items SET object_id = NULL WHERE object_id = ?1",
+        [&id],
+    )?;
+    conn.execute("DELETE FROM context_objects WHERE id = ?1", [&id])?;
+    Ok(Some(hash))
 }
 
 pub fn object_by_id(conn: &Connection, id: &str) -> Result<Option<ObjectRow>, RepoError> {

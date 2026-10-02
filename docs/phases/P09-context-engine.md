@@ -44,6 +44,11 @@ Desvío: `/context inspect|stats|raw` del PLAN son subcomandos `symphony context
 En el handoff: en BALANCED/AGGRESSIVE, un archivo nuevo que no cabe en su espacio va como esqueleto L3 (fidelidad 2) si hay gramática y el esqueleto entra; si no, se recorta como antes. RAW y SAFE no cambian.
 Verificado: snapshots L3 de Rust, Python y TypeScript y L2 de TypeScript; L4 con un término; JS y TSX rotos; un archivo de 200 funciones baja a menos de la mitad; test de handoff (80 handlers en AGGRESSIVE → esqueleto; en SAFE, entero). `cargo deny` ok (licencias MIT). Gramáticas nuevas en el workspace (STACK §14.1 nombra tree-sitter; las gramáticas son su complemento).
 
+### P09.S5 · File watcher (hecho)
+`daemon::watcher::Watchers`: un watcher `notify` 8.2 por proyecto (no por agente) que mantiene los archivos del proyecto buscables como `ctx://file/<ruta>`. Arranca con un recorrido inicial (`ignore::WalkBuilder`) y después aplica los cambios con debounce (300 ms). Respeta `.gitignore` y omite lo oculto (`.git`, `.symphony`), lo binario y archivos > 512 KB (tope de 5.000 archivos en scan inicial).
+Persistencia: `context::upsert_file` y `context::delete_file` en el store. En `003_context.sql`, la unicidad de `context_objects` pasa a `(project_id, uri)` para permitir que distintos proyectos tengan la misma ruta relativa (ej. `ctx://file/src/main.rs`).
+Verificado: unitario con ignorados/ocultos/binarios en tempdir; L2 del daemon (`project_files_stay_searchable_as_they_change`), creación, modificación con debounce y borrado de archivo indexado; `files_can_be_upserted_replaced_and_deleted_by_project` en store; `cargo deny` ok con `CC0-1.0` permitido.
+
 ### P09.S10 · Evaluación del handoff (hecho en L2; el live queda pendiente)
 Test `handoff_evaluation_forced_kill_by_context_mode` (`crates/daemon/tests/runtime.rs`; la tabla sale con `--nocapture`): el forced kill de P06.S8 (A se cuelga, el watchdog lo mata sin cleanup y B continúa solo con el handoff) con un checkpoint pesado: `package-lock.json` tocado (3.000 líneas), dos mensajes largos, un cambio real en el README, un archivo nuevo y el «Next:» del último mensaje. Un agente por modo.
 
