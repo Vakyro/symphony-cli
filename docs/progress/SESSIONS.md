@@ -40,3 +40,4 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-10-02 · antigravity/gemini-3.7-flash · pausa · P09.S5 ✅: file watcher con notify 8.2 + ignore, debounce de 300 ms, índices por proyecto, 424 tests verdes; investigación de Devin AI documentada en docs/research/evaluacion-devin-ai.md. Sigue: P09.S7 (hechos).
 - 2026-10-02 · antigravity/gemini-2.5-pro · pausa · P09.S7 ✅: consolidación de hechos (`project_facts`), `symphony fact set/list`, IPC `fact.set`/`fact.list`, inclusión en handoff de `ProjectFact`, 427 tests verdes. Sigue: P09.S8 (broker MCP).
 
+- 2026-10-11 · claude-code/sonnet-5.5 · pausa · P08.S1 ✅ en `phase/p08-runtime-multiagente`: migración 004 (9 tablas de Fase 2, FK de `tasks.milestone_id`, `PHASE_DONE` en `agent_runs`), con test de migración 003 → 004 con datos; 464 tests verdes. ADR-0013 ACEPTADO por Leo. Sigue P08.S2.

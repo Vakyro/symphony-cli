@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-10 · por claude-code/sonnet-5.5
+**Actualizado:** 2026-10-11 · por claude-code/sonnet-5.5
 **Fase actual:** P09 · Context Engine cerrada (`p09-done`). Orden de ADR-0010: P10 ✅ → P09 ✅ → **P08 (decisiones de Leo pendientes, ver abajo)**. P11 y P10 cerradas; P07.S10 cerrada por ADR-0010
-**Paso actual:** ninguno en curso. OpenCode integrado (P11.S7, ADR-0012; también se corrigió la detección de Codex 0.160+ en Windows: **reinstala Symphony** con los dos `cargo install --force`). Siguen, en orden: correcciones F5/F6 de Signalia y, con las decisiones de Leo, P08 (ADR-0011). P12–P16 siguen provisionales
+**Paso actual:** **P08.S1 ✅** (migración 004 + `PHASE_DONE`, rama `phase/p08-runtime-multiagente`, bitácora `docs/phases/P08-multiagente.md`); sigue P08.S2 (clasificador de operaciones y Resource Manager). Antes de esto: ninguno en curso. OpenCode integrado (P11.S7, ADR-0012; también se corrigió la detección de Codex 0.160+ en Windows: **reinstala Symphony** con los dos `cargo install --force`). Siguen, en orden: correcciones F5/F6 de Signalia y, con las decisiones de Leo, P08 (ADR-0011). P12–P16 siguen provisionales
 **Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
 **Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
 **En curso por:** nadie (cola lista para la próxima sesión)
@@ -103,5 +103,5 @@ Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y val
 | P11 (adelantada por ADR-0008) | ✅ | p11-done |
 | P10 | ✅ | p10-done, v0.5.0 |
 | P09 | ✅ | p09-done |
-| P08 | ⏳ (tras decisiones de Leo; ADR-0011) | |
+| P08 | 🟡 en curso (S1 ✅; ADR-0011 y ADR-0013) | |
 | P12–P16 | ⏳ (provisionales) | |

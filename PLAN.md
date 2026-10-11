@@ -923,8 +923,8 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 **Tecnologías:** `tokio::sync::Semaphore`, BinaryHeap, sysinfo, Job Objects / cgroups v2 / process groups, notify (en P09), cargo-llvm-cov.
 **Skills:** `test-driven-development`, `performance-optimization`, `deprecation-and-migration`, `the-council` (si el benchmark falla).
 
-### P08.S1 · Migración 002
-- **Qué:** tablas de Fase 2: task_dependencies, milestones, processes, resource_samples, validation_runs, validation_checks, merge_requests, merge_conflicts y reviews (DB §3).
+### P08.S1 · Migración 004 ✅
+- **Qué:** (la 004, no la 002: ADR-0010/0013; además `PHASE_DONE` en `agent_runs.end_reason`) tablas de Fase 2: task_dependencies, milestones, processes, resource_samples, validation_runs, validation_checks, merge_requests, merge_conflicts y reviews (DB §3).
 - **Verifica:** migración 001 → 002 sobre una DB con datos de P07 sin pérdida.
 
 ### P08.S2 · Clasificador de operaciones y Resource Manager

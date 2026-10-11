@@ -104,6 +104,7 @@ db_enum!(
         NoHeartbeat => "NO_HEARTBEAT",
         UserSwitch => "USER_SWITCH",
         UserStop => "USER_STOP",
+        PhaseDone => "PHASE_DONE",
     }
 );
 

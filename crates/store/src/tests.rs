@@ -48,6 +48,19 @@ const PHASE3_TABLES: [&str; 7] = [
     "mcp_servers",
 ];
 
+/// Tablas que añade la migración 004 (runtime multiagente).
+const PHASE2_TABLES: [&str; 9] = [
+    "milestones",
+    "task_dependencies",
+    "processes",
+    "resource_samples",
+    "validation_runs",
+    "validation_checks",
+    "merge_requests",
+    "merge_conflicts",
+    "reviews",
+];
+
 /// Proyecto, sesión, dos tasks, un proveedor y un modelo.
 fn seeded() -> Connection {
     let conn = open_in_memory().unwrap();
@@ -116,6 +129,7 @@ fn file_db_has_the_schema_and_pragmas() {
         .iter()
         .chain(PHASE4_TABLES.iter())
         .chain(PHASE3_TABLES.iter())
+        .chain(PHASE2_TABLES.iter())
         .map(|s| s.to_string())
         .collect();
     tables.sort();
@@ -133,7 +147,7 @@ fn file_db_has_the_schema_and_pragmas() {
         })
         .unwrap()
     };
-    assert_eq!(pragma("user_version"), "3");
+    assert_eq!(pragma("user_version"), "4");
     assert_eq!(pragma("journal_mode"), "wal");
     assert_eq!(pragma("foreign_keys"), "1");
     assert_eq!(pragma("synchronous"), "1"); // NORMAL
@@ -151,7 +165,7 @@ fn file_db_has_the_schema_and_pragmas() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
 }
 
@@ -392,6 +406,102 @@ fn migration_002_keeps_v01_data_and_adds_the_pending_foreign_keys() {
         )
         .is_err(),
         "un profile inexistente se rechaza"
+    );
+}
+
+/// Una base en la 003 con tasks, agentes y runs pasa a la 004 sin perder nada, con la FK
+/// `tasks.milestone_id`, `PHASE_DONE` aceptado y el DAG sin auto-dependencias.
+#[test]
+fn migration_004_keeps_data_and_adds_milestones_and_phase_done() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    MIGRATIONS.to_version(&mut conn, 3).unwrap();
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p1','demo','/repo','main',0);
+         INSERT INTO sessions (id, project_id, status, started_at) VALUES ('s1','p1','ACTIVE',0);
+         INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at)
+             VALUES ('t1','p1','T-1','WORK','uno','RUNNING',0,0), ('t2','p1','T-2','WORK','dos','READY',0,0);
+         INSERT INTO providers (id, display_name, cli_name, adapter_mode, setup_state) VALUES ('anthropic','Claude','claude','CLI','READY');
+         INSERT INTO models (id, provider_id, cli_model_id, display_name, discovered_at) VALUES ('claude/sonnet','anthropic','sonnet','Sonnet',0);
+         INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_model_id, failover_policy, context_mode, created_at, updated_at)
+             VALUES ('a1','p1','s1','t1',1,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0);
+         INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, end_reason, started_at, ended_at)
+             VALUES ('r1','a1',1,'anthropic','claude/sonnet','EXITED','COMPLETED',0,5);
+         INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, started_at)
+             VALUES ('r2','a1',2,'anthropic','claude/sonnet','RUNNING',6);
+         INSERT INTO tool_calls (id, agent_id, run_id, tool_name, op_class, status, requested_at)
+             VALUES ('tc1','a1','r2','bash',3,'RUNNING',7);
+         INSERT INTO messages (id, agent_id, run_id, role, content, created_at) VALUES ('m1','a1','r2','USER','hola',7);",
+    )
+    .unwrap();
+
+    MIGRATIONS.to_latest(&mut conn).unwrap();
+
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(count("SELECT COUNT(*) FROM tasks"), 2);
+    assert_eq!(count("SELECT COUNT(*) FROM agents"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM agent_runs"), 2);
+    assert_eq!(count("SELECT COUNT(*) FROM tool_calls"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM messages"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM pragma_foreign_key_check"), 0);
+
+    // `PHASE_DONE` es un motivo válido; uno inventado, no. Un solo run abierto por agente.
+    conn.execute_batch(
+        "UPDATE agent_runs SET status='HANDED_OFF', end_reason='PHASE_DONE', ended_at=9 WHERE id='r2';",
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "UPDATE agent_runs SET end_reason='PHASE_OVER' WHERE id='r2'",
+            []
+        )
+        .is_err()
+    );
+    conn.execute(
+        "INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, started_at) VALUES ('r3','a1',3,'anthropic','claude/sonnet','RUNNING',10)",
+        [],
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO agent_runs (id, agent_id, seq, provider_id, model_id, status, started_at) VALUES ('r4','a1',4,'anthropic','claude/sonnet','RUNNING',11)",
+            []
+        )
+        .is_err()
+    );
+
+    // `tasks.milestone_id` ahora es FK; el DAG rechaza auto-dependencias y duplicados.
+    assert!(
+        conn.execute("UPDATE tasks SET milestone_id='nada' WHERE id='t2'", [])
+            .is_err()
+    );
+    conn.execute_batch(
+        "INSERT INTO milestones (id, project_id, name, status) VALUES ('m1','p1','Auth','OPEN');
+         UPDATE tasks SET milestone_id='m1' WHERE id='t2';
+         INSERT INTO task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('t2','t1',0);",
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('t1','t1',0)",
+            []
+        )
+        .is_err()
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('t2','t1',0)",
+            []
+        )
+        .is_err()
+    );
+    // Las tablas nuevas apuntan a las tablas reconstruidas.
+    assert!(
+        conn.execute(
+            "INSERT INTO merge_requests (id, agent_id, task_id, target_branch, status, created_at) VALUES ('mr1','a1','nadie','main','PREFLIGHT',0)",
+            []
+        )
+        .is_err()
     );
 }
 

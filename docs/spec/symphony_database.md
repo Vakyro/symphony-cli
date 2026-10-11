@@ -205,7 +205,7 @@ Un **executor**: un periodo en el que un CLI y un modelo concretos ejecutaron al
 | transcript_path | TEXT | Archivo de sesión del CLI; de ahí se lee la cola del plan |
 | pid | INTEGER | Proceso raíz del CLI |
 | status | TEXT NOT NULL | `STARTING` · `RUNNING` · `EXITED` · `KILLED` · `FAILED` · `HANDED_OFF` |
-| end_reason | TEXT | `COMPLETED` · `QUOTA_EXHAUSTED` · `RATE_LIMITED` · `AUTH_ERROR` · `CRASH` · `NO_HEARTBEAT` · `USER_SWITCH` · `USER_STOP` |
+| end_reason | TEXT | `COMPLETED` · `QUOTA_EXHAUSTED` · `RATE_LIMITED` · `AUTH_ERROR` · `CRASH` · `NO_HEARTBEAT` · `USER_SWITCH` · `USER_STOP` · `PHASE_DONE` |
 | exit_code | INTEGER | |
 | last_heartbeat_at | INTEGER | Lo actualiza el daemon en memoria y lo escribe cada N segundos |
 | started_at | INTEGER NOT NULL | |
