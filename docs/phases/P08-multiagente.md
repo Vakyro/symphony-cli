@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p08-runtime-multiagente |
 | Inicio / cierre | 2026-10-11 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S7) |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S8) |
 | Tag | p08-done (pendiente) |
 | Docs usados | ADR-0011, ADR-0013, DB §3.B/§3.C/§3.H, PLAN §P08, CONSTRAINTS A12 |
 
@@ -94,6 +94,14 @@
 - **Desviación:** FLOW §14.3 dice «conflicto → Task BLOCKED». La tarea ya está `DONE` y su máquina de estados no permite `DONE → BLOCKED`; se bloquea la **solicitud de integración** (y queda el recovery item), no la tarea.
 - **Pendiente / notas:** (1) Que un CLI real devuelva el bloque ```review en el formato pedido no se probó en L3 (⛔ Leo); si no lo devuelve, la revisión queda `FAILED` con la razón. (2) El destino es siempre la rama del chat; el merge chat → `main` con review agent (ADR-0006) no está implementado todavía: sigue siendo una acción del usuario. (3) No hay vistas TUI de Changes, Merge Preflight, Conflict Review ni del lote (S8). (4) El tope de simultáneos de un lote se aplica al crear; no se reajusta si la cuota cae después.
 
+### P08.S8 · Vistas TUI de Fase 2 — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-11
+- **Qué se hizo:** las vistas 15 Task List, 16 Task Detail, 17 Milestone Review, 18 System / Resources, 19 Performance Profile, 26 Merge Preflight, 27 Conflict Review, 28 Validation y 29 Review Agent Result, y el **System Strip real** de Home (perfil, CPU, RAM, slots pesados y cuántas operaciones esperan turno). Navegación: en Home `t` tareas, `m` milestones, `s` sistema (también `:tasks`, `:milestones`, `:system`, `:profile`); en un agente `v` validación y `g` integración. Acciones: aprobar/pedir cambios/retener un milestone, cambiar el perfil (aplica al instante al scheduler), re-validar, preparar/aprobar/integrar/abandonar una integración, marcar conflictos resueltos a mano, pedir un revisor. La vista 25 (Changes / Diff) es la pestaña Cambios del agente que ya existía.
+- **Daemon (datos de las vistas):** `task.list` (tareas con agente, lo que esperan e integración), `system.get` (última muestra, slots, quién corre y quién espera con su razón) y `performance.set` (escribe `config.toml` conservando comentarios y aplica los límites).
+- **Archivos clave:** `crates/tui/src/{app,ui}.rs`, `crates/tui/tests/views.rs` (+9 snapshots), `crates/daemon/src/{server,views}.rs`.
+- **Cómo se verificó:** `cargo xtask check` → 557 passed. Snapshots `insta` de cada vista (los de Home y de las pestañas del agente cambiaron solo por la franja de sistema y las teclas nuevas, revisados); acciones y llamadas IPC probadas sobre el estado puro; el daemon real responde `system.get`/`performance.set`/`task.list` sin proyecto.
+- **Pendiente / notas:** (1) «Enviar al agente» de la vista 28 queda en el re-run: el fallo ya vuelve al agente solo en el gate. (2) La vista 17 decide sobre milestones ya creados (por un lote o por IPC): no hay formulario para crearlos desde la TUI. (3) Las vistas se probaron sobre estado simulado, no en una terminal real con Leo (⛔ para la revisión de fluidez de S9).
+
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
@@ -110,7 +118,7 @@
 
 ## Notas para el siguiente agente
 - Reconstruir una tabla padre: patrón `defer_foreign_keys` + `_bak` + `DROP` + reinsertar con su nombre (002, 003, 004). No uses `RENAME`.
-- Siguiente: P08.S8 (vistas TUI de Fase 2 y «pendiente de integrar»), luego S9 (benchmark: gate, con live autorizado) y S10 (cierre).
+- Siguiente: P08.S9 (benchmark principal, gate; primero con fake-agents y luego live con los proveedores que Leo autorizó, 2 mensajes sencillos por agente) y S10 (cierre).
 - En los scripts de Python con cadenas que llevan barras invertidas (`\n` de Rust, TOML) no uses heredocs de la herramienta Bash: se pierden. Escribe el script con la herramienta Write y ejecútalo.
 - En un `r#"…"#` de Rust, `"#` termina la cadena: un guion TOML con `"# Plan…` necesita `r##"…"##`.
 - Un test que falla y deja un `symphonyd` huérfano cuelga nextest (queda esperando al proceso con fugas): `Get-Process symphonyd* | Stop-Process` antes de reintentar.

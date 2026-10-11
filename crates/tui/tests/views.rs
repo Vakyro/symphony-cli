@@ -841,7 +841,12 @@ fn bus_events_refresh_on_the_next_tick_without_piling_up() {
     let calls = app.update(Msg::Tick(NOW));
     assert_eq!(
         methods(&calls),
-        ["agent.list", "providers.list", "recovery.list"]
+        [
+            "agent.list",
+            "providers.list",
+            "recovery.list",
+            "system.get"
+        ]
     );
     // Con respuestas pendientes no se piden más.
     app.update(Msg::Event("agent.event".into()));
@@ -849,7 +854,8 @@ fn bus_events_refresh_on_the_next_tick_without_piling_up() {
     ok(&mut app, Req::Agents, agents());
     ok(&mut app, Req::Providers, providers());
     ok(&mut app, Req::Recovery, json!({ "items": [] }));
-    assert_eq!(app.update(Msg::Tick(NOW)).len(), 3);
+    ok(&mut app, Req::System, json!({}));
+    assert_eq!(app.update(Msg::Tick(NOW)).len(), 4);
 }
 
 #[test]
@@ -1240,4 +1246,261 @@ fn codex_uses_dollar_and_the_other_prefix_gets_a_hint() {
     type_text(&mut app, "/");
     assert!(names(&app).is_empty());
     assert!(draw(&app).contains("las skills empiezan con $"));
+}
+
+// --- P08.S8: vistas de Fase 2 (15–19 y 26–29) ----------------------------------------
+
+fn tasks_json() -> Value {
+    json!({ "tasks": [
+        { "task_id": "01TASK1", "code": "T-1", "title": "Supabase authentication", "kind": "WORK",
+          "status": "DONE", "status_reason": null, "priority": 0, "milestone_id": "01MS1",
+          "milestone": "Authentication complete", "agent_id": "01AGENT1", "agent_number": 1,
+          "agent_state": "COMPLETED", "merge_status": "MERGED", "waiting_for": [] },
+        { "task_id": "01TASK2", "code": "T-2", "title": "Responsive modals", "kind": "WORK",
+          "status": "RUNNING", "status_reason": null, "priority": 0, "milestone_id": "01MS1",
+          "milestone": "Authentication complete", "agent_id": "01AGENT2", "agent_number": 2,
+          "agent_state": "RUNNING", "merge_status": null, "waiting_for": [] },
+        { "task_id": "01TASK3", "code": "T-3", "title": "Integration tests", "kind": "WORK",
+          "status": "WAITING", "status_reason": "espera a T-2", "priority": 0, "milestone_id": null,
+          "milestone": null, "agent_id": "01AGENT3", "agent_number": 3,
+          "agent_state": "WAITING_DEPENDENCY", "merge_status": null, "waiting_for": ["T-2"] },
+        { "task_id": "01TASK4", "code": "T-4", "title": "Merge auth changes", "kind": "WORK",
+          "status": "BLOCKED", "status_reason": "conflicto de merge", "priority": 0, "milestone_id": null,
+          "milestone": null, "agent_id": "01AGENT4", "agent_number": 4,
+          "agent_state": "COMPLETED", "merge_status": "BLOCKED", "waiting_for": [] },
+    ]})
+}
+
+#[test]
+fn view_15_task_list_and_view_16_task_detail() {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('t'));
+    assert_eq!(app.screen, Screen::Tasks);
+    assert_eq!(methods(&calls), ["task.list"]);
+    ok(&mut app, Req::Tasks, tasks_json());
+    insta::assert_snapshot!("view_15_task_list", draw(&app));
+
+    // Enter abre el detalle y pide sus dependencias.
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen, Screen::TaskDetail);
+    assert_eq!(methods(&calls), ["task.list", "task.deps"]);
+    assert_eq!(calls[1].params, json!({ "task": "01TASK3" }));
+    ok(
+        &mut app,
+        Req::TaskDeps,
+        json!({ "task_id": "01TASK3", "dependencies": [
+            { "task_id": "01TASK2", "code": "T-2", "title": "Responsive modals", "status": "RUNNING" },
+            { "task_id": "01TASK1", "code": "T-1", "title": "Supabase authentication", "status": "DONE" },
+        ], "unmet": [] }),
+    );
+    insta::assert_snapshot!("view_16_task_detail", draw(&app));
+
+    // `a` abre el agente de la tarea; Esc vuelve a la lista.
+    let calls = press(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.screen, Screen::Agent);
+    assert!(methods(&calls).contains(&"agent.inspect"));
+}
+
+#[test]
+fn view_17_milestone_review_decides_only_what_the_user_asks() {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('m'));
+    assert_eq!(app.screen, Screen::Milestones);
+    assert_eq!(methods(&calls), ["milestone.list"]);
+    ok(
+        &mut app,
+        Req::Milestones,
+        json!({ "milestones": [
+            { "id": "01MS1", "name": "Authentication complete", "requires_approval": true,
+              "status": "IN_REVIEW", "decided_at": null, "tasks_total": 2, "tasks_done": 2 },
+            { "id": "01MS2", "name": "Responsive UI", "requires_approval": false,
+              "status": "OPEN", "decided_at": null, "tasks_total": 3, "tasks_done": 1 },
+        ]}),
+    );
+    insta::assert_snapshot!("view_17_milestone_review", draw(&app));
+
+    let calls = press(&mut app, KeyCode::Char('a'));
+    assert_eq!(methods(&calls), ["milestone.decide"]);
+    assert_eq!(
+        calls[0].params,
+        json!({ "milestone": "01MS1", "decision": "approve" })
+    );
+    let calls = press(&mut app, KeyCode::Char('c'));
+    assert_eq!(calls[0].params["decision"], "request_changes");
+    let calls = press(&mut app, KeyCode::Char('h'));
+    assert_eq!(calls[0].params["decision"], "hold");
+}
+
+fn system_json() -> Value {
+    json!({
+        "profile": "BALANCED", "cpu_pct": 61.0, "ram_pct": 64.0, "process_count": 7,
+        "sampled_at": NOW - 2_000, "heavy_slots_used": 1, "heavy_slots_total": 1,
+        "cpu_ceiling_pct": 70.0, "ram_ceiling_pct": 70.0,
+        "running": [ { "agent": "Agent #2", "command": "pnpm test --filter api", "class": 3 } ],
+        "waiting": [ { "agent": "Agent #4", "command": "pnpm build", "class": 4,
+                       "why": "en cola: el slot pesado está ocupado (Agent #2 corre `pnpm test --filter api`)" } ],
+    })
+}
+
+#[test]
+fn view_18_system_and_view_19_performance_profile() {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('s'));
+    assert_eq!(app.screen, Screen::System);
+    assert_eq!(methods(&calls), ["system.get"]);
+    ok(&mut app, Req::System, system_json());
+    insta::assert_snapshot!("view_18_system", draw(&app));
+
+    // `p` abre el selector con el perfil vigente resaltado; Enter lo aplica.
+    press(&mut app, KeyCode::Char('p'));
+    assert_eq!(app.screen, Screen::PerformanceProfile);
+    ok(&mut app, Req::System, system_json());
+    press(&mut app, KeyCode::Right);
+    insta::assert_snapshot!("view_19_performance_profile", draw(&app));
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["performance.set"]);
+    assert_eq!(calls[0].params, json!({ "profile": "PERFORMANCE" }));
+}
+
+#[test]
+fn home_shows_the_real_system_strip() {
+    let mut app = home_app();
+    ok(&mut app, Req::System, system_json());
+    let screen = draw(&app);
+    assert!(
+        screen.contains("CPU 61%") && screen.contains("slots pesados 1/1"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("1 operación(es) esperando turno"),
+        "{screen}"
+    );
+}
+
+fn open_flow(key: char) -> App {
+    let mut app = agent_app(Tab::Overview);
+    let calls = press(&mut app, KeyCode::Char(key));
+    assert!(
+        matches!(app.screen, Screen::Validation | Screen::MergePreflight),
+        "{:?}",
+        app.screen
+    );
+    assert!(!calls.is_empty());
+    app
+}
+
+#[test]
+fn view_28_validation_shows_each_tier_and_the_failure() {
+    let mut app = open_flow('v');
+    ok(
+        &mut app,
+        Req::ValidationGet,
+        json!({ "agent_id": "01AGENT1", "runs": [
+            { "id": "v2", "tier": 2, "trigger": "AUTO", "status": "FAIL", "started_at": NOW - 5_000,
+              "finished_at": NOW - 2_000, "checks": [
+                { "name": "typecheck", "status": "PASS", "passed": null, "failed": null, "summary": null },
+                { "name": "targeted_tests", "status": "FAIL", "passed": 3, "failed": 1,
+                  "summary": "FAIL auth.refresh.test.ts expected 200, received 401" } ] },
+            { "id": "v1", "tier": 1, "trigger": "AUTO", "status": "PASS", "started_at": NOW - 9_000,
+              "finished_at": NOW - 8_000, "checks": [
+                { "name": "format", "status": "PASS", "passed": null, "failed": null, "summary": null },
+                { "name": "lint", "status": "PASS", "passed": null, "failed": null, "summary": null } ] },
+        ]}),
+    );
+    insta::assert_snapshot!("view_28_validation", draw(&app));
+    let calls = press(&mut app, KeyCode::Char('r'));
+    assert_eq!(methods(&calls), ["validation.run"]);
+    assert_eq!(calls[0].params, json!({ "agent": "01AGENT1", "tier": 2 }));
+}
+
+fn merge_json(conflicts: bool) -> Value {
+    json!({
+        "agent_id": "01AGENT1",
+        "merge_request": {
+            "id": "01MR1", "status": if conflicts { "BLOCKED" } else { "READY" },
+            "target_branch": "symphony/chat", "requires_approval": true, "approved_at": null,
+            "merge_commit": null, "merged_at": null,
+            "preflight": { "checks": [
+                { "name": "target", "status": "PASS", "detail": "se integra a `symphony/chat`" },
+                { "name": "task", "status": "PASS", "detail": "T-1 completa" },
+                { "name": "dependencies", "status": "PASS", "detail": "todas cumplidas" },
+                { "name": "validation", "status": "PASS", "detail": "2 tier(s) pasaron" },
+                { "name": "conflicts", "status": if conflicts { "FAIL" } else { "PASS" },
+                  "detail": if conflicts { "choca en src/auth.ts" } else { "ninguno" } },
+            ] },
+        },
+        "conflicts": if conflicts { json!([
+            { "path": "src/auth.ts", "other_agent_id": "01AGENT2", "resolution": "PENDING" }
+        ]) } else { json!([]) },
+        "reviews": [
+            { "id": "01RV1", "reviewer_agent_id": "01AGENT9", "status": "DONE",
+              "recommendation": "REQUEST_CHANGES",
+              "findings": [ { "severity": "high", "file": "src/auth.ts", "text": "falta el caso de error 401" },
+                            { "severity": "low", "file": "src/auth.ts", "text": "nombre poco claro" } ] }
+        ],
+    })
+}
+
+#[test]
+fn view_26_merge_preflight_and_its_actions() {
+    let mut app = open_flow('g');
+    ok(&mut app, Req::MergeGet, merge_json(false));
+    insta::assert_snapshot!("view_26_merge_preflight", draw(&app));
+
+    let calls = press(&mut app, KeyCode::Char('a'));
+    assert_eq!(methods(&calls), ["merge.approve"]);
+    assert_eq!(calls[0].params, json!({ "merge_request": "01MR1" }));
+    let calls = press(&mut app, KeyCode::Char('i'));
+    assert_eq!(methods(&calls), ["merge.integrate"]);
+    let calls = press(&mut app, KeyCode::Char('p'));
+    assert_eq!(
+        calls[0].params,
+        json!({ "agent": "01AGENT1", "validate": true })
+    );
+    let calls = press(&mut app, KeyCode::Char('w'));
+    assert_eq!(methods(&calls), ["review.start"]);
+    // Sin conflictos, `c` no abre nada.
+    press(&mut app, KeyCode::Char('c'));
+    assert_eq!(app.screen, Screen::MergePreflight);
+}
+
+#[test]
+fn view_27_conflict_review_and_view_29_review_result() {
+    let mut app = open_flow('g');
+    ok(&mut app, Req::MergeGet, merge_json(true));
+    press(&mut app, KeyCode::Char('c'));
+    assert_eq!(app.screen, Screen::ConflictReview);
+    insta::assert_snapshot!("view_27_conflict_review", draw(&app));
+    let calls = press(&mut app, KeyCode::Char('m'));
+    assert_eq!(methods(&calls), ["merge.resolve"]);
+    assert_eq!(
+        calls[0].params,
+        json!({ "merge_request": "01MR1", "resolution": "manual" })
+    );
+    let calls = press(&mut app, KeyCode::Char('x'));
+    assert_eq!(methods(&calls), ["merge.abort"]);
+
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::MergePreflight);
+    ok(&mut app, Req::MergeGet, merge_json(true));
+    press(&mut app, KeyCode::Char('y'));
+    assert_eq!(app.screen, Screen::ReviewResult);
+    insta::assert_snapshot!("view_29_review_result", draw(&app));
+}
+
+#[test]
+fn the_new_views_open_from_the_command_bar() {
+    for (cmd, screen, method) in [
+        ("tasks", Screen::Tasks, "task.list"),
+        ("milestones", Screen::Milestones, "milestone.list"),
+        ("system", Screen::System, "system.get"),
+        ("profile", Screen::PerformanceProfile, "system.get"),
+    ] {
+        let mut app = home_app();
+        let calls = command(&mut app, cmd);
+        assert_eq!(app.screen, screen, "{cmd}");
+        assert_eq!(methods(&calls), [method], "{cmd}");
+    }
 }

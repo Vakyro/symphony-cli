@@ -951,7 +951,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** preflight (FLOW §14.2), cola de integración, conflicto → `BLOCKED` + `merge_conflicts`, review agent como task `REVIEW` (FLOW §15.3). **Nunca merge a main sin política explícita.**
 - **Verifica:** Journey D con dos fake-agents que tocan el mismo archivo.
 
-### P08.S8 · Vistas TUI de Fase 2
+### P08.S8 · Vistas TUI de Fase 2 ✅
 - **Qué:** vistas 15–19 y 25–29 (FLOW §18) + System Strip real.
 - **Verifica:** snapshots `insta`.
 

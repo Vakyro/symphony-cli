@@ -207,7 +207,7 @@ fn heavy_tool_waits_for_its_turn_and_is_denied_with_a_reason() {
     }
     let c = call_of(&db, "pnpm test --filter api");
     assert_eq!(c.2.as_deref(), Some(id_of(&db, "pnpm build").as_str()));
-    assert!(c.1.unwrap().contains("slots pesados"));
+    assert!(c.1.unwrap().contains("slot pesado"));
 
     post_tool(&home, &a1, &r1, "u1");
     let (out, _) = waiter.join().unwrap();

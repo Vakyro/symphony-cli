@@ -424,6 +424,9 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "batch.integrate" => batch_integrate(req, state).await,
         "validation.run" => validation_run(req, state).await,
         "validation.get" => validation_get(req, state),
+        "task.list" => task_list(req, state),
+        "system.get" => system_get(req, state),
+        "performance.set" => performance_set(req, state).await,
         "task.depend" | "task.undepend" => task_depend(req, state).await,
         "task.deps" => task_deps(req, state),
         "task.resolve_dependency" => task_resolve(req, state).await,
@@ -2394,5 +2397,117 @@ async fn batch_integrate(req: Request, state: &State) -> Response {
     match state.runtime.batch_integrate(milestone, approve).await {
         Ok(v) => Response::ok(req.id, v),
         Err(e) => Response::error(req.id, "batch_error", e),
+    }
+}
+
+// --- vistas de Fase 2 (P08.S8) -------------------------------------------------------
+
+fn task_list(req: Request, state: &State) -> Response {
+    let project = match request_project(state, &req.params) {
+        Ok(p) => p.to_string(),
+        // Un proyecto sin tareas no es un error para la vista.
+        Err(_) => return Response::ok(req.id, json!({ "tasks": [] })),
+    };
+    read_view(req, state, |c| crate::views::tasks(c, &project))
+}
+
+/// System / Resources (18): carga actual, slots pesados y quién espera a quién.
+fn system_get(req: Request, state: &State) -> Response {
+    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(&state.home)).ok();
+    let perf = config
+        .as_ref()
+        .map(|c| c.performance.clone())
+        .unwrap_or_default();
+    let limits = symphony_scheduler::Limits::from_config(&perf);
+    let snapshot = state.scheduling.snapshot();
+    let sample = state.reader.lock().ok().and_then(|c| {
+        c.query_row(
+            "SELECT cpu_pct, ram_pct, process_count, sampled_at FROM resource_samples ORDER BY id DESC LIMIT 1",
+            [],
+            |r| {
+                Ok((
+                    r.get::<_, f64>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .ok()
+    });
+    let holder = |h: &symphony_scheduler::Holder| {
+        json!({
+            "agent": h.agent_label,
+            "command": h.command,
+            "class": h.class.as_i64(),
+        })
+    };
+    let (running, waiting) = match &snapshot {
+        Some(s) => (
+            s.running.iter().map(holder).collect::<Vec<_>>(),
+            s.waiting
+                .iter()
+                .map(|(h, why)| {
+                    let mut v = holder(h);
+                    v["why"] = json!(symphony_scheduler::explain(why));
+                    v
+                })
+                .collect::<Vec<_>>(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    Response::ok(
+        req.id,
+        json!({
+            "profile": perf.profile.as_str(),
+            "cpu_pct": sample.map(|s| s.0),
+            "ram_pct": sample.map(|s| s.1),
+            "process_count": sample.and_then(|s| s.2),
+            "sampled_at": sample.map(|s| s.3),
+            "heavy_slots_used": running.len(),
+            "heavy_slots_total": limits.max_heavy,
+            "cpu_ceiling_pct": limits.cpu_ceiling_pct,
+            "ram_ceiling_pct": limits.ram_ceiling_pct,
+            "running": running,
+            "waiting": waiting,
+        }),
+    )
+}
+
+/// Performance Profile (19): cambia `[performance] profile` y lo aplica al scheduler al instante.
+async fn performance_set(req: Request, state: &State) -> Response {
+    let Some(profile) = req
+        .params
+        .get("profile")
+        .and_then(Value::as_str)
+        .map(str::to_ascii_uppercase)
+        .filter(|p| matches!(p.as_str(), "ECO" | "BALANCED" | "PERFORMANCE" | "CUSTOM"))
+    else {
+        return Response::error(
+            req.id,
+            "invalid_params",
+            "`profile` tiene que ser ECO, BALANCED, PERFORMANCE o CUSTOM",
+        );
+    };
+    let home = symphony_core::SymphonyHome::at(&state.home);
+    match symphony_core::set_value(
+        &home,
+        "performance.profile",
+        toml_edit::Value::from(profile.clone()),
+    ) {
+        Ok(cfg) => {
+            let limits = symphony_scheduler::Limits::from_config(&cfg.performance);
+            state.scheduling.set_limits(limits.clone());
+            Response::ok(
+                req.id,
+                json!({
+                    "profile": profile,
+                    "heavy_slots_total": limits.max_heavy,
+                    "cpu_ceiling_pct": limits.cpu_ceiling_pct,
+                    "ram_ceiling_pct": limits.ram_ceiling_pct,
+                }),
+            )
+        }
+        Err(e) => Response::error(req.id, "config_error", e.to_string()),
     }
 }

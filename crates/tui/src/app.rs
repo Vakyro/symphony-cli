@@ -41,6 +41,24 @@ pub enum Screen {
     SharedMcp,
     /// 35 Usage / Context Stats.
     Stats,
+    /// 15 Task List.
+    Tasks,
+    /// 16 Task Detail.
+    TaskDetail,
+    /// 17 Milestone Review.
+    Milestones,
+    /// 18 System / Resources.
+    System,
+    /// 19 Performance Profile.
+    PerformanceProfile,
+    /// 28 Validation.
+    Validation,
+    /// 26 Merge Preflight.
+    MergePreflight,
+    /// 27 Conflict Review.
+    ConflictReview,
+    /// 29 Review Agent Result.
+    ReviewResult,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +129,18 @@ pub enum Req {
     SharedToggle,
     ContextStats,
     Usage,
+    Tasks,
+    TaskDeps,
+    Milestones,
+    MilestoneDecide,
+    System,
+    PerformanceSet,
+    ValidationGet,
+    ValidationRun,
+    MergeGet,
+    MergePrepare,
+    MergeAction,
+    ReviewStart,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -342,6 +372,23 @@ pub struct App {
     /// 35: `context.stats` y `usage.get`.
     pub ctx_stats: Option<Value>,
     pub usage: Option<Value>,
+    /// 15: `task.list`.
+    pub tasks: Vec<Value>,
+    /// 16: la tarea abierta y sus dependencias (`task.deps`).
+    pub detail_task: Option<Value>,
+    pub task_deps: Option<Value>,
+    /// 17: `milestone.list`.
+    pub milestones: Vec<Value>,
+    /// 18 y Home: `system.get`.
+    pub system: Option<Value>,
+    /// 19: perfil resaltado (índice en `PERFORMANCE`).
+    pub perf_sel: usize,
+    /// 26–29: el agente cuya validación o integración se mira.
+    pub flow_agent: Option<String>,
+    /// 28: `validation.get`.
+    pub validation: Option<Value>,
+    /// 26, 27 y 29: `merge.get`.
+    pub merge: Option<Value>,
     pub selected: usize,
     pub first_run: FirstRun,
     pub new_agent: NewAgent,
@@ -417,6 +464,15 @@ impl App {
             shared_warnings: Vec::new(),
             ctx_stats: None,
             usage: None,
+            tasks: Vec::new(),
+            detail_task: None,
+            task_deps: None,
+            milestones: Vec::new(),
+            system: None,
+            perf_sel: 1,
+            flow_agent: None,
+            validation: None,
+            merge: None,
             selected: 0,
             first_run: FirstRun {
                 performance: 1,
@@ -520,6 +576,9 @@ impl App {
             Screen::ContextOverview => self.overview_items().len(),
             Screen::SharedSkills => self.shared_skills.len(),
             Screen::SharedMcp => self.shared_mcp.len(),
+            Screen::Tasks => self.tasks.len(),
+            Screen::Milestones => self.milestones.len(),
+            Screen::PerformanceProfile => PERFORMANCE.len(),
             _ => 0,
         }
     }
@@ -643,6 +702,7 @@ impl App {
                 calls.extend(self.agents_call());
                 calls.push(Self::providers_call());
                 calls.push(self.recovery_call());
+                calls.push(call(Req::System, "system.get", json!({})));
             }
             Screen::Providers | Screen::ProviderSetup => calls.push(Self::providers_call()),
             Screen::Recovery => {
@@ -689,6 +749,47 @@ impl App {
             Screen::Stats => {
                 calls.push(call(Req::ContextStats, "context.stats", json!({})));
                 calls.push(call(Req::Usage, "usage.get", json!({ "days": 7 })));
+            }
+            Screen::Tasks => calls.push(call(
+                Req::Tasks,
+                "task.list",
+                json!({ "project_root": self.root() }),
+            )),
+            Screen::TaskDetail => {
+                calls.push(call(
+                    Req::Tasks,
+                    "task.list",
+                    json!({ "project_root": self.root() }),
+                ));
+                if let Some(id) = self
+                    .detail_task
+                    .as_ref()
+                    .and_then(|t| t["task_id"].as_str())
+                {
+                    calls.push(call(Req::TaskDeps, "task.deps", json!({ "task": id })));
+                }
+            }
+            Screen::Milestones => calls.push(call(
+                Req::Milestones,
+                "milestone.list",
+                json!({ "project_root": self.root() }),
+            )),
+            Screen::System | Screen::PerformanceProfile => {
+                calls.push(call(Req::System, "system.get", json!({})));
+            }
+            Screen::Validation => {
+                if let Some(id) = &self.flow_agent {
+                    calls.push(call(
+                        Req::ValidationGet,
+                        "validation.get",
+                        json!({ "agent": id }),
+                    ));
+                }
+            }
+            Screen::MergePreflight | Screen::ConflictReview | Screen::ReviewResult => {
+                if let Some(id) = &self.flow_agent {
+                    calls.push(call(Req::MergeGet, "merge.get", json!({ "agent": id })));
+                }
             }
             Screen::Chat => {
                 if self.chat.is_none() {
@@ -911,6 +1012,59 @@ impl App {
             }
             Req::ContextStats => self.ctx_stats = Some(v.clone()),
             Req::Usage => self.usage = Some(v.clone()),
+            Req::Tasks => {
+                self.tasks = list("tasks");
+                // La tarea abierta se relee con el resto (su estado cambia).
+                if let Some(id) = self
+                    .detail_task
+                    .as_ref()
+                    .and_then(|t| t["task_id"].as_str())
+                    && let Some(t) = self.tasks.iter().find(|t| t["task_id"] == id)
+                {
+                    self.detail_task = Some(t.clone());
+                }
+            }
+            Req::TaskDeps => self.task_deps = Some(v.clone()),
+            Req::Milestones => self.milestones = list("milestones"),
+            Req::System => self.system = Some(v.clone()),
+            Req::MilestoneDecide => {
+                self.info("Decisión registrada.");
+                return self.refresh();
+            }
+            Req::PerformanceSet => {
+                self.info(format!(
+                    "Perfil {} aplicado: {} proceso(s) pesados a la vez.",
+                    v["profile"].as_str().unwrap_or("?"),
+                    v["heavy_slots_total"]
+                ));
+                return self.refresh();
+            }
+            Req::ValidationGet => self.validation = Some(v.clone()),
+            Req::ValidationRun => {
+                if v["passed"].as_bool().unwrap_or(false) {
+                    self.info("La validación pasó.");
+                } else {
+                    self.error("La validación falló: revisa los checks.");
+                }
+                return self.refresh();
+            }
+            Req::MergeGet => self.merge = Some(v.clone()),
+            Req::MergePrepare => {
+                if v["ready"].as_bool().unwrap_or(false) {
+                    self.info("Listo para integrar.");
+                } else {
+                    self.error("Hay bloqueos: revisa el preflight.");
+                }
+                return self.refresh();
+            }
+            Req::MergeAction => {
+                self.info("Hecho.");
+                return self.refresh();
+            }
+            Req::ReviewStart => {
+                self.info("Review agent creado: el resultado aparece al terminar.");
+                return self.refresh();
+            }
             Req::RecoveryAct => {
                 self.info("Hecho.");
                 return self.refresh();
@@ -1050,6 +1204,15 @@ impl App {
             Screen::ContextObject => self.object_key(key),
             Screen::SharedSkills | Screen::SharedMcp => self.shared_key(key),
             Screen::Stats => self.stats_key(key),
+            Screen::Tasks => self.tasks_key(key),
+            Screen::TaskDetail => self.task_detail_key(key),
+            Screen::Milestones => self.milestones_key(key),
+            Screen::System => self.system_key(key),
+            Screen::PerformanceProfile => self.perf_key(key),
+            Screen::Validation => self.validation_key(key),
+            Screen::MergePreflight => self.merge_key(key),
+            Screen::ConflictReview => self.conflict_key(key),
+            Screen::ReviewResult => self.review_key(key),
         }
     }
 
@@ -1372,6 +1535,9 @@ impl App {
             KeyCode::Esc => self.go(Screen::Chat),
             KeyCode::Char('p') => self.go(Screen::Providers),
             KeyCode::Char('r') => self.go(Screen::Recovery),
+            KeyCode::Char('t') => self.go(Screen::Tasks),
+            KeyCode::Char('m') => self.go(Screen::Milestones),
+            KeyCode::Char('s') => self.go(Screen::System),
             KeyCode::Char(':') | KeyCode::Char('/') => {
                 self.command = Some(String::new());
                 Vec::new()
@@ -1456,6 +1622,10 @@ impl App {
             "skills" => self.go(Screen::SharedSkills),
             "mcp" => self.go(Screen::SharedMcp),
             "stats" | "usage" => self.go(Screen::Stats),
+            "tasks" | "task" => self.go(Screen::Tasks),
+            "milestones" | "milestone" => self.go(Screen::Milestones),
+            "system" | "sys" => self.go(Screen::System),
+            "profile" | "performance" => self.open_perf(),
             "quit" | "q" => {
                 self.quit = true;
                 Vec::new()
@@ -1463,7 +1633,7 @@ impl App {
             "" => Vec::new(),
             other => {
                 self.error(format!(
-                    "Comando desconocido `{other}`. Usa: spawn [modelo] <tarea> · agent <n> · new · providers · recovery · context · skills · mcp · stats · quit"
+                    "Comando desconocido `{other}`. Usa: spawn [modelo] <tarea> · agent <n> · new · providers · recovery · tasks · milestones · system · profile · context · skills · mcp · stats · quit"
                 ));
                 Vec::new()
             }
@@ -1700,6 +1870,8 @@ impl App {
                 return Vec::new();
             }
             KeyCode::Char('?') => return self.open_explain(),
+            KeyCode::Char('v') => return self.open_flow(Screen::Validation),
+            KeyCode::Char('g') => return self.open_flow(Screen::MergePreflight),
             KeyCode::Char('c') => return self.open_context(),
             KeyCode::Char('e') => {
                 return vec![call(Req::Export, "agent.export", json!({ "agent": a.id }))];
@@ -1868,6 +2040,260 @@ impl App {
             }
             KeyCode::Char('r') => self.refresh(),
             KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Abre validación (28) o integración (26) del agente que se está mirando.
+    fn open_flow(&mut self, screen: Screen) -> Vec<Call> {
+        let Some(id) = self.agent.as_ref().map(|a| a.id.clone()) else {
+            return Vec::new();
+        };
+        self.flow_agent = Some(id);
+        self.validation = None;
+        self.merge = None;
+        self.go(screen)
+    }
+
+    /// 19: abre el selector con el perfil vigente resaltado.
+    fn open_perf(&mut self) -> Vec<Call> {
+        let current = self
+            .system
+            .as_ref()
+            .and_then(|s| s["profile"].as_str())
+            .unwrap_or("BALANCED");
+        let idx = PERFORMANCE
+            .iter()
+            .position(|(id, _)| *id == current)
+            .unwrap_or(1);
+        let calls = self.go(Screen::PerformanceProfile);
+        self.perf_sel = idx;
+        calls
+    }
+
+    /// 15: lista de tareas.
+    fn tasks_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if self.move_selection(key.code) {
+            return Vec::new();
+        }
+        let item = self.tasks.get(self.selected).cloned();
+        match key.code {
+            KeyCode::Enter => {
+                let Some(t) = item else { return Vec::new() };
+                self.detail_task = Some(t);
+                self.task_deps = None;
+                self.screen = Screen::TaskDetail;
+                self.refresh()
+            }
+            KeyCode::Char('a') => match item.as_ref().and_then(|t| t["agent_id"].as_str()) {
+                Some(id) => self.open_agent(id.to_string()),
+                None => Vec::new(),
+            },
+            KeyCode::Char('m') => self.go(Screen::Milestones),
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 16: detalle de una tarea.
+    fn task_detail_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Char('a') => {
+                match self
+                    .detail_task
+                    .as_ref()
+                    .and_then(|t| t["agent_id"].as_str())
+                    .map(str::to_string)
+                {
+                    Some(id) => self.open_agent(id),
+                    None => Vec::new(),
+                }
+            }
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.screen = Screen::Tasks;
+                self.refresh()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// 17: gate de un milestone.
+    fn milestones_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if self.move_selection(key.code) {
+            return Vec::new();
+        }
+        let item = self.milestones.get(self.selected).cloned();
+        let decide = |decision: &str| -> Vec<Call> {
+            item.as_ref()
+                .map(|m| {
+                    call(
+                        Req::MilestoneDecide,
+                        "milestone.decide",
+                        json!({ "milestone": m["id"], "decision": decision }),
+                    )
+                })
+                .into_iter()
+                .collect()
+        };
+        match key.code {
+            KeyCode::Char('a') => decide("approve"),
+            KeyCode::Char('c') => decide("request_changes"),
+            KeyCode::Char('h') => decide("hold"),
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 18: recursos y colas.
+    fn system_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Char('p') => self.open_perf(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 19: elegir el perfil de rendimiento.
+    fn perf_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Up | KeyCode::Left | KeyCode::Char('k') | KeyCode::Char('h') => {
+                self.perf_sel = cycle(self.perf_sel, PERFORMANCE.len(), false);
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Char('j') | KeyCode::Char('l') => {
+                self.perf_sel = cycle(self.perf_sel, PERFORMANCE.len(), true);
+                Vec::new()
+            }
+            KeyCode::Enter => vec![call(
+                Req::PerformanceSet,
+                "performance.set",
+                json!({ "profile": PERFORMANCE[self.perf_sel].0 }),
+            )],
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::System),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 28: validación del agente.
+    fn validation_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Char('r') => match &self.flow_agent {
+                Some(id) => vec![call(
+                    Req::ValidationRun,
+                    "validation.run",
+                    json!({ "agent": id, "tier": 2 }),
+                )],
+                None => Vec::new(),
+            },
+            KeyCode::Char('g') => {
+                self.merge = None;
+                self.go(Screen::MergePreflight)
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.back_to_agent(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn back_to_agent(&mut self) -> Vec<Call> {
+        if let Some(id) = self.flow_agent.clone() {
+            self.agent = Some(AgentView::new(id));
+        }
+        self.go(Screen::Agent)
+    }
+
+    fn merge_id(&self) -> Option<String> {
+        self.merge
+            .as_ref()
+            .and_then(|m| m["merge_request"]["id"].as_str())
+            .map(str::to_string)
+    }
+
+    fn merge_call(&self, method: &'static str, extra: Value) -> Vec<Call> {
+        let Some(id) = self.merge_id() else {
+            return Vec::new();
+        };
+        let mut params = json!({ "merge_request": id });
+        if let (Some(p), Some(e)) = (params.as_object_mut(), extra.as_object()) {
+            p.extend(e.clone());
+        }
+        vec![call(Req::MergeAction, method, params)]
+    }
+
+    fn review_call(&self) -> Vec<Call> {
+        match &self.flow_agent {
+            Some(id) => vec![call(
+                Req::ReviewStart,
+                "review.start",
+                json!({ "agent": id }),
+            )],
+            None => Vec::new(),
+        }
+    }
+
+    fn has_conflicts(&self) -> bool {
+        self.merge
+            .as_ref()
+            .and_then(|m| m["conflicts"].as_array())
+            .is_some_and(|c| !c.is_empty())
+    }
+
+    /// 26: preflight de integración.
+    fn merge_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Char('p') => match &self.flow_agent {
+                Some(id) => vec![call(
+                    Req::MergePrepare,
+                    "merge.prepare",
+                    json!({ "agent": id, "validate": true }),
+                )],
+                None => Vec::new(),
+            },
+            KeyCode::Char('a') => self.merge_call("merge.approve", json!({})),
+            KeyCode::Char('i') => self.merge_call("merge.integrate", json!({})),
+            KeyCode::Char('x') => self.merge_call("merge.abort", json!({})),
+            KeyCode::Char('c') if self.has_conflicts() => self.go(Screen::ConflictReview),
+            KeyCode::Char('w') => self.review_call(),
+            KeyCode::Char('y') => self.go(Screen::ReviewResult),
+            KeyCode::Char('v') => {
+                self.validation = None;
+                self.go(Screen::Validation)
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.back_to_agent(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 27: conflictos de la integración.
+    fn conflict_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Char('m') => {
+                self.merge_call("merge.resolve", json!({ "resolution": "manual" }))
+            }
+            KeyCode::Char('w') => self.review_call(),
+            KeyCode::Char('x') => self.merge_call("merge.abort", json!({})),
+            KeyCode::Char('p') => match &self.flow_agent {
+                Some(id) => vec![call(
+                    Req::MergePrepare,
+                    "merge.prepare",
+                    json!({ "agent": id, "validate": false }),
+                )],
+                None => Vec::new(),
+            },
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::MergePreflight),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 29: veredicto del review agent.
+    fn review_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Char('w') => self.review_call(),
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::MergePreflight),
             _ => Vec::new(),
         }
     }

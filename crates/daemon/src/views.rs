@@ -167,3 +167,79 @@ pub fn recovery_item(
     )
     .optional()
 }
+
+/// Task List (15): las tareas del proyecto con su agente, lo que esperan y su integración.
+pub fn tasks(conn: &Connection, project: &str) -> rusqlite::Result<Value> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.code, t.title, t.kind, t.status, t.status_reason, t.priority,
+                t.milestone_id, m.name,
+                a.id, a.number, a.state,
+                (SELECT mr.status FROM merge_requests mr WHERE mr.agent_id = a.id
+                 ORDER BY mr.created_at DESC, mr.rowid DESC LIMIT 1)
+         FROM tasks t
+         LEFT JOIN milestones m ON m.id = t.milestone_id
+         LEFT JOIN agents a ON a.id = (
+             SELECT id FROM agents WHERE task_id = t.id ORDER BY created_at DESC, rowid DESC LIMIT 1)
+         WHERE t.project_id = ?1 AND t.code <> 'CHAT'
+         ORDER BY t.rowid",
+    )?;
+    let rows = stmt.query_map([project], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, Option<String>>(5)?,
+            r.get::<_, i64>(6)?,
+            r.get::<_, Option<String>>(7)?,
+            r.get::<_, Option<String>>(8)?,
+            r.get::<_, Option<String>>(9)?,
+            r.get::<_, Option<i64>>(10)?,
+            r.get::<_, Option<String>>(11)?,
+            r.get::<_, Option<String>>(12)?,
+        ))
+    })?;
+    let mut unmet = conn.prepare(
+        "SELECT d.code FROM task_dependencies td JOIN tasks d ON d.id = td.depends_on_task_id
+         WHERE td.task_id = ?1 AND d.status <> 'DONE' ORDER BY d.code",
+    )?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (
+            id,
+            code,
+            title,
+            kind,
+            status,
+            reason,
+            priority,
+            ms_id,
+            ms_name,
+            agent,
+            number,
+            state,
+            merge,
+        ) = row?;
+        let waits: Vec<String> = unmet
+            .query_map([&id], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        out.push(json!({
+            "task_id": id,
+            "code": code,
+            "title": title,
+            "kind": kind,
+            "status": status,
+            "status_reason": reason,
+            "priority": priority,
+            "milestone_id": ms_id,
+            "milestone": ms_name,
+            "agent_id": agent,
+            "agent_number": number,
+            "agent_state": state,
+            "merge_status": merge,
+            "waiting_for": waits,
+        }));
+    }
+    Ok(json!({ "tasks": out }))
+}

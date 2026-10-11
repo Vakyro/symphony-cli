@@ -416,10 +416,15 @@ pub fn explain(reason: &WaitReason) -> String {
     match reason {
         WaitReason::SlotsFull { holders, max } => {
             let who = holders.iter().map(what).collect::<Vec<_>>().join("; ");
-            if who.is_empty() {
-                format!("en cola: los {max} slots pesados están ocupados")
+            let slots = if *max == 1 {
+                "el slot pesado está ocupado".to_string()
             } else {
-                format!("en cola: los {max} slots pesados están ocupados ({who})")
+                format!("los {max} slots pesados están ocupados")
+            };
+            if who.is_empty() {
+                format!("en cola: {slots}")
+            } else {
+                format!("en cola: {slots} ({who})")
             }
         }
         WaitReason::VeryHeavyRunning { holder } => format!(
