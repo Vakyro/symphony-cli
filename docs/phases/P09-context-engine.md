@@ -4,9 +4,9 @@
 |---|---|
 | Estado | CERRADA CON PENDIENTES (los live) |
 | Rama | phase/p09-context-engine |
-| Inicio / cierre | 2026-10-02 / — |
+| Inicio / cierre | 2026-10-02 / 2026-10-11 |
 | Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S7, S9, S10), claude-code/opus-5.5 (planificación y STATUS) |
-| Tag | p09-done (pendiente) |
+| Tag | p09-done |
 | Docs usados | IDEA §5.6, §5.12; STACK §13–§16; DB §3.G, §3.J, §6; FLOW §11; ADR-0004, ADR-0010 |
 
 ## Diseño (antes de escribir código, ADR-0010 §3)
