@@ -939,7 +939,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** Job Objects (Windows), cgroups v2 (Linux) y process groups (macOS) sobre el árbol de cada run. En los CLIs sin hook-hold (ADR-0003), el límite se aplica aquí. Llenar `processes`.
 - **Verifica:** test que lanza una carga CPU-bound bajo límite y mide que se respeta (por OS en CI).
 
-### P08.S5 · DAG de tareas y milestones
+### P08.S5 · DAG de tareas y milestones ✅
 - **Qué:** dependencias con detección de ciclos; transiciones automáticas `WAITING_DEPENDENCY` ↔ `READY`; dependencia fallida → `BLOCKED` con decisión (FLOW §9.3); milestones con gate (FLOW §9.4).
 - **Verifica:** proptest "un DAG nunca acepta ciclos".
 

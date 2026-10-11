@@ -270,6 +270,7 @@ impl Runtime {
             ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
             ("SYMPHONY_PROJECT_ID".into(), l.project_id.to_string()),
             ("SYMPHONY_RUN_ID".into(), l.run_id.to_string()),
+            ("SYMPHONY_TASK_ID".into(), l.task_id.to_string()),
             ("SYMPHONY_PROVIDER".into(), l.provider_id.clone()),
             ("SYMPHONY_HOME".into(), self.home.display().to_string()),
         ];
@@ -288,8 +289,10 @@ impl Runtime {
             agent_id: Some(l.agent_id.to_string()),
             run_id: Some(l.run_id.to_string()),
             source: EventSource::User,
+            // Las reglas del plan por fases son de Symphony: el CLI las recibe, la conversación
+            // guarda lo que pidió el usuario (y es lo que viaja en un handoff).
             event: AgentEvent::UserMessage {
-                text: l.prompt.clone(),
+                text: crate::plan::without_instructions(&l.prompt).to_string(),
             },
             occurred_at: now_ms(),
         };
@@ -645,6 +648,11 @@ impl Runtime {
     async fn finish_natural(&self, l: &Launch, exit: ExitStatus) {
         // ponytail: exit 0 = tarea terminada; el heartbeat (P06.S6) cubre los cuelgues.
         if exit == ExitStatus::Exited(0) {
+            // Con plan por fases, el CLI que salió bien puede dejar fases pendientes (sesión
+            // nueva), una tarea fallida (el agente se detiene) o el plan completo.
+            if self.advance_plan(l).await {
+                return;
+            }
             self.commit_chat_turn(l).await;
             let (agent, task, run) = (l.agent_id, l.task_id, l.run_id);
             let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
@@ -1018,6 +1026,7 @@ impl Runtime {
                 Some(failure_id),
                 None,
                 pending,
+                None,
             )
             .await
         {
@@ -1040,6 +1049,7 @@ impl Runtime {
         failure_id: Option<ProviderFailureId>,
         message: Option<&str>,
         route: Option<crate::routing::Pending>,
+        prompt_override: Option<String>,
     ) -> Result<RunId, AgentOpError> {
         let adapter = self
             .adapter(&model.provider_id)
@@ -1073,7 +1083,14 @@ impl Runtime {
                     h.build_ms,
                     h.items,
                 );
-                (h.prompt, handoff, Some(change_row), Some(separator))
+                // Una fase nueva no arrastra la conversación anterior (ADR-0011 §3): su prompt
+                // lo arma el plan; el handoff queda registrado igual.
+                (
+                    prompt_override.unwrap_or(h.prompt),
+                    handoff,
+                    Some(change_row),
+                    Some(separator),
+                )
             }
             None => {
                 let objective = self
@@ -1081,8 +1098,13 @@ impl Runtime {
                     .map(|c| c.objective)
                     .ok_or_else(|| AgentOpError("el agente no tiene checkpoint".into()))?;
                 let tokens = symphony_context::handoff::estimate_tokens(&objective);
+                let is_chat = self.read_op(|c| {
+                    Ok(repo::get_task(c, agent.task_id)?.code == repo::CHAT_TASK_CODE)
+                })?;
+                let prompt = prompt_override
+                    .unwrap_or_else(|| self.planned_prompt(agent.task_id, is_chat, &objective));
                 (
-                    objective,
+                    prompt,
                     (None, agent.context_mode, tokens, tokens, 0, Vec::new()),
                     None,
                     None,
@@ -1415,6 +1437,7 @@ impl Runtime {
             None,
             message,
             route,
+            None,
         )
         .await
     }
@@ -1618,6 +1641,7 @@ impl Runtime {
                     None,
                     Some(text),
                     route,
+                    None,
                 )
                 .await;
         }
@@ -1731,6 +1755,7 @@ impl Runtime {
                 reason,
                 change,
                 reason_en,
+                None,
                 None,
                 None,
                 None,

@@ -89,6 +89,36 @@ pub struct Config {
     pub providers: ProvidersConfig,
     pub logging: LoggingConfig,
     pub chat: ChatConfig,
+    pub plan: PlanConfig,
+}
+
+/// `[plan]`: plan por fases y tareas de cada agente (ADR-0011, ADR-0013).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PlanConfig {
+    /// El agente escribe un plan por fases y Symphony abre una sesión nueva por fase.
+    pub enabled: bool,
+    /// `auto`: la fase siguiente arranca sola; `ask`: Symphony espera la confirmación.
+    pub phase_start: PhaseStart,
+    /// Una fase con menos tareas se junta con la siguiente.
+    pub min_tasks_per_phase: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PhaseStart {
+    Auto,
+    Ask,
+}
+
+impl Default for PlanConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            phase_start: PhaseStart::Auto,
+            min_tasks_per_phase: 2,
+        }
+    }
 }
 
 /// `[chat]`: política opcional de cambio de proveedor por uso de contexto (P07.5.S6).
@@ -237,6 +267,13 @@ default_profile = "@code"
 # Qué hacer si el proveedor falla: NONE · SAME_PROVIDER · ANY
 failover = "ANY"
 
+[plan]
+# El agente planifica por fases y tareas (`.symphony/plan/<tarea>.md`, temporal) y cada fase
+# corre en una sesión nueva. phase_start: "auto" (sola) o "ask" (te pregunta antes de cada fase).
+enabled = true
+phase_start = "auto"
+min_tasks_per_phase = 2
+
 [context]
 # Cuánto se comprime el contexto en un handoff: RAW · SAFE · BALANCED · AGGRESSIVE
 mode = "BALANCED"
@@ -316,6 +353,11 @@ impl Config {
                     "performance.{name} = {v} debe estar entre 1 y 100"
                 )));
             }
+        }
+        if self.plan.min_tasks_per_phase == 0 {
+            return Err(invalid(
+                "plan.min_tasks_per_phase debe ser mayor que 0".into(),
+            ));
         }
         if self.chat.switch_at_tokens == Some(0) {
             return Err(invalid("chat.switch_at_tokens debe ser mayor que 0".into()));

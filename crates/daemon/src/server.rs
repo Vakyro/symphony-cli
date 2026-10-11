@@ -180,6 +180,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     );
     runtime.watch_active_projects();
 
+    crate::dependencies::spawn(runtime.clone(), shutdown.clone());
     let scheduling = Arc::new(crate::scheduling::Scheduling::new(
         symphony_scheduler::Limits::default(),
     ));
@@ -372,6 +373,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.stop" => agent_stop(req, state).await,
         "agent.kill" => agent_kill(req, state).await,
         "agent.switch" => agent_switch(req, state).await,
+        "agent.next_phase" => agent_next_phase(req, state).await,
         "agent.diff" => agent_diff(req, state).await,
         "agent.logs" => agent_logs(req, state).await,
         "agent.export" => agent_export(req, state).await,
@@ -410,6 +412,13 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
+        "task.depend" | "task.undepend" => task_depend(req, state).await,
+        "task.deps" => task_deps(req, state),
+        "task.resolve_dependency" => task_resolve(req, state).await,
+        "milestone.create" => milestone_create(req, state).await,
+        "milestone.list" => milestone_list(req, state),
+        "milestone.assign" => milestone_assign(req, state).await,
+        "milestone.decide" => milestone_decide(req, state).await,
         "recovery.list" => recovery_list(req, state),
         "recovery.act" => recovery_act(req, state).await,
         other => Response::error(
@@ -452,6 +461,16 @@ async fn agent_create(req: Request, state: &State) -> Response {
         Err(e) => return Response::error(req.id, "invalid_params", e),
     };
     let priority = p.get("priority").and_then(Value::as_i64).unwrap_or(0);
+    let depends_on: Vec<String> = p
+        .get("depends_on")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
 
     let create_req = crate::runtime::CreateAgent {
         project_root,
@@ -462,6 +481,7 @@ async fn agent_create(req: Request, state: &State) -> Response {
         context_mode,
         priority,
         chat: p.get("chat").and_then(Value::as_bool).unwrap_or(false),
+        depends_on,
     };
 
     // En su propia tarea: si el request vence (REQUEST_TIMEOUT), la creación
@@ -725,6 +745,18 @@ async fn agent_switch(req: Request, state: &State) -> Response {
             req.id,
             json!({ "ok": true, "run_id": run_id.to_string(), "model": model }),
         ),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+/// El usuario confirma la fase siguiente del plan (`[plan] phase_start = "ask"`).
+async fn agent_next_phase(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.start_next_phase(agent_id).await {
+        Ok(run_id) => Response::ok(req.id, json!({ "ok": true, "run_id": run_id.to_string() })),
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }
 }
@@ -1742,4 +1774,291 @@ fn status(state: &State) -> Value {
         "uptime_ms": u64::try_from(state.started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "home": state.home.display().to_string(),
     })
+}
+
+// --- dependencias y milestones (P08.S5) ---------------------------------------------
+
+/// Raíz git del proyecto del request (`project_root` o el directorio actual).
+fn request_root(p: &Value) -> String {
+    let root = match p.get("project_root").and_then(Value::as_str) {
+        Some(r) => PathBuf::from(r),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    symphony_git::Repo::discover(&root)
+        .map(|r| r.root().display().to_string())
+        .unwrap_or_else(|_| root.display().to_string())
+}
+
+/// Una tarea por id o por código (`T-12`, dentro del proyecto de `project_root`).
+fn resolve_task(state: &State, p: &Value, key: &str) -> Result<symphony_core::TaskId, String> {
+    let reference = p
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("falta `{key}` (id o código de la tarea)"))?;
+    if let Ok(id) = reference.parse() {
+        return Ok(id);
+    }
+    let root = request_root(p);
+    let conn = state
+        .reader
+        .lock()
+        .map_err(|_| "lector de la base no disponible".to_string())?;
+    let project = repo::project_by_root(&conn, &root)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "este proyecto todavía no tiene tareas".to_string())?;
+    repo::task_by_code(&conn, project.id, reference)
+        .map_err(|e| e.to_string())?
+        .map(|t| t.id)
+        .ok_or_else(|| format!("la tarea `{reference}` no existe en este proyecto"))
+}
+
+/// Proyecto del request.
+fn request_project(state: &State, p: &Value) -> Result<symphony_core::ProjectId, String> {
+    let root = request_root(p);
+    let conn = state
+        .reader
+        .lock()
+        .map_err(|_| "lector de la base no disponible".to_string())?;
+    repo::project_by_root(&conn, &root)
+        .map_err(|e| e.to_string())?
+        .map(|p| p.id)
+        .ok_or_else(|| "este proyecto todavía no tiene tareas".to_string())
+}
+
+fn dep_json(d: &symphony_store::deps::DepRow) -> Value {
+    json!({
+        "task_id": d.task_id.to_string(),
+        "code": d.code,
+        "title": d.title,
+        "status": d.status.as_str(),
+    })
+}
+
+type Slot<T> = std::sync::Arc<Mutex<Option<T>>>;
+
+async fn task_depend(req: Request, state: &State) -> Response {
+    let remove = req.method == "task.undepend";
+    let (task, dep) = match (
+        resolve_task(state, &req.params, "task"),
+        resolve_task(state, &req.params, "depends_on"),
+    ) {
+        (Ok(t), Ok(d)) => (t, d),
+        (Err(e), _) | (_, Err(e)) => return Response::error(req.id, "invalid_params", e),
+    };
+    let result: Slot<Result<Value, (&'static str, String)>> = Slot::default();
+    let out = result.clone();
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let r = if remove {
+                symphony_store::deps::remove_dependency(t, task, dep)
+                    .map(|removed| json!({ "removed": removed }))
+                    .map_err(|e| ("store_error", e.to_string()))
+            } else {
+                symphony_store::deps::add_dependency(t, task, dep, now_ms())
+                    .map(|a| json!({ "waiting": a.waiting }))
+                    .map_err(|e| match e {
+                        symphony_store::deps::DepError::Repo(r) => ("store_error", r.to_string()),
+                        other => ("invalid_dependency", other.to_string()),
+                    })
+            };
+            if let Ok(mut o) = out.lock() {
+                *o = Some(r);
+            }
+            Ok(())
+        }))
+        .await;
+    if let Err(e) = written {
+        return Response::error(req.id, "store_error", e.to_string());
+    }
+    match result.lock().ok().and_then(|mut r| r.take()) {
+        Some(Ok(v)) => Response::ok(req.id, v),
+        Some(Err((code, msg))) => Response::error(req.id, code, msg),
+        None => Response::error(req.id, "store_error", "la escritura no devolvió resultado"),
+    }
+}
+
+fn task_deps(req: Request, state: &State) -> Response {
+    let task = match resolve_task(state, &req.params, "task") {
+        Ok(t) => t,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let Ok(conn) = state.reader.lock() else {
+        return Response::error(req.id, "store_error", "lector de la base no disponible");
+    };
+    match symphony_store::deps::dependencies_of(&conn, task) {
+        Ok(rows) => {
+            let unmet: Vec<Value> = rows
+                .iter()
+                .filter(|d| d.status != symphony_core::TaskStatus::Done)
+                .map(dep_json)
+                .collect();
+            Response::ok(
+                req.id,
+                json!({
+                    "task_id": task.to_string(),
+                    "dependencies": rows.iter().map(dep_json).collect::<Vec<_>>(),
+                    "unmet": unmet,
+                }),
+            )
+        }
+        Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+async fn task_resolve(req: Request, state: &State) -> Response {
+    let (task, dep) = match (
+        resolve_task(state, &req.params, "task"),
+        resolve_task(state, &req.params, "dependency"),
+    ) {
+        (Ok(t), Ok(d)) => (t, d),
+        (Err(e), _) | (_, Err(e)) => return Response::error(req.id, "invalid_params", e),
+    };
+    let action = match req
+        .params
+        .get("action")
+        .and_then(Value::as_str)
+        .map(str::parse::<crate::dependencies::Resolution>)
+    {
+        Some(Ok(a)) => a,
+        Some(Err(e)) => return Response::error(req.id, "invalid_params", e),
+        None => {
+            return Response::error(
+                req.id,
+                "invalid_params",
+                "falta `action` (ignore, replan o cancel)",
+            );
+        }
+    };
+    match crate::dependencies::resolve(&state.runtime, task, dep, action).await {
+        Ok(r) => Response::ok(
+            req.id,
+            json!({ "agent_id": r.agent.to_string(), "released": r.released }),
+        ),
+        Err(e) => Response::error(req.id, "resolve_failed", e),
+    }
+}
+
+fn milestone_json(m: &symphony_store::deps::Milestone) -> Value {
+    json!({
+        "id": m.id.to_string(),
+        "name": m.name,
+        "requires_approval": m.requires_approval,
+        "status": m.status.as_str(),
+        "decided_at": m.decided_at,
+        "tasks_total": m.tasks_total,
+        "tasks_done": m.tasks_done,
+    })
+}
+
+async fn milestone_create(req: Request, state: &State) -> Response {
+    let Some(name) = req
+        .params
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+    else {
+        return Response::error(req.id, "invalid_params", "falta `name`");
+    };
+    let project = match request_project(state, &req.params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let requires = req
+        .params
+        .get("requires_approval")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let id: Slot<symphony_core::MilestoneId> = Slot::default();
+    let out = id.clone();
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let made = symphony_store::deps::create_milestone(t, project, &name, requires)?;
+            if let Ok(mut o) = out.lock() {
+                *o = Some(made);
+            }
+            Ok(())
+        }))
+        .await;
+    match (written, id.lock().ok().and_then(|mut i| i.take())) {
+        (Ok(()), Some(id)) => Response::ok(req.id, json!({ "id": id.to_string() })),
+        (Err(e), _) => Response::error(req.id, "store_error", e.to_string()),
+        (Ok(()), None) => Response::error(req.id, "store_error", "no se creó el milestone"),
+    }
+}
+
+fn milestone_list(req: Request, state: &State) -> Response {
+    let project = match request_project(state, &req.params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let Ok(conn) = state.reader.lock() else {
+        return Response::error(req.id, "store_error", "lector de la base no disponible");
+    };
+    match symphony_store::deps::milestones_of(&conn, project) {
+        Ok(rows) => Response::ok(
+            req.id,
+            json!({ "milestones": rows.iter().map(milestone_json).collect::<Vec<_>>() }),
+        ),
+        Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+async fn milestone_assign(req: Request, state: &State) -> Response {
+    let task = match resolve_task(state, &req.params, "task") {
+        Ok(t) => t,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let milestone: Option<symphony_core::MilestoneId> =
+        match req.params.get("milestone").and_then(Value::as_str) {
+            Some(m) => match m.parse() {
+                Ok(id) => Some(id),
+                Err(_) => {
+                    return Response::error(req.id, "invalid_params", "`milestone` no es un id");
+                }
+            },
+            None => None,
+        };
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            symphony_store::deps::assign_task(t, task, milestone, now_ms())?;
+            Ok(())
+        }))
+        .await;
+    match written {
+        Ok(()) => Response::ok(req.id, json!({ "ok": true })),
+        Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+async fn milestone_decide(req: Request, state: &State) -> Response {
+    let Some(Ok(id)) = req
+        .params
+        .get("milestone")
+        .and_then(Value::as_str)
+        .map(str::parse::<symphony_core::MilestoneId>)
+    else {
+        return Response::error(req.id, "invalid_params", "falta `milestone` (id)");
+    };
+    let to = match req.params.get("decision").and_then(Value::as_str) {
+        Some("approve") => symphony_core::MilestoneStatus::Approved,
+        Some("request_changes") => symphony_core::MilestoneStatus::ChangesRequested,
+        Some("hold") => symphony_core::MilestoneStatus::Held,
+        _ => {
+            return Response::error(
+                req.id,
+                "invalid_params",
+                "`decision` tiene que ser approve, request_changes o hold",
+            );
+        }
+    };
+    match crate::dependencies::decide_milestone(&state.runtime, id, to).await {
+        Ok(()) => Response::ok(req.id, json!({ "status": to.as_str() })),
+        Err(e) => Response::error(req.id, "decision_rejected", e),
+    }
 }

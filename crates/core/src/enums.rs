@@ -109,6 +109,17 @@ db_enum!(
 );
 
 db_enum!(
+    /// `milestones.status` (DB §3.B, FLOW §9.4).
+    MilestoneStatus {
+        Open => "OPEN",
+        InReview => "IN_REVIEW",
+        Approved => "APPROVED",
+        ChangesRequested => "CHANGES_REQUESTED",
+        Held => "HELD",
+    }
+);
+
+db_enum!(
     /// `agents.execution_mode`.
     ExecutionMode {
         Exact => "EXACT",
@@ -266,6 +277,11 @@ mod tests {
         assert_matches_db(RunStatus::ALL, RunStatus::as_str, "RunStatus");
         assert_matches_db(RunEndReason::ALL, RunEndReason::as_str, "RunEndReason");
         assert_matches_db(ExecutionMode::ALL, ExecutionMode::as_str, "ExecutionMode");
+        assert_matches_db(
+            MilestoneStatus::ALL,
+            MilestoneStatus::as_str,
+            "MilestoneStatus",
+        );
         assert_matches_db(
             FailoverPolicy::ALL,
             FailoverPolicy::as_str,

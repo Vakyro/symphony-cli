@@ -216,6 +216,32 @@ impl Repo {
         self.text(["rev-parse", "HEAD"])
     }
 
+    /// Añade `pattern` a `info/exclude` del repositorio (local, nunca versionado) si falta:
+    /// un archivo temporal de Symphony no entra en `git add -A` ni en el diff del agente.
+    pub fn exclude_locally(&self, pattern: &str) -> Result<(), GitError> {
+        let raw = self.text(["rev-parse", "--git-path", "info/exclude"])?;
+        let path = Path::new(&raw);
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        let current = std::fs::read_to_string(&path).unwrap_or_default();
+        if current.lines().any(|l| l.trim() == pattern) {
+            return Ok(());
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(GitError::Unlink)?;
+        }
+        let mut next = current;
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(pattern);
+        next.push('\n');
+        std::fs::write(&path, next).map_err(GitError::Unlink)
+    }
+
     /// `git add -A` y commit con `message`. `None` si no había nada que guardar.
     pub fn commit_all(&self, message: &str) -> Result<Option<String>, GitError> {
         let lock = self.index_lock();

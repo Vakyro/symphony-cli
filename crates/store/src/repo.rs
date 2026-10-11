@@ -23,6 +23,9 @@ pub enum RepoError {
     Transition(#[from] InvalidTransition),
     #[error("el estado {state} necesita una razón legible (FLOW §7)")]
     MissingReason { state: &'static str },
+    /// Una operación que el estado actual no permite (con la frase para el usuario).
+    #[error("{0}")]
+    Invalid(String),
 }
 
 impl From<RepoError> for rusqlite::Error {
@@ -378,6 +381,25 @@ pub fn get_agent(conn: &Connection, id: AgentId) -> Result<Agent, RepoError> {
     )
     .optional()?
     .ok_or_else(not_found("agente", id))
+}
+
+/// La tarea de un proyecto con ese código visible (`T-12`).
+pub fn task_by_code(
+    conn: &Connection,
+    project: ProjectId,
+    code: &str,
+) -> Result<Option<Task>, RepoError> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM tasks WHERE project_id = ?1 AND code = ?2",
+            params![project.to_string(), code],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match id.and_then(|i| i.parse().ok()) {
+        Some(id) => Ok(Some(get_task(conn, id)?)),
+        None => Ok(None),
+    }
 }
 
 /// Siguiente número visible `#N` del proyecto.

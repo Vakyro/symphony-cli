@@ -45,6 +45,9 @@ pub struct CreateAgent {
     pub priority: i64,
     /// Chat general del proyecto: idempotente, rama `symphony/chat` sobre la principal.
     pub chat: bool,
+    /// Tareas de las que depende (códigos `T-12` o ids). Mientras alguna no esté `DONE`, el
+    /// agente queda en `WAITING_DEPENDENCY` y no arranca (FLOW §9.3).
+    pub depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +101,8 @@ pub enum CreateError {
         "no se pudo preparar el workspace: {detail}. Puedes reintentar o cancelar; no se creó el agente"
     )]
     Workspace { detail: String, task: String },
+    #[error("la tarea `{reference}` de la que depende no existe en este proyecto")]
+    UnknownDependency { reference: String, task: String },
     #[error("base de datos: {0}")]
     Store(String),
 }
@@ -113,6 +118,7 @@ impl CreateError {
             Self::NoEligibleProvider { .. } => "no_eligible_provider",
             Self::ExactModelUnavailable { .. } => "exact_model_unavailable",
             Self::Workspace { .. } => "workspace_failed",
+            Self::UnknownDependency { .. } => "unknown_dependency",
             Self::Store(_) => "store_error",
         }
     }
@@ -528,6 +534,49 @@ impl Runtime {
             };
             Ok((project, session, number, code, existing))
         })?;
+        // Dependencias: se resuelven antes de crear el worktree (un `T-99` inexistente no deja nada).
+        let mut dep_ids: Vec<TaskId> = Vec::new();
+        let mut unmet = Vec::new();
+        if !req.depends_on.is_empty() && existing.is_none() {
+            let project_id = project.as_ref().map(|p| p.id);
+            let refs = req.depends_on.clone();
+            let resolved = self.read(|c| {
+                let mut out = Vec::new();
+                for r in &refs {
+                    let found = match (r.parse::<TaskId>(), project_id) {
+                        (Ok(id), _) => repo::get_task(c, id).ok(),
+                        (Err(_), Some(p)) => repo::task_by_code(c, p, r)?,
+                        (Err(_), None) => None,
+                    };
+                    match found {
+                        Some(t) if Some(t.project_id) == project_id => out.push(t),
+                        _ => return Ok(Err(r.clone())),
+                    }
+                }
+                Ok(Ok(out))
+            })?;
+            match resolved {
+                Ok(tasks) => {
+                    for t in tasks {
+                        if t.status != TaskStatus::Done {
+                            unmet.push(symphony_store::deps::DepRow {
+                                task_id: t.id,
+                                code: t.code.clone(),
+                                title: t.title.clone(),
+                                status: t.status,
+                            });
+                        }
+                        dep_ids.push(t.id);
+                    }
+                }
+                Err(reference) => {
+                    return Err(CreateError::UnknownDependency {
+                        reference,
+                        task: task_text,
+                    });
+                }
+            }
+        }
         if let Some(agent) = existing {
             let (wt, task_code) = self.read(|c| {
                 let wt = agent.worktree_id.ok_or_else(|| repo::RepoError::NotFound {
@@ -615,12 +664,19 @@ impl Runtime {
         };
 
         // 5. Una transacción con todo.
-        let (state, task_status) = if executor.is_some() {
+        // Con dependencias sin cumplir el agente espera y no arranca; el modelo exacto o el
+        // profile quedan guardados para cuando se libere (`dependencies.rs`).
+        let waiting_phrase =
+            (!unmet.is_empty()).then(|| symphony_store::deps::waiting_phrase(&unmet));
+        let (state, task_status) = if waiting_phrase.is_some() {
+            (AgentState::WaitingDependency, TaskStatus::Waiting)
+        } else if executor.is_some() {
             (AgentState::Running, TaskStatus::Running)
         } else {
             (AgentState::Ready, TaskStatus::Ready)
         };
-        let run_id = executor.as_ref().map(|_| RunId::new());
+        let launch_now = executor.is_some() && waiting_phrase.is_none();
+        let run_id = launch_now.then(RunId::new);
         let objective = match &req.description {
             Some(d) if !d.trim().is_empty() => format!("{title}\n\n{}", d.trim()),
             _ => title.clone(),
@@ -652,7 +708,7 @@ impl Runtime {
                 title: title.clone(),
                 description: req.description.clone(),
                 status: task_status,
-                status_reason: None,
+                status_reason: waiting_phrase.clone(),
                 priority: req.priority,
             },
             worktree: repo::Worktree {
@@ -672,7 +728,7 @@ impl Runtime {
                 worktree_id: Some(worktree_id),
                 number,
                 state,
-                state_reason: None,
+                state_reason: waiting_phrase.clone(),
                 execution_mode,
                 // Un profile deja el modelo en el run, no en el agente (AGENT ≠ MODEL).
                 requested_model_id: executor
@@ -717,7 +773,8 @@ impl Runtime {
                     items: Vec::new(),
                 }
             }),
-            decision: pending,
+            decision: if launch_now { pending } else { None },
+            deps: dep_ids,
             now,
         };
         if let Err(e) = self.writer.write(Box::new(move |t| tx_data.apply(t))).await {
@@ -735,7 +792,7 @@ impl Runtime {
             worktree: wt_path.clone(),
             branch,
             state,
-            state_reason: None,
+            state_reason: waiting_phrase,
             run: None,
         };
 
@@ -752,7 +809,7 @@ impl Runtime {
                 model_id: model.model_id.clone(),
                 worktree: wt_path,
                 cli_model: model.cli_model_id,
-                prompt: objective,
+                prompt: self.planned_prompt(task_id, req.chat, &objective),
                 resume_session: None,
             };
             if let Err(reason) = self.launch(launch).await {
@@ -793,6 +850,8 @@ fn prepare_worktree(
     if wt_path.exists() {
         return Err(format!("{} ya existe", wt_path.display()));
     }
+    // El plan por fases es temporal: no entra en `git add -A` ni en el diff (exclusión local).
+    let _ = Repo::at(repo_root).exclude_locally(crate::plan::PLAN_EXCLUDE);
     if let Some(parent) = wt_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -820,6 +879,8 @@ struct TxData {
     handoff: Option<repo::NewHandoff>,
     /// Cómo se eligió el modelo del primer run.
     decision: Option<crate::routing::Pending>,
+    /// Tareas de las que depende (P08.S5).
+    deps: Vec<TaskId>,
     now: i64,
 }
 
@@ -845,6 +906,10 @@ impl TxData {
             repo::insert_handoff(t, h, now)?;
         }
         repo::insert_checkpoint(t, &self.checkpoint, now)?;
+        for dep in &self.deps {
+            symphony_store::deps::add_dependency(t, self.task.id, *dep, now)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        }
         Ok(())
     }
 }

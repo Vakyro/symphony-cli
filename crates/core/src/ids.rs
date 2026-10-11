@@ -82,6 +82,7 @@ ulid_id!(
     SkillId,
     McpServerId,
     ProcessId,
+    MilestoneId,
 );
 
 #[cfg(test)]

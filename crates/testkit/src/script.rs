@@ -63,6 +63,12 @@ pub enum Step {
     Sleep {
         ms: u64,
     },
+    /// Plan por fases (P08.S5): crea `.symphony/plan/<SYMPHONY_TASK_ID>.md` con `content` si
+    /// falta y marca como hechas las tareas de la primera fase pendiente. Simula a un agente
+    /// que ejecuta una fase por sesión.
+    Plan {
+        content: String,
+    },
     /// 429 temporal: emite `api_retry` con `error = rate_limit` y sigue.
     RateLimit {
         retry_after_ms: u64,

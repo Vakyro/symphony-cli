@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p08-runtime-multiagente |
 | Inicio / cierre | 2026-10-11 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S4) |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S5) |
 | Tag | p08-done (pendiente) |
 | Docs usados | ADR-0011, ADR-0013, DB §3.B/§3.C/§3.H, PLAN §P08, CONSTRAINTS A12 |
 
@@ -49,6 +49,23 @@
 - **Pendiente / notas:** (1) La CI en ubuntu y macos corre el mismo test de CPU: en Linux solo afirma si el cgroup está delegado; en macOS no hay límites (ADR-0002) y solo cuenta la concurrencia. (2) La foto usa `sysinfo` sobre todos los procesos cada 5 s por run: si pesa con 5+ agentes, pasar a refrescar solo los pids del grupo. (3) Un límite de memoria duro puede matar al CLI; por eso no hay uno por defecto. (4) Falta la vista del árbol (S8).
 - **Corrección de paso:** el proptest de S2 encontró que una línea vacía se clasificaba «media» y bajaba al añadirle un comando barato; una línea vacía es clase 1 (test de regresión).
 
+### P08.S5 · DAG de tareas, milestones y plan por fases — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-11
+- **Qué se hizo:**
+  - **DAG** (`symphony-scheduler::dag`, `store::deps`): detección de ciclos (pura y con CTE recursivo en SQLite), olas por profundidad, `add_dependency` que rechaza ciclos, autodependencias y proyectos distintos. Un agente `READY` con dependencias sin cumplir pasa a `WAITING_DEPENDENCY` con «espera a T-12 y T-16»; al terminar la última pasa a `READY` y arranca solo si ya tenía modelo exacto o profile (si es «decidir después», espera). Una dependencia que falla o se cancela deja a quien la espera `BLOCKED` con la decisión pendiente (recovery item `DEPENDENCY_FAILED`); también si ya había fallado antes de declararla. Resolver: `ignore`, `replan` (quita la arista; la razón lo deja anotado) o `cancel`.
+  - **Milestones:** `OPEN → IN_REVIEW` (o `APPROVED` sin aprobación manual) cuando todas sus tareas están `DONE`; el usuario decide `approve`, `request_changes` o `hold`; con cambios pedidos y todo hecho de nuevo vuelve a revisión.
+  - **Plan por fases** (`symphony-scheduler::plan`, `daemon::plan`): formato Markdown (`## Fase N`, `- [ ]/[x]/[!]`, `[id]`, `(needs: …)`, `Verifica:`, notas `> …`) que sirve igual para un lote de agentes (ADR-0013 F3: `waves()`). La primera sesión recibe la tarea más las reglas del plan; al salir el CLI con exit 0 el daemon lee `.symphony/plan/<task_id>.md`: fase pendiente → cierra el run con `PHASE_DONE`/`HANDED_OFF` y abre otro con el mismo modelo y un prompt acotado a la fase (`auto`) o deja al agente `READY` hasta `agent.next_phase` (`ask`); tarea fallida → el agente se detiene (`FAILED`, recovery item) y el plan queda; plan completo → lo hecho y lo que falló pasan a la conversación como mensaje de sistema y el archivo se borra. Una fase con menos de 2 tareas se junta con la siguiente. El archivo se excluye de git de forma local.
+  - **Config:** `[plan] enabled, phase_start, min_tasks_per_phase`.
+  - **IPC nuevos:** `task.depend`, `task.undepend`, `task.deps`, `task.resolve_dependency`, `milestone.create|list|assign|decide`, `agent.next_phase`; `agent.create` acepta `depends_on`.
+  - **fake-agent:** paso `plan` (una fase por sesión) y `SYMPHONY_TASK_ID` en el entorno.
+- **Archivos clave:** `crates/scheduler/src/{dag,plan}.rs`, `crates/store/src/deps.rs`, `crates/daemon/src/{dependencies,plan}.rs`, `crates/daemon/src/executor.rs` (`finish_natural`, `start_successor`), `crates/daemon/src/runtime.rs` (`CreateAgent.depends_on`).
+- **Cómo se verificó:** `cargo xtask check` → 522 passed. Proptest «un DAG nunca acepta ciclos» (también: toda arista que `creates_cycle` rechaza cerraría un ciclo); store: espera, ciclos, liberación, bloqueo, milestones; L2 con `symphonyd` real y `fake-agent`: B espera a A y arranca al terminar; A falla → B `BLOCKED` → `ignore` lo arranca y `cancel` lo cancela; plan de 2 fases = 2 runs (`PHASE_DONE`, `COMPLETED`), el plan se borra y la conversación guarda el resumen; `ask` deja `READY` hasta confirmar; una tarea `[!]` detiene al agente; sin plan completa como antes; el plan no llega a git.
+- **Decisiones que cambié respecto de ADR-0011/0013 (por evidencia o por seguridad):**
+  - `/compact` entre tareas **no se implementa**: ADR-0013 D2 pide medirlo antes de dejarlo como default y eso necesita un live que gasta cuota (⛔ Leo). No hay opción de config que no haga nada.
+  - La conversación guarda lo que pidió el usuario, no las reglas del plan (van al CLI): así la vista del agente y los handoffs no cargan ~250 tokens de boilerplate.
+  - La primera sesión planifica **y** ejecuta la fase 1 (una sesión de solo planificación pagaría dos veces el arranque del CLI, ADR-0010).
+- **Pendiente / notas:** (1) Que un CLI real escriba un plan en este formato y se detenga al final de la fase es una instrucción en el prompt: no se probó en L3 (gasta cuota; ⛔ Leo). Si no lo hace, el agente termina como siempre. (2) Un agente `FAILED` cuenta como dependencia fallida aunque se pueda recuperar; al completarse después, quien estaba bloqueado por eso se libera. (3) No hay vista TUI de dependencias ni de milestones todavía (S8).
+
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
@@ -63,6 +80,8 @@
 
 ## Notas para el siguiente agente
 - Reconstruir una tabla padre: patrón `defer_foreign_keys` + `_bak` + `DROP` + reinsertar con su nombre (002, 003, 004). No uses `RENAME`.
-- Siguiente: P08.S5 (DAG de tareas, milestones y plan por fases de cada agente, ADR-0011/0013). El formato del plan por fases y el del plan de lote tienen que ser uno (ADR-0013 F3).
+- Siguiente: P08.S6 (validación con gate configurable y preparación del worktree, F7 y F8).
+- En los scripts de Python con cadenas que llevan barras invertidas (`\n` de Rust, TOML) no uses heredocs de la herramienta Bash: se pierden. Escribe el script con la herramienta Write y ejecútalo.
+- En un `r#"…"#` de Rust, `"#` termina la cadena: un guion TOML con `"# Plan…` necesita `r##"…"##`.
 - Un test que falla y deja un `symphonyd` huérfano cuelga nextest (queda esperando al proceso con fugas): `Get-Process symphonyd* | Stop-Process` antes de reintentar.
 - Los ids del daemon se parsean como ULID: en los tests, siembra proyecto, sesión, tareas, agentes y runs con `XxxId::new()`, no con `'a1'`.
