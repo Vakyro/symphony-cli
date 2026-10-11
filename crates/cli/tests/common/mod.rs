@@ -50,3 +50,16 @@ pub fn fake_agent() -> PathBuf {
         })
         .clone()
 }
+
+/// El CI no tiene CLIs reales: un `claude` falso (`<home>/../bin`) delante del PATH deja un
+/// proveedor elegible, igual que en la máquina de quien desarrolla.
+pub fn path_with_fake_claude(home: &std::path::Path) -> std::ffi::OsString {
+    let bin = home.parent().unwrap().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join(format!("claude{}", std::env::consts::EXE_SUFFIX));
+    if !claude.exists() {
+        std::fs::copy(fake_agent(), &claude).unwrap();
+    }
+    let rest = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&rest))).unwrap()
+}

@@ -1189,6 +1189,13 @@ command = ["git", "no-such-subcommand"]
         assert!(p.contains(want), "falta {want:?} en:\n{p}");
     }
     assert_eq!(h.tokens_sent, symphony_context::handoff::estimate_tokens(p));
+    let sections: Vec<&str> = h.items.iter().map(|i| i.section).collect();
+    for want in ["OBJECTIVE", "PLAN", "FAILURES", "DIFF", "CODE", "DECISIONS"] {
+        assert!(
+            sections.contains(&want),
+            "falta la sección {want}: {sections:?}"
+        );
+    }
     // Nada se recortó: lo que costaría en RAW es lo que se envió.
     assert!(h.tokens_raw_estimate >= h.tokens_sent, "{h:?}");
     e.writer.shutdown();
@@ -1298,6 +1305,14 @@ segundo",
         1,
         "el prompt del handoff anterior no debe entrar a la conversación:\n{p}"
     );
+    // El cambio de executor dejó su handoff con el detalle de lo que entró y su fidelidad.
+    assert!(
+        count(
+            &e,
+            "handoff_items WHERE section = 'OBJECTIVE' AND fidelity = 5"
+        ) >= 1
+    );
+    assert!(count(&e, "handoff_items WHERE section = 'DECISIONS'") >= 1);
     e.writer.shutdown();
 }
 
@@ -1525,10 +1540,13 @@ async fn chat_switches_provider_mid_conversation_with_a_new_message() {
         "chat: turno 2 (beta/fast)\nchat: turno 1 (alpha/fast)\ninit"
     );
     // El mensaje nuevo llegó al modelo (va en su prompt) y quedó como `USER` aparte.
+    // Dos mensajes `USER` del run (el prompt con el handoff y el mensaje nuevo, aparte) pueden
+    // crearse en el mismo milisegundo: el orden por id no es estable (falló en macOS), así que
+    // se mira el conjunto.
     let sent: String = one(
         &e,
-        "SELECT content FROM messages WHERE role = 'USER' AND run_id =
-            (SELECT id FROM agent_runs WHERE provider_id = 'beta') ORDER BY id LIMIT 1",
+        "SELECT group_concat(content, char(10)) FROM messages WHERE role = 'USER' AND run_id =
+            (SELECT id FROM agent_runs WHERE provider_id = 'beta')",
     );
     assert!(sent.contains("ahora sigue tú"), "{sent}");
     assert!(sent.contains("Empieza el arreglo"), "{sent}");
@@ -2896,6 +2914,60 @@ async fn switching_by_profile_lets_the_router_choose_among_the_usable_models() {
     e.writer.shutdown();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn long_messages_and_diffs_become_searchable_context_objects() {
+    // Un mensaje de más de 4 KB va al object store; un archivo nuevo deja un diff en el checkpoint.
+    let long = format!(
+        "{} palabraunicadelmensaje {}",
+        "relleno ".repeat(700),
+        "fin ".repeat(100)
+    );
+    let script = format!(
+        "[[step]]\nkind = \"edit\"\npath = \"README.md\"\ncontent = \"identificadorraro actualizado\"\n[[step]]\nkind = \"say\"\ntext = \"{long}\"\n"
+    );
+    let e = env(&script, None).await;
+    e.runtime
+        .create_agent(req(&e, "indexar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let project: String = one(&e, "SELECT id FROM projects");
+
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let find = |word: &str| {
+        let q = symphony_context::chunk::fts_query(word).unwrap();
+        symphony_store::context::search(&conn, &project, &q, None, 10).unwrap()
+    };
+    let dbg: (i64, i64, String, i64) = (
+        one(&e, "SELECT COUNT(*) FROM context_objects"),
+        one(&e, "SELECT COUNT(*) FROM context_chunks"),
+        one(&e, "SELECT state || COALESCE(state_reason, '') FROM agents"),
+        one(&e, "SELECT MAX(LENGTH(content)) FROM messages"),
+    );
+    let msg = find("palabraunicadelmensaje");
+    assert_eq!(msg.len(), 1, "{msg:?} objetos/chunks={dbg:?}");
+    assert!(msg[0].uri.starts_with("ctx://message/"), "{}", msg[0].uri);
+    // El original completo sigue recuperable por su dirección.
+    let obj = symphony_store::context::object_by_uri(&conn, None, &msg[0].uri)
+        .unwrap()
+        .unwrap();
+    let bytes = symphony_object_store::ObjectStore::new(e.home.join("objects"))
+        .get(&obj.blob_hash)
+        .unwrap();
+    assert!(
+        String::from_utf8(bytes)
+            .unwrap()
+            .contains("palabraunicadelmensaje")
+    );
+    let diff = find("identificadorraro");
+    assert!(
+        !diff.is_empty() && diff[0].uri.starts_with("ctx://diff/"),
+        "{diff:?}"
+    );
+    e.writer.shutdown();
+}
+
 /// Un CLI que falla (login, cuota) antes de leer su prompt deja un `EPIPE` al escribirlo: no es un
 /// fallo de arranque; su salida y su código de salida mandan y el failover sigue su curso.
 #[tokio::test(flavor = "multi_thread")]
@@ -2920,5 +2992,374 @@ async fn cli_that_quits_before_reading_its_prompt_still_fails_over() {
     );
     assert_eq!(count(&e, "provider_failures"), 1);
     assert_eq!(count(&e, "agent_runs"), 2);
+    e.writer.shutdown();
+}
+
+/// P09.S10: evaluación del handoff. El forced kill de P06.S8 con un checkpoint pesado (un
+/// lockfile de 3.000 líneas tocado, una conversación larga y un cambio real en README) y los
+/// cuatro modos. Lo que se mide: tokens enviados, retrievals y misses (todavía sin MCP:
+/// siempre 0) y si B terminó la tarea. `--nocapture` imprime la tabla de la bitácora.
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_evaluation_forced_kill_by_context_mode() {
+    let lock: String = (0..3000)
+        .map(|i| format!("    \"dep{i}\": \"1.0.{i}\"\n"))
+        .collect();
+    let long_say = "Revisé el módulo de sesiones y sus casos borde. ".repeat(60);
+    let script_a = format!(
+        "[[step]]\nkind = \"edit\"\npath = \"package-lock.json\"\ncontent = '''\n{lock}'''\n\
+         [[step]]\nkind = \"edit\"\npath = \"README.md\"\ncontent = \"demo rotacion de tokens revisada\"\n\
+         [[step]]\nkind = \"edit\"\npath = \"src_auth.js\"\ncontent = \"export const rotate = 1\"\n\
+         [[step]]\nkind = \"say\"\ntext = \"{long_say}\"\n\
+         [[step]]\nkind = \"say\"\ntext = \"{long_say}\"\n\
+         [[step]]\nkind = \"say\"\ntext = \"Next: escribir las pruebas de rotación en rotate_test.js\"\n\
+         [[step]]\nkind = \"hang\"\n"
+    );
+    let script_b = "[[step]]\nkind = \"edit\"\npath = \"rotate_test.js\"\ncontent = \"// pruebas\"\n[[step]]\nkind = \"say\"\ntext = \"Tarea completada con éxito.\"\n";
+    let e = env_with_watchdog(
+        &[("claude", &script_a), ("codex", script_b)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(3000),
+    )
+    .await;
+    std::fs::write(e.repo.join("package-lock.json"), "{\n}\n").unwrap();
+    git(&e.repo, &["add", "."]);
+    git(&e.repo, &["commit", "-q", "-m", "lock"]);
+
+    println!("modo       | tokens enviados | tokens RAW | retrievals | misses | terminó");
+    let mut sent = Vec::new();
+    for mode in [
+        ContextMode::Raw,
+        ContextMode::Safe,
+        ContextMode::Balanced,
+        ContextMode::Aggressive,
+    ] {
+        let mut r = req(
+            &e,
+            &format!("Rotación de tokens {mode:?}"),
+            Execution::Exact("claude/fast".into()),
+        );
+        r.context_mode = mode;
+        let created = e.runtime.create_agent(r).await.unwrap();
+        e.runtime.wait_executors().await;
+        e.writer.handle().flush().await.unwrap();
+        e.runtime
+            .switch(created.agent_id, "codex/fast")
+            .await
+            .unwrap();
+        e.runtime.wait_executors().await;
+        e.writer.handle().flush().await.unwrap();
+
+        let agent = created.agent_id.to_string();
+        let state: String = one(
+            &e,
+            &format!("SELECT state FROM agents WHERE id = '{agent}'"),
+        );
+        let (tokens_sent, tokens_raw): (i64, i64) = {
+            let conn = symphony_store::open_reader(&e.db).unwrap();
+            conn.query_row(
+                &format!(
+                    "SELECT tokens_sent, tokens_raw_estimate FROM handoffs WHERE agent_id = '{agent}' AND checkpoint_id IS NOT NULL"
+                ),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        // Un mensaje largo vive en el object store; uno corto, en la fila.
+        let (inline, object): (Option<String>, Option<String>) = {
+            let conn = symphony_store::open_reader(&e.db).unwrap();
+            conn.query_row(
+                &format!("SELECT content, content_object_id FROM messages WHERE role = 'USER' AND agent_id = '{agent}' ORDER BY created_at DESC LIMIT 1"),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        let prompt = inline.unwrap_or_else(|| diff_text(&e, &object.unwrap()));
+        println!(
+            "{:<10} | {:>15} | {:>10} | {:>10} | {:>6} | {}",
+            format!("{mode:?}"),
+            tokens_sent,
+            tokens_raw,
+            0,
+            0,
+            state == "COMPLETED"
+        );
+        assert_eq!(state, "COMPLETED", "{mode:?}: B debe terminar la tarea");
+        // Lo esencial entra en todos los modos: objetivo, qué seguía, archivos y el cambio real.
+        for want in [
+            "Rotación de tokens",
+            "escribir las pruebas de rotación en rotate_test.js",
+            "src_auth.js",
+            "package-lock.json",
+            "+demo rotacion de tokens revisada",
+        ] {
+            assert!(prompt.contains(want), "{mode:?}: falta {want:?}");
+        }
+        sent.push(tokens_sent);
+    }
+    let [raw, safe, balanced, aggressive] = sent[..] else {
+        panic!("cuatro modos")
+    };
+    assert!(
+        raw >= safe && safe >= balanced && balanced >= aggressive,
+        "{sent:?}"
+    );
+    assert!(
+        balanced * 2 < raw,
+        "BALANCED debería costar menos de la mitad de RAW: {sent:?}"
+    );
+    e.writer.shutdown();
+}
+
+/// P09.S5: el watcher del proyecto deja los archivos buscables y sigue sus cambios (con
+/// debounce), sin indexar lo ignorado por `.gitignore`.
+#[tokio::test(flavor = "multi_thread")]
+async fn project_files_stay_searchable_as_they_change() {
+    let e = env("[[step]]\nkind = \"say\"\ntext = \"ok\"\n", None).await;
+    std::fs::write(e.repo.join(".gitignore"), "build/\n").unwrap();
+    std::fs::create_dir_all(e.repo.join("src")).unwrap();
+    std::fs::create_dir_all(e.repo.join("build")).unwrap();
+    std::fs::write(
+        e.repo.join("src/auth.ts"),
+        "export function rotarviejo() {}\n",
+    )
+    .unwrap();
+    std::fs::write(e.repo.join("build/out.js"), "palabraignorada\n").unwrap();
+    e.runtime
+        .create_agent(req(&e, "watch", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    let project: String = one(&e, "SELECT id FROM projects");
+    let hits = |word: &str| {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        let q = symphony_context::chunk::fts_query(word).unwrap();
+        symphony_store::context::search(&conn, &project, &q, None, 5)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.uri)
+            .collect::<Vec<_>>()
+    };
+    let wait_for = |word: &'static str, present: bool| {
+        let started = std::time::Instant::now();
+        loop {
+            if hits(word).is_empty() != present {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "{word}: esperaba presente = {present}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+
+    wait_for("rotarviejo", true);
+    assert_eq!(hits("rotarviejo"), ["ctx://file/src/auth.ts"]);
+    assert!(
+        hits("palabraignorada").is_empty(),
+        "build/ está en .gitignore"
+    );
+
+    std::fs::write(
+        e.repo.join("src/auth.ts"),
+        "export function rotarnuevo() {}\n",
+    )
+    .unwrap();
+    wait_for("rotarnuevo", true);
+    wait_for("rotarviejo", false);
+
+    std::fs::remove_file(e.repo.join("src/auth.ts")).unwrap();
+    wait_for("rotarnuevo", false);
+    e.writer.shutdown();
+}
+
+/// P09.S8: lo que el broker MCP pide al daemon (`search`, `retrieve`, `lines`) sobre archivos
+/// indexados: aciertos con su recuperación, recorte, misses y direcciones inválidas.
+#[tokio::test(flavor = "multi_thread")]
+async fn context_mcp_search_retrieve_and_lines() {
+    use symphony_daemon::context_mcp as mcp;
+    let e = env(
+        "[[step]]
+kind = \"say\"
+text = \"ok\"
+",
+        None,
+    )
+    .await;
+    std::fs::create_dir_all(e.repo.join("src")).unwrap();
+    let body: String = (1..=30)
+        .map(|i| {
+            format!(
+                "linea {i} rotarmcp
+"
+            )
+        })
+        .collect();
+    std::fs::write(e.repo.join("src/big.ts"), &body).unwrap();
+    std::fs::write(
+        e.repo.join("src/secret.ts"),
+        "const KEY = \"sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv\"; // claveindexada
+",
+    )
+    .unwrap();
+    e.runtime
+        .create_agent(req(&e, "mcp", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    let project: String = one(&e, "SELECT id FROM projects");
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let objects = symphony_object_store::ObjectStore::new(
+        symphony_core::SymphonyHome::at(&e.home).objects_dir(),
+    );
+    let started = std::time::Instant::now();
+    let found = loop {
+        let a = mcp::search(&conn, &project, "rotarmcp", None, None).unwrap();
+        if !a.value["hits"].as_array().unwrap().is_empty() {
+            break a;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "sin indexar");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(found.value["hits"][0]["uri"], "ctx://file/src/big.ts");
+    assert!(
+        found
+            .retrievals
+            .iter()
+            .all(|r| r.found && r.operation == "SEARCH")
+    );
+
+    let uri = "ctx://file/src/big.ts";
+    let all = mcp::retrieve(&conn, &objects, &project, uri).unwrap();
+    assert_eq!(all.value["text"], body);
+    assert_eq!(all.value["truncated"], false);
+    assert_eq!(all.value["total_lines"], 30);
+
+    let some = mcp::lines(&conn, &objects, &project, uri, 3, 4).unwrap();
+    assert_eq!(
+        some.value["text"],
+        "linea 3 rotarmcp
+linea 4 rotarmcp"
+    );
+    assert!(some.retrievals[0].found);
+
+    // Más allá del final: miss registrable, no error.
+    let past = mcp::lines(&conn, &objects, &project, uri, 99, 120).unwrap();
+    assert_eq!(past.value["text"], "");
+    assert!(!past.retrievals[0].found);
+    // Búsqueda sin resultados dentro de un objeto conocido: miss atado a ese objeto.
+    let none = mcp::search(&conn, &project, "inexistentexyz", Some(uri), None).unwrap();
+    assert!(none.value["hits"].as_array().unwrap().is_empty());
+    assert_eq!(none.retrievals.len(), 1);
+    assert!(!none.retrievals[0].found);
+    // El rango pedido se recorta a LINES_MAX.
+    let wide = mcp::lines(&conn, &objects, &project, uri, 1, 100_000).unwrap();
+    assert_eq!(wide.value["to"], 30);
+
+    // Lo que sale hacia un proveedor pasa por el redactor: la clave no viaja ni en la búsqueda
+    // ni en el original.
+    let started = std::time::Instant::now();
+    let secret = loop {
+        let a = mcp::search(&conn, &project, "claveindexada", None, None).unwrap();
+        if !a.value["hits"].as_array().unwrap().is_empty() {
+            break a;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "sin indexar");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        !secret.value.to_string().contains("sk-ant-api03"),
+        "{}",
+        secret.value
+    );
+    let orig = mcp::retrieve(&conn, &objects, &project, "ctx://file/src/secret.ts").unwrap();
+    assert!(
+        !orig.value["text"]
+            .as_str()
+            .unwrap()
+            .contains("sk-ant-api03")
+    );
+    assert!(
+        orig.value["text"]
+            .as_str()
+            .unwrap()
+            .contains("claveindexada")
+    );
+
+    for bad in ["ctx://file/../../etc/passwd", "no-es-una-uri"] {
+        let err = mcp::retrieve(&conn, &objects, &project, bad).unwrap_err();
+        assert_eq!(err.0, "invalid_params", "{bad}");
+    }
+    let err = mcp::retrieve(&conn, &objects, &project, "ctx://file/nada.ts").unwrap_err();
+    assert_eq!(err.0, "context_not_found");
+    let err = mcp::search(&conn, &project, "!!! ???", None, None).unwrap_err();
+    assert_eq!(err.0, "invalid_params");
+    e.writer.shutdown();
+}
+
+/// P09.S7: `project_facts` se incluyen en el handoff y registran su item en Decisions.
+#[tokio::test(flavor = "multi_thread")]
+async fn project_facts_ipc_and_handoff_integration() {
+    let script = r#"
+[[step]]
+kind = "say"
+text = "primer paso listo"
+"#;
+    let e = env(script, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "test facts", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+
+    let project: String = one(&e, "SELECT id FROM projects");
+
+    // Registrar un hecho vía store
+    let proj_clone = project.clone();
+    e.writer
+        .handle()
+        .write(Box::new(move |t| {
+            symphony_store::context::set_fact(
+                t,
+                &proj_clone,
+                "token_storage",
+                "httpOnly cookies",
+                "DECISION",
+                None,
+                None,
+                100,
+            )?;
+            Ok(())
+        }))
+        .await
+        .unwrap();
+
+    let handoff = e
+        .runtime
+        .prepare_handoff(created.agent_id, "cambio de modelo")
+        .await
+        .unwrap();
+    assert!(
+        handoff.prompt.contains("## Hechos vigentes del proyecto"),
+        "el prompt debe incluir los hechos vigentes: {}",
+        handoff.prompt
+    );
+    assert!(
+        handoff
+            .prompt
+            .contains("- **[DECISION] token_storage:** httpOnly cookies"),
+        "{}",
+        handoff.prompt
+    );
+    assert!(
+        handoff.items.iter().any(|i| i.section == "DECISIONS"),
+        "debe registrar un item en la sección DECISIONS: {:?}",
+        handoff.items
+    );
+
     e.writer.shutdown();
 }

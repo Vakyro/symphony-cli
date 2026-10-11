@@ -1,0 +1,18 @@
+---
+source: crates/context/src/ast.rs
+expression: "reduce(\"src/token.rs\", RUST, &Level::Signatures).unwrap()"
+---
+// src/token.rs · firmas y tipos (L3) · 29 líneas en el original
+pub struct Token {
+    pub value: String,
+    expires: u64,
+}
+pub enum Kind { Access, Refresh }
+pub trait Store {
+    fn get(&self, id: &str) -> Option<Token>;
+}
+impl Token {
+    pub fn new(value: &str) -> Self { … }
+    pub fn rotate(&mut self) -> Result<(), fmt::Error> { … }
+}
+pub fn refresh(t: &mut Token) -> bool { … }

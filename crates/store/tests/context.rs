@@ -1,0 +1,370 @@
+//! Objetos de contexto, búsqueda FTS5/BM25 y retrievals (migración 003).
+// Código de test: CONSTRAINTS C3 permite unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use rusqlite::Connection;
+use symphony_core::{ContextObjectId, RunId};
+use symphony_store::context::{self as ctx, NewChunk};
+
+fn seeded() -> (Connection, ContextObjectId, ContextObjectId, RunId) {
+    let conn = symphony_store::open_in_memory().unwrap();
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p1','uno','/a','main',0), ('p2','dos','/b','main',0);
+         INSERT INTO sessions (id, project_id, status, started_at) VALUES ('s1','p1','ACTIVE',0);
+         INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at) VALUES ('t1','p1','T-1','WORK','uno','RUNNING',0,0);
+         INSERT INTO providers (id, display_name, cli_name, adapter_mode, setup_state) VALUES ('anthropic','Claude','claude','CLI','READY');
+         INSERT INTO models (id, provider_id, cli_model_id, display_name, discovered_at) VALUES ('claude/sonnet','anthropic','sonnet','Sonnet',0);
+         INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_model_id, failover_policy, context_mode, created_at, updated_at)
+             VALUES ('a1','p1','s1','t1',1,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0);
+         INSERT INTO blobs (hash, size_bytes, stored_bytes, created_at) VALUES ('h1',1,1,0), ('h2',1,1,0);",
+    )
+    .unwrap();
+    symphony_store::health::ensure_account(&conn, "anthropic", 0).unwrap();
+    let (o1, o2) = (ContextObjectId::new(), ContextObjectId::new());
+    for (id, uri, project, hash) in [
+        (o1, "ctx://file/auth.ts", "p1", "h1"),
+        (o2, "ctx://file/otro.ts", "p2", "h2"),
+    ] {
+        conn.execute(
+            "INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES (?1, ?2, ?3, 'FILE', ?4, 0)",
+            rusqlite::params![id.to_string(), uri, project, hash],
+        )
+        .unwrap();
+    }
+    let run = RunId::new();
+    conn.execute(
+        "INSERT INTO agent_runs (id, agent_id, seq, provider_id, account_id, model_id, status, started_at)
+         VALUES (?1,'a1',1,'anthropic','acct-anthropic','claude/sonnet','RUNNING',0)",
+        [run.to_string()],
+    )
+    .unwrap();
+    (conn, o1, o2, run)
+}
+
+fn chunk(seq: i64, text: &str) -> NewChunk {
+    NewChunk {
+        seq,
+        start_line: seq * 10 + 1,
+        end_line: seq * 10 + 10,
+        text: text.into(),
+    }
+}
+
+#[test]
+fn search_ranks_by_bm25_and_stays_inside_the_project() {
+    let (conn, o1, o2, _) = seeded();
+    ctx::replace_chunks(
+        &conn,
+        o1,
+        &[
+            chunk(0, "function refresh(token) { return rotate(token) }"),
+            chunk(1, "refresh refresh refresh 401 unauthorized after refresh"),
+            chunk(2, "class Cache { get() {} }"),
+        ],
+    )
+    .unwrap();
+    ctx::replace_chunks(&conn, o2, &[chunk(0, "refresh en el otro proyecto")]).unwrap();
+
+    let q = symphony_context::chunk::fts_query("refresh 401").unwrap();
+    let hits = ctx::search(&conn, "p1", &q, None, 10).unwrap();
+    assert_eq!(hits.len(), 2, "el otro proyecto no aparece");
+    assert!(hits.iter().all(|h| h.uri == "ctx://file/auth.ts"));
+    assert_eq!(hits[0].seq, 1, "el chunk con más coincidencias va primero");
+    assert!(hits[0].score >= hits[1].score);
+    assert!(hits[0].snippet.contains('['), "{}", hits[0].snippet);
+    assert_eq!(hits[0].start_line, Some(11));
+
+    // Limitada a un objeto, y sin resultados cuando no hay coincidencia.
+    assert_eq!(
+        ctx::search(&conn, "p1", &q, Some("ctx://file/auth.ts"), 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        ctx::search(&conn, "p1", &q, Some("ctx://file/otro.ts"), 5)
+            .unwrap()
+            .is_empty()
+    );
+    let none = symphony_context::chunk::fts_query("zzzz").unwrap();
+    assert!(ctx::search(&conn, "p1", &none, None, 5).unwrap().is_empty());
+}
+
+#[test]
+fn hostile_search_text_never_breaks_the_query() {
+    let (conn, o1, _, _) = seeded();
+    ctx::replace_chunks(&conn, o1, &[chunk(0, "alpha beta gamma")]).unwrap();
+    for user in [
+        "alpha AND",
+        "\"alpha",
+        "alpha*",
+        "NOT alpha",
+        "a:b",
+        "(alpha",
+        "alpha OR OR",
+        "'; DROP TABLE x;--",
+    ] {
+        if let Some(q) = symphony_context::chunk::fts_query(user) {
+            ctx::search(&conn, "p1", &q, None, 5).unwrap_or_else(|e| panic!("{user}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn replacing_chunks_reindexes_and_compression_keeps_the_original_reference() {
+    let (conn, o1, _, _) = seeded();
+    ctx::replace_chunks(&conn, o1, &[chunk(0, "viejo contenido unico")]).unwrap();
+    ctx::replace_chunks(&conn, o1, &[chunk(0, "contenido nuevo distinto")]).unwrap();
+    let find = |w: &str| {
+        let q = symphony_context::chunk::fts_query(w).unwrap();
+        ctx::search(&conn, "p1", &q, None, 5).unwrap().len()
+    };
+    assert_eq!(find("viejo"), 0);
+    assert_eq!(find("nuevo"), 1);
+
+    ctx::set_compression(&conn, o1, "896 passed, 1 failed", "LOG_COLLAPSE", 5000, 12).unwrap();
+    let row = ctx::object_by_uri(&conn, None, "ctx://file/auth.ts")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.compressed_text.as_deref(), Some("896 passed, 1 failed"));
+    assert_eq!(row.blob_hash, "h1", "el original sigue en su blob");
+    assert_eq!(
+        (row.tokens_original, row.tokens_compressed),
+        (Some(5000), Some(12))
+    );
+    assert!(
+        ctx::object_by_uri(&conn, None, "ctx://file/no-existe")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        ctx::object_by_id(&conn, &row.id).unwrap().unwrap().uri,
+        row.uri
+    );
+}
+
+#[test]
+fn retrievals_are_counted_with_their_misses() {
+    let (conn, o1, _, run) = seeded();
+    let id = o1.to_string();
+    ctx::record_retrieval(
+        &conn,
+        run,
+        &id,
+        "SEARCH",
+        Some("refresh 401"),
+        Some(300),
+        true,
+        1,
+    )
+    .unwrap();
+    ctx::record_retrieval(&conn, run, &id, "LINES", None, Some(120), true, 2).unwrap();
+    ctx::record_retrieval(&conn, run, &id, "RETRIEVE", None, None, false, 3).unwrap();
+    assert_eq!(ctx::retrieval_stats(&conn, run).unwrap(), (3, 1, 420));
+    assert!(
+        ctx::record_retrieval(&conn, run, &id, "ADIVINAR", None, None, true, 4).is_err(),
+        "la operación la valida el CHECK"
+    );
+}
+
+/// Regresión: al podar checkpoints se borran los diffs sin uso; sus chunks, su índice y sus
+/// recuperaciones tienen que irse con ellos (antes la poda fallaba por la clave foránea y el
+/// checkpoint siguiente no se guardaba).
+#[test]
+fn pruning_an_orphan_diff_takes_its_chunks_and_retrievals_with_it() {
+    use symphony_core::AgentId;
+    let (conn, _, _, run) = seeded();
+    let agent = AgentId::new();
+    conn.execute(
+        "INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at) VALUES ('t2','p1','T-2','WORK','dos','RUNNING',0,0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_model_id, failover_policy, context_mode, created_at, updated_at)
+         VALUES (?1,'p1','s1','t2',2,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0)",
+        [agent.to_string()],
+    )
+    .unwrap();
+    let diff = ContextObjectId::new();
+    conn.execute(
+        "INSERT INTO context_objects (id, uri, project_id, agent_id, kind, blob_hash, created_at)
+         VALUES (?1, 'ctx://diff/viejo', 'p1', ?2, 'GIT_DIFF', 'h1', 0)",
+        rusqlite::params![diff.to_string(), agent.to_string()],
+    )
+    .unwrap();
+    ctx::replace_chunks(&conn, diff, &[chunk(0, "cambio unico en el diff viejo")]).unwrap();
+    ctx::record_retrieval(
+        &conn,
+        run,
+        &diff.to_string(),
+        "SEARCH",
+        Some("viejo"),
+        Some(5),
+        true,
+        1,
+    )
+    .unwrap();
+
+    let hashes = symphony_store::repo::prune_checkpoints(&conn, agent, 5).unwrap();
+    assert_eq!(hashes, ["h1"]);
+    assert!(
+        ctx::object_by_uri(&conn, None, "ctx://diff/viejo")
+            .unwrap()
+            .is_none()
+    );
+    let q = symphony_context::chunk::fts_query("viejo").unwrap();
+    assert!(ctx::search(&conn, "p1", &q, None, 5).unwrap().is_empty());
+    let chunks: i64 = conn
+        .query_row("SELECT COUNT(*) FROM context_chunks", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(chunks, 0);
+}
+
+#[test]
+fn project_files_are_upserted_per_project_and_deleted_with_their_chunks() {
+    use symphony_store::context::FileUpsert;
+    let (conn, _, _, _) = seeded();
+    let ctx::FileUpsert::Stored { id, previous: None } =
+        ctx::upsert_file(&conn, "p1", "ctx://file/src/a.rs", "h1", 1).unwrap()
+    else {
+        panic!("nuevo")
+    };
+    assert_eq!(
+        ctx::upsert_file(&conn, "p1", "ctx://file/src/a.rs", "h1", 2).unwrap(),
+        FileUpsert::Unchanged
+    );
+    // La misma ruta en otro proyecto es otro objeto.
+    assert!(matches!(
+        ctx::upsert_file(&conn, "p2", "ctx://file/src/a.rs", "h1", 2).unwrap(),
+        FileUpsert::Stored { previous: None, .. }
+    ));
+    assert_eq!(
+        ctx::upsert_file(&conn, "p1", "ctx://file/src/a.rs", "h2", 3).unwrap(),
+        FileUpsert::Stored {
+            id,
+            previous: Some("h1".into())
+        }
+    );
+    ctx::replace_chunks(&conn, id, &[chunk(0, "fn rotar_token() {}")]).unwrap();
+    let q = symphony_context::chunk::fts_query("rotar_token").unwrap();
+    assert_eq!(ctx::search(&conn, "p1", &q, None, 5).unwrap().len(), 1);
+
+    assert_eq!(
+        ctx::delete_file(&conn, "p1", "ctx://file/src/a.rs")
+            .unwrap()
+            .as_deref(),
+        Some("h2")
+    );
+    assert!(ctx::search(&conn, "p1", &q, None, 5).unwrap().is_empty());
+    assert!(
+        ctx::object_by_uri(&conn, Some("p1"), "ctx://file/src/a.rs")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ctx::object_by_uri(&conn, Some("p2"), "ctx://file/src/a.rs")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        ctx::delete_file(&conn, "p1", "ctx://file/src/a.rs").unwrap(),
+        None
+    );
+}
+
+#[test]
+fn project_facts_can_be_set_superseded_and_listed() {
+    let (conn, _, _, _) = seeded();
+    let f1 = ctx::set_fact(
+        &conn,
+        "p1",
+        "auth_storage",
+        "localStorage",
+        "DECISION",
+        None,
+        None,
+        100,
+    )
+    .unwrap();
+    assert_eq!(f1.key, "auth_storage");
+    assert_eq!(f1.value, "localStorage");
+    assert_eq!(f1.status, "CURRENT");
+    assert_eq!(f1.superseded_by_id, None);
+
+    // Un segundo hecho con otra clave
+    let f2 = ctx::set_fact(
+        &conn,
+        "p1",
+        "db_engine",
+        "sqlite",
+        "ARCHITECTURE",
+        None,
+        None,
+        200,
+    )
+    .unwrap();
+    assert_eq!(f2.status, "CURRENT");
+
+    let current = ctx::get_current_facts(&conn, "p1").unwrap();
+    assert_eq!(current.len(), 2);
+
+    // Actualizar `auth_storage` a `httpOnly cookie`
+    let f3 = ctx::set_fact(
+        &conn,
+        "p1",
+        "auth_storage",
+        "httpOnly cookie",
+        "DECISION",
+        None,
+        None,
+        300,
+    )
+    .unwrap();
+    assert_eq!(f3.status, "CURRENT");
+
+    // Ahora sólo hay 2 CURRENT: f2 y f3
+    let current = ctx::get_current_facts(&conn, "p1").unwrap();
+    assert_eq!(current.len(), 2);
+    assert_eq!(current[0].value, "httpOnly cookie");
+    assert_eq!(current[1].value, "sqlite");
+
+    // Listar todos los hechos
+    let all = ctx::list_facts(&conn, "p1", None).unwrap();
+    assert_eq!(all.len(), 3);
+    let superseded = all.iter().find(|f| f.id == f1.id).unwrap();
+    assert_eq!(superseded.status, "SUPERSEDED");
+    assert_eq!(superseded.superseded_by_id.as_deref(), Some(f3.id.as_str()));
+
+    // Marcar conflicto
+    assert!(ctx::set_fact_conflict(&conn, &f3.id).unwrap());
+    let current_after_conflict = ctx::get_current_facts(&conn, "p1").unwrap();
+    assert_eq!(current_after_conflict.len(), 1);
+    assert_eq!(current_after_conflict[0].key, "db_engine");
+}
+
+#[test]
+fn project_facts_enforces_single_current_per_key_in_db() {
+    let (conn, _, _, _) = seeded();
+    ctx::set_fact(
+        &conn,
+        "p1",
+        "singleton_key",
+        "v1",
+        "CONVENTION",
+        None,
+        None,
+        1,
+    )
+    .unwrap();
+    // Intento directo de insertar otro CURRENT para la misma clave falla por índice único parcial
+    let err = conn.execute(
+        "INSERT INTO project_facts (id, project_id, key, value, kind, status, created_at)
+         VALUES ('raw_id', 'p1', 'singleton_key', 'v2', 'CONVENTION', 'CURRENT', 2)",
+        [],
+    );
+    assert!(
+        err.is_err(),
+        "el índice único parcial project_facts_one_current debe rechazar 2 CURRENT"
+    );
+}

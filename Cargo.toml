@@ -42,6 +42,14 @@ ulid = "3"
 toml_edit = { version = "0.25.15", features = ["serde"] }
 tempfile = "3.27"
 regex = "1.13"
+rmcp = { version = "3.4", default-features = false, features = ["server", "macros", "transport-io"] }
+tree-sitter = "0.27"
+notify = "8.2"
+ignore = "0.4.33"
+tree-sitter-rust = "0.24.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-typescript = "0.23.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "ansi", "std"] }
 tracing-appender = "0.2.5"

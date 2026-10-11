@@ -36,6 +36,18 @@ const PHASE4_TABLES: [&str; 7] = [
     "routing_candidates",
 ];
 
+/// Tablas que añade la migración 003 (contexto, hechos, skills y MCP). `context_fts` es virtual
+/// y SQLite crea sus tablas de apoyo (`context_fts_data`, `_idx`, `_docsize`, `_config`).
+const PHASE3_TABLES: [&str; 7] = [
+    "context_chunks",
+    "context_fts",
+    "handoff_items",
+    "context_retrievals",
+    "project_facts",
+    "skills",
+    "mcp_servers",
+];
+
 /// Proyecto, sesión, dos tasks, un proveedor y un modelo.
 fn seeded() -> Connection {
     let conn = open_in_memory().unwrap();
@@ -98,9 +110,12 @@ fn file_db_has_the_schema_and_pragmas() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
+    // Las tablas de apoyo de FTS5 no son del esquema propio.
+    tables.retain(|t| !t.starts_with("context_fts_"));
     let mut expected: Vec<String> = PHASE1_TABLES
         .iter()
         .chain(PHASE4_TABLES.iter())
+        .chain(PHASE3_TABLES.iter())
         .map(|s| s.to_string())
         .collect();
     tables.sort();
@@ -118,7 +133,7 @@ fn file_db_has_the_schema_and_pragmas() {
         })
         .unwrap()
     };
-    assert_eq!(pragma("user_version"), "2");
+    assert_eq!(pragma("user_version"), "3");
     assert_eq!(pragma("journal_mode"), "wal");
     assert_eq!(pragma("foreign_keys"), "1");
     assert_eq!(pragma("synchronous"), "1"); // NORMAL
@@ -136,8 +151,152 @@ fn file_db_has_the_schema_and_pragmas() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
+}
+
+#[test]
+fn context_search_finds_chunks_and_follows_inserts_updates_and_deletes() {
+    let conn = seeded();
+    conn.execute_batch(
+        "INSERT INTO blobs (hash, size_bytes, stored_bytes, created_at) VALUES ('h1', 10, 5, 0);
+         INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at)
+             VALUES ('o1', 'ctx://file/auth.ts', 'p1', 'FILE', 'h1', 0);
+         INSERT INTO context_chunks (object_id, seq, start_line, end_line, text) VALUES
+             ('o1', 0, 1, 20, 'export function refresh(token) { return rotate(token); }'),
+             ('o1', 1, 21, 40, 'class SessionStore { constructor() { this.cache = new Map(); } }');",
+    )
+    .unwrap();
+    let hits = |q: &str| -> Vec<i64> {
+        conn.prepare(
+            "SELECT rowid FROM context_fts WHERE context_fts MATCH ?1 ORDER BY bm25(context_fts)",
+        )
+        .unwrap()
+        .query_map([q], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    assert_eq!(hits("refresh").len(), 1);
+    assert_eq!(hits("SessionStore").len(), 1);
+    assert!(hits("inexistente").is_empty());
+
+    // Actualizar el texto reindexa; borrar el chunk lo saca del índice.
+    conn.execute(
+        "UPDATE context_chunks SET text = 'handler del login con cookies' WHERE seq = 0",
+        [],
+    )
+    .unwrap();
+    assert!(hits("refresh").is_empty());
+    assert_eq!(hits("cookies").len(), 1);
+    conn.execute("DELETE FROM context_chunks WHERE seq = 0", [])
+        .unwrap();
+    assert!(hits("cookies").is_empty());
+    // El índice sigue íntegro.
+    conn.execute(
+        "INSERT INTO context_fts(context_fts) VALUES ('integrity-check')",
+        [],
+    )
+    .unwrap();
+}
+
+#[test]
+fn only_one_current_fact_per_key_and_a_superseded_one_can_coexist() {
+    let conn = seeded();
+    let ins = |id: &str, status: &str| {
+        conn.execute(
+            &format!("INSERT INTO project_facts (id, project_id, key, value, kind, status, created_at) VALUES ('{id}','p1','auth_storage','v','DECISION','{status}',0)"),
+            [],
+        )
+    };
+    assert!(ins("f1", "CURRENT").is_ok());
+    assert!(
+        ins("f2", "CURRENT").is_err(),
+        "un solo valor vigente por clave"
+    );
+    assert!(ins("f3", "SUPERSEDED").is_ok());
+    assert!(ins("f4", "CONFLICT").is_ok());
+    assert!(ins("f5", "HECHO").is_err());
+}
+
+#[test]
+fn skills_and_mcp_servers_are_unique_per_scope_and_project_scope_needs_a_project() {
+    let conn = seeded();
+    let skill = |id: &str, scope: &str, project: &str| {
+        conn.execute(
+            &format!("INSERT INTO skills (id, name, scope, project_id, path, updated_at) VALUES ('{id}','review','{scope}',{project},'/x',0)"),
+            [],
+        )
+    };
+    assert!(skill("s1", "USER", "NULL").is_ok());
+    assert!(
+        skill("s2", "USER", "NULL").is_err(),
+        "mismo nombre y ámbito"
+    );
+    assert!(
+        skill("s3", "PROJECT", "'p1'").is_ok(),
+        "un PROJECT con el mismo nombre convive con el USER"
+    );
+    assert!(
+        skill("s4", "PROJECT", "NULL").is_err(),
+        "PROJECT exige proyecto"
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO mcp_servers (id, name, scope, transport, share_mode) VALUES ('m1','github','USER','STDIO','SHARED')",
+            []
+        )
+        .is_ok()
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO mcp_servers (id, name, scope, transport, share_mode) VALUES ('m2','github','USER','STDIO','SHARED')",
+            []
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn migration_003_leaves_a_populated_v2_database_intact() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    MIGRATIONS.to_version(&mut conn, 2).unwrap();
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p1','demo','/repo','main',0);
+         INSERT INTO blobs (hash, size_bytes, stored_bytes, created_at) VALUES ('h1', 1, 1, 0);
+         INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES ('o1','ctx://file/a','p1','FILE','h1',0);
+         INSERT INTO sessions (id, project_id, status, started_at) VALUES ('s1','p1','ACTIVE',0);
+         INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at) VALUES ('t1','p1','T-1','WORK','uno','RUNNING',0,0);
+         INSERT INTO providers (id, display_name, cli_name, adapter_mode, setup_state) VALUES ('anthropic','Claude','claude','CLI','READY');
+         INSERT INTO models (id, provider_id, cli_model_id, display_name, discovered_at) VALUES ('claude/sonnet','anthropic','sonnet','Sonnet',0);
+         INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_model_id, failover_policy, context_mode, created_at, updated_at)
+             VALUES ('a1','p1','s1','t1',1,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0);
+         INSERT INTO messages (id, agent_id, role, content_object_id, created_at) VALUES ('m1','a1','USER','o1',0);",
+    )
+    .unwrap();
+    // Con una fila hija que apunta al objeto: la reconstrucción de `context_objects` tiene
+    // que dejarla enlazada (con `RENAME` el COMMIT fallaba solo con datos reales).
+    MIGRATIONS.to_latest(&mut conn).unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM context_objects", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+    // La misma dirección en otro proyecto ya no choca; en el mismo, sí.
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p2','otro','/otro','main',0);
+         INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES ('o2','ctx://file/a','p2','FILE','h1',0);",
+    )
+    .unwrap();
+    assert!(conn
+        .execute("INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at) VALUES ('o3','ctx://file/a','p1','FILE','h1',0)", [])
+        .is_err());
+    let fk: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(fk, 0);
 }
 
 /// Una base de v0.1 (migración 001) con datos reales pasa a la 002 sin perder nada y con las
@@ -420,4 +579,68 @@ fn json_columns_are_validated() {
         [],
     );
     assert!(bad.is_err());
+}
+
+#[test]
+fn a_retrieval_marks_the_handoff_and_a_normal_end_does_not_undo_it() {
+    let conn = seeded();
+    let (agent, run) = (
+        symphony_core::AgentId::new().to_string(),
+        symphony_core::RunId::new(),
+    );
+    insert_agent(&conn, &agent, "t1", 1, "RUNNING").unwrap();
+    insert_run(&conn, &run.to_string(), &agent, 1, None).unwrap();
+    conn.execute(
+        "INSERT INTO handoffs (id, agent_id, to_run_id, mode, created_at) VALUES ('h1', ?1, ?2, 'BALANCED', 0)",
+        params![agent, run.to_string()],
+    )
+    .unwrap();
+    let outcome = |c: &Connection| {
+        c.query_row("SELECT outcome FROM handoffs WHERE id = 'h1'", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(outcome(&conn), None);
+    crate::repo::mark_needed_retrieval(&conn, run).unwrap();
+    assert_eq!(outcome(&conn).as_deref(), Some("NEEDED_RETRIEVAL"));
+    // El cierre normal del run no lo pisa con CONTINUED…
+    crate::repo::set_handoff_outcome(&conn, run, "CONTINUED").unwrap();
+    assert_eq!(outcome(&conn).as_deref(), Some("NEEDED_RETRIEVAL"));
+    // …pero un fallo sí manda, y una recuperación posterior no lo cambia.
+    crate::repo::set_handoff_outcome(&conn, run, "FAILED_TO_CONTINUE").unwrap();
+    crate::repo::mark_needed_retrieval(&conn, run).unwrap();
+    assert_eq!(outcome(&conn).as_deref(), Some("FAILED_TO_CONTINUE"));
+}
+
+#[test]
+fn shared_sync_keeps_the_user_switch_and_only_prunes_when_the_scan_is_trusted() {
+    use crate::shared::{FoundMcp, list_mcp, set_mcp_enabled, sync_mcp};
+    let conn = seeded();
+    let server = |name: &str| FoundMcp {
+        name: name.into(),
+        scope: "PROJECT",
+        transport: "STDIO",
+        share_mode: "PER_CLIENT",
+        command: Some("npx".into()),
+        url: None,
+        enabled_default: true,
+    };
+    sync_mcp(&conn, "p1", &[server("a"), server("b")], true).unwrap();
+    set_mcp_enabled(&conn, "p1", "b", false).unwrap();
+    // Releer no devuelve el interruptor a su valor por omisión.
+    sync_mcp(&conn, "p1", &[server("a"), server("b")], true).unwrap();
+    let rows = list_mcp(&conn, "p1").unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.name.as_str(), r.enabled))
+            .collect::<Vec<_>>(),
+        [("a", true), ("b", false)]
+    );
+    // Un escaneo vacío por un archivo roto no borra nada…
+    sync_mcp(&conn, "p1", &[], false).unwrap();
+    assert_eq!(list_mcp(&conn, "p1").unwrap().len(), 2);
+    // …uno de fiar sí quita lo que ya no está.
+    sync_mcp(&conn, "p1", &[server("a")], true).unwrap();
+    assert_eq!(list_mcp(&conn, "p1").unwrap().len(), 1);
 }

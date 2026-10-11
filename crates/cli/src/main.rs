@@ -1,5 +1,6 @@
 mod client;
 mod hook;
+mod mcp;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -114,6 +115,16 @@ enum Cmd {
         /// ID o número del agente.
         agent: String,
     },
+    /// Context engine: qué entró al último handoff, estadísticas y el original de un objeto.
+    Context {
+        #[command(subcommand)]
+        action: ContextCmd,
+    },
+    /// Hechos consolidados del proyecto (arquitectura, decisiones, restricciones, convenciones).
+    Fact {
+        #[command(subcommand)]
+        action: FactCmd,
+    },
     /// Muestra el git diff del worktree del agente contra su commit base.
     Diff {
         /// ID o número del agente.
@@ -140,6 +151,16 @@ enum Cmd {
         /// ID o número del agente.
         agent: String,
     },
+    /// Skills compartidas entre proveedores (`~/.symphony/skills`, `.symphony/skills`).
+    Skills {
+        #[command(subcommand)]
+        action: Option<ToggleCmd>,
+    },
+    /// Servidores MCP compartidos (`mcp.toml`) y el broker de contexto.
+    Mcp {
+        #[command(subcommand)]
+        action: McpCmd,
+    },
     /// Uso interno: lo ejecutan los hooks de los CLIs.
     #[command(hide = true)]
     Hook {
@@ -152,6 +173,76 @@ enum Cmd {
 enum ProvidersCmd {
     /// Vuelve a detectar los CLIs instalados.
     Refresh,
+}
+
+#[derive(Subcommand)]
+enum FactCmd {
+    /// Registra un hecho vigente (`CURRENT`) sobre el proyecto.
+    Set {
+        /// Clave única del hecho (ej. `auth_storage`, `db_engine`).
+        key: String,
+        /// Valor o descripción del hecho.
+        value: String,
+        /// Tipo de hecho: ARCHITECTURE, DECISION, CONSTRAINT, CONVENTION (default: DECISION).
+        #[arg(short, long, default_value = "DECISION")]
+        kind: String,
+    },
+    /// Lista los hechos registrados para el proyecto.
+    List {
+        /// Incluye hechos reemplazados (SUPERSEDED) y en conflicto (CONFLICT).
+        #[arg(short, long)]
+        all: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ContextCmd {
+    /// Qué entró al último handoff de un agente y con qué fidelidad.
+    Inspect {
+        /// ID o número del agente.
+        agent: String,
+    },
+    /// Compresión, coste de los handoffs y recuperaciones.
+    Stats,
+    /// El original completo de un objeto de contexto (`ctx://…`).
+    Raw {
+        /// Dirección `ctx://`.
+        uri: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpCmd {
+    /// Sirve MCP por stdio: `context_search`, `context_retrieve` y `context_lines`.
+    Serve,
+    /// Lista los servidores de `mcp.toml` (usuario y proyecto) con su estado.
+    List,
+    /// Enciende un servidor para los agentes nuevos.
+    Enable {
+        /// Nombre en `mcp.toml`.
+        name: String,
+    },
+    /// Apaga un servidor para los agentes nuevos.
+    Disable {
+        /// Nombre en `mcp.toml`.
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ToggleCmd {
+    /// Lista las skills encontradas.
+    List,
+    /// Enciende una skill para los agentes nuevos.
+    Enable {
+        /// Nombre de la carpeta de la skill.
+        name: String,
+    },
+    /// Apaga una skill para los agentes nuevos.
+    Disable {
+        /// Nombre de la carpeta de la skill.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -168,6 +259,94 @@ enum DaemonCmd {
     Stop,
     /// Dice si el daemon está corriendo, sin arrancarlo.
     Status,
+}
+
+/// `symphony skills|mcp list|enable|disable`: llama al daemon con el proyecto del directorio actual.
+async fn shared_command(
+    home: &std::path::Path,
+    method: &str,
+    toggle: Option<(String, bool)>,
+    what: &str,
+) -> miette::Result<()> {
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .display()
+        .to_string();
+    let mut conn = client::connect_or_start(home).await?;
+    if let Some((name, enabled)) = toggle {
+        client::call(
+            &mut conn,
+            method,
+            json!({ "project_root": cwd, "name": name, "enabled": enabled }),
+        )
+        .await?;
+        println!(
+            "{what} `{name}` {} (vale para los agentes que se creen o continúen desde ahora)",
+            if enabled { "encendido" } else { "apagado" }
+        );
+        return Ok(());
+    }
+    let res = client::call(&mut conn, method, json!({ "project_root": cwd })).await?;
+    print_shared(&res);
+    Ok(())
+}
+
+fn print_shared(res: &Value) {
+    let on = |v: &Value| {
+        if v["enabled"].as_bool() == Some(true) {
+            "on "
+        } else {
+            "off"
+        }
+    };
+    if let Some(skills) = res["skills"].as_array() {
+        if skills.is_empty() {
+            println!(
+                "no hay skills compartidas: crea `~/.symphony/skills/<nombre>/SKILL.md` o `.symphony/skills/<nombre>/SKILL.md`"
+            );
+        }
+        for s in skills {
+            let extra = if s["shadowed"].as_bool() == Some(true) {
+                " (tapada por la del proyecto)"
+            } else {
+                ""
+            };
+            println!(
+                "{} {:<24} {:<8} {}{extra}",
+                on(s),
+                s["name"].as_str().unwrap_or(""),
+                s["scope"].as_str().unwrap_or(""),
+                s["description"].as_str().unwrap_or("")
+            );
+        }
+    }
+    if let Some(servers) = res["servers"].as_array() {
+        if servers.is_empty() {
+            println!(
+                "no hay servidores MCP: define `[servers.<nombre>]` en `~/.symphony/mcp.toml` o `.symphony/mcp.toml`"
+            );
+        }
+        for s in servers {
+            let target = s["command"]
+                .as_str()
+                .or_else(|| s["url"].as_str())
+                .unwrap_or("");
+            let note = s["note"]
+                .as_str()
+                .map(|n| format!(" — {n}"))
+                .unwrap_or_default();
+            println!(
+                "{} {:<24} {:<8} {:<6} {target}{note}",
+                on(s),
+                s["name"].as_str().unwrap_or(""),
+                s["scope"].as_str().unwrap_or(""),
+                s["transport"].as_str().unwrap_or("")
+            );
+        }
+        for w in res["warnings"].as_array().into_iter().flatten() {
+            eprintln!("aviso: {}", w.as_str().unwrap_or(""));
+        }
+    }
 }
 
 fn main() -> miette::Result<()> {
@@ -213,6 +392,25 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
         Some(Cmd::Hook {
             action: HookCmd::Emit,
         }) => hook::emit(),
+        Some(Cmd::Mcp {
+            action: McpCmd::Serve,
+        }) => mcp::serve(home.to_path_buf()).await?,
+        Some(Cmd::Mcp { action }) => {
+            let (method, toggle) = match action {
+                McpCmd::List | McpCmd::Serve => ("mcp.list", None),
+                McpCmd::Enable { name } => ("mcp.set_enabled", Some((name, true))),
+                McpCmd::Disable { name } => ("mcp.set_enabled", Some((name, false))),
+            };
+            shared_command(home, method, toggle, "servidor").await?;
+        }
+        Some(Cmd::Skills { action }) => {
+            let (method, toggle) = match action {
+                None | Some(ToggleCmd::List) => ("skills.shared", None),
+                Some(ToggleCmd::Enable { name }) => ("skills.set_enabled", Some((name, true))),
+                Some(ToggleCmd::Disable { name }) => ("skills.set_enabled", Some((name, false))),
+            };
+            shared_command(home, method, toggle, "skill").await?;
+        }
         Some(Cmd::Providers { action }) => {
             let method = if matches!(action, Some(ProvidersCmd::Refresh)) {
                 "providers.refresh"
@@ -333,6 +531,74 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
             let mut conn = client::connect_or_start(home).await?;
             let res = client::call(&mut conn, "route.explain", json!({ "agent": agent })).await?;
             print_route(&res);
+        }
+        Some(Cmd::Context { action }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            match action {
+                ContextCmd::Inspect { agent } => {
+                    let res = client::call(&mut conn, "context.inspect", json!({ "agent": agent }))
+                        .await?;
+                    print_context_inspect(&res);
+                }
+                ContextCmd::Stats => {
+                    let res = client::call(&mut conn, "context.stats", json!({})).await?;
+                    print_context_stats(&res);
+                }
+                ContextCmd::Raw { uri } => {
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .display()
+                        .to_string();
+                    let res = client::call(
+                        &mut conn,
+                        "context.raw",
+                        json!({ "uri": uri, "project_root": cwd }),
+                    )
+                    .await?;
+                    print!("{}", res["text"].as_str().unwrap_or(""));
+                }
+            }
+        }
+        Some(Cmd::Fact { action }) => {
+            let cwd_str = std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .display()
+                .to_string();
+            let mut conn = client::connect_or_start(home).await?;
+            match action {
+                FactCmd::Set { key, value, kind } => {
+                    let res = client::call(
+                        &mut conn,
+                        "fact.set",
+                        json!({
+                            "project_root": cwd_str,
+                            "key": key,
+                            "value": value,
+                            "kind": kind,
+                        }),
+                    )
+                    .await?;
+                    println!(
+                        "hecho registrado: [{}] {} = {} ({})",
+                        res["kind"].as_str().unwrap_or(""),
+                        res["key"].as_str().unwrap_or(""),
+                        res["value"].as_str().unwrap_or(""),
+                        res["status"].as_str().unwrap_or("CURRENT")
+                    );
+                }
+                FactCmd::List { all } => {
+                    let res = client::call(
+                        &mut conn,
+                        "fact.list",
+                        json!({
+                            "project_root": cwd_str,
+                            "all": all,
+                        }),
+                    )
+                    .await?;
+                    print_facts(&res);
+                }
+            }
         }
         Some(Cmd::Diff { agent }) => {
             let mut conn = client::connect_or_start(home).await?;
@@ -621,6 +887,106 @@ fn print_route(v: &Value) {
                 p["selected"].as_str().unwrap_or("ninguno")
             );
         }
+    }
+}
+
+fn print_context_inspect(v: &Value) {
+    let h = &v["handoff"];
+    if h.is_null() {
+        println!("El agente no tiene handoffs.");
+        return;
+    }
+    println!(
+        "Handoff {} · modo {} · {} tokens enviados de {} en RAW · {} ms",
+        h["id"].as_str().unwrap_or("?"),
+        h["mode"].as_str().unwrap_or("?"),
+        h["tokens_sent"],
+        h["tokens_raw_estimate"],
+        h["build_ms"]
+    );
+    let items = v["items"].as_array().cloned().unwrap_or_default();
+    if items.is_empty() {
+        println!("(primer arranque: solo el objetivo, sin detalle por sección)");
+        return;
+    }
+    println!(
+        "{:<11} {:<10} {:>8}  ORIGEN",
+        "SECCIÓN", "FIDELIDAD", "TOKENS"
+    );
+    for i in items {
+        let fidelity = match i["fidelity"].as_i64() {
+            Some(5) => "completo",
+            Some(4) => "recortado",
+            Some(3) => "resumen",
+            Some(2) => "esqueleto",
+            Some(1) => "referencia",
+            Some(0) => "omitido",
+            _ => "?",
+        };
+        println!(
+            "{:<11} {:<10} {:>8}  {}",
+            i["section"].as_str().unwrap_or("?"),
+            fidelity,
+            i["tokens"],
+            i["path"].as_str().unwrap_or("")
+        );
+    }
+}
+
+fn print_context_stats(v: &Value) {
+    println!(
+        "{} objetos de contexto, {} chunks buscables.",
+        v["objects"], v["chunks"]
+    );
+    let empty = Vec::new();
+    let comp = v["compression"].as_array().unwrap_or(&empty);
+    if comp.is_empty() {
+        println!("Sin objetos comprimidos todavía.");
+    }
+    for c in comp {
+        println!(
+            "  {:<13} {:>5} objetos · {} → {} tokens",
+            c["compressor"].as_str().unwrap_or("?"),
+            c["objects"],
+            c["tokens_original"],
+            c["tokens_compressed"]
+        );
+    }
+    for h in v["handoffs"].as_array().unwrap_or(&empty) {
+        println!(
+            "  handoffs {:<10} {:>4} · {} tokens enviados de {} en RAW · {} necesitaron recuperar · {} no continuaron",
+            h["mode"].as_str().unwrap_or("?"),
+            h["handoffs"],
+            h["tokens_sent"],
+            h["tokens_raw"],
+            h["needed_retrieval"],
+            h["failed_to_continue"]
+        );
+    }
+    let r = &v["retrievals"];
+    println!(
+        "  recuperaciones: {} ({} sin resultado) · {} tokens devueltos",
+        r["total"], r["misses"], r["tokens_returned"]
+    );
+}
+
+fn print_facts(res: &Value) {
+    let empty = Vec::new();
+    let rows = res["facts"].as_array().unwrap_or(&empty);
+    if rows.is_empty() {
+        println!("No hay hechos registrados para este proyecto.");
+        return;
+    }
+    println!("{:<14} {:<20} {:<12} VALOR", "TIPO", "CLAVE", "ESTADO");
+    for f in rows {
+        let text = |k: &str| f[k].as_str().unwrap_or("—").to_string();
+        println!(
+            "{:<14} {:<20} {:<12} {}",
+            text("kind"),
+            text("key"),
+            text("status"),
+            text("value")
+        );
     }
 }
 

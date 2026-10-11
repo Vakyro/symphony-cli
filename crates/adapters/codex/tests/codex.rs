@@ -160,7 +160,21 @@ fn spawn_reads_prompt_from_stdin_and_injects_hooks_with_c() {
         .filter(|(k, _)| *k == "-c")
         .map(|(_, v)| v)
         .collect();
-    assert_eq!(overrides.len(), 6);
+    // 6 hooks + el broker MCP del contexto (command, args, env).
+    assert_eq!(overrides.len(), 9);
+    assert!(overrides.iter().any(|o| o.starts_with(
+        r#"mcp_servers.symphony-context.command="C:\\Program Files\\Symphony\\symphony.exe""#
+    )));
+    assert!(
+        overrides
+            .iter()
+            .any(|o| *o == "mcp_servers.symphony-context.args=[\"mcp\",\"serve\"]")
+    );
+    assert!(
+        overrides
+            .iter()
+            .any(|o| *o == "mcp_servers.symphony-context.env={SYMPHONY_AGENT_ID=\"a1\"}")
+    );
     assert!(
         overrides
             .iter()
@@ -252,4 +266,38 @@ fn turn_completed_reports_turn_usage() {
             context_tokens: 24763
         }]
     );
+}
+
+#[test]
+fn extra_mcp_servers_become_c_overrides() {
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "gpt-5.6-luna".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        hook: None,
+        env: vec![(
+            "SYMPHONY_MCP_EXTRA".into(),
+            serde_json::json!([
+                { "name": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "server-fs"], "env": { "RAIZ": "." } },
+                { "name": "remoto", "transport": "http", "url": "https://example.test/mcp" }
+            ])
+            .to_string(),
+        )],
+    };
+    let args: Vec<String> = adapter()
+        .spawn_spec(&req)
+        .unwrap()
+        .args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    for want in [
+        "mcp_servers.fs.command=\"npx\"",
+        "mcp_servers.fs.args=[\"-y\",\"server-fs\"]",
+        "mcp_servers.fs.env={\"RAIZ\"=\".\"}",
+        "mcp_servers.remoto.url=\"https://example.test/mcp\"",
+    ] {
+        assert!(args.iter().any(|a| a == want), "falta {want}: {args:?}");
+    }
 }

@@ -80,6 +80,11 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::ExplainRoute => "· Por qué este modelo",
         Screen::Providers => "· Proveedores",
         Screen::Recovery => "· Recovery Center",
+        Screen::ContextOverview => "· Contexto",
+        Screen::ContextObject => "· Objeto de contexto",
+        Screen::SharedSkills => "· Skills compartidas",
+        Screen::SharedMcp => "· Servidores MCP",
+        Screen::Stats => "· Uso y contexto",
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -103,6 +108,11 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::Agent => agent(app, f, body),
         Screen::ExplainRoute => explain_route(app, f, body),
         Screen::Recovery => recovery(app, f, body),
+        Screen::ContextOverview => context_overview(app, f, body),
+        Screen::ContextObject => context_object(app, f, body),
+        Screen::SharedSkills => shared_skills(app, f, body),
+        Screen::SharedMcp => shared_mcp(app, f, body),
+        Screen::Stats => stats(app, f, body),
     }
 
     footer_line(app, f, footer);
@@ -131,12 +141,18 @@ fn hints(app: &App) -> &'static str {
         Screen::Agent => match app.agent.as_ref() {
             Some(a) if a.typing => "Enter enviar · Esc cancelar",
             _ => {
-                "←→ pestaña · m mensaje · p pausa · s modelo · ? por qué · o CLI · e exportar · d diff · x detener · Esc"
+                "←→ pestaña · m mensaje · p pausa · s modelo · ? por qué · c contexto · o CLI · e exportar · d diff · x detener · Esc"
             }
         },
         Screen::Recovery => {
             "↑↓ elegir · r reiniciar · c recuperar · s detener · x descartar · Enter abrir · Esc volver"
         }
+        Screen::ContextOverview => "↑↓ elegir · Enter ver el original · Esc volver",
+        Screen::ContextObject => "↑↓ PgUp/PgDn desplazar · Esc volver al resumen",
+        Screen::SharedSkills | Screen::SharedMcp => {
+            "↑↓ elegir · Espacio/Enter encender o apagar · r releer · Esc volver"
+        }
+        Screen::Stats => "r releer · Esc volver",
     }
 }
 
@@ -1417,6 +1433,266 @@ fn recovery(app: &App, f: &mut Frame, area: Rect) {
         )));
     }
     paragraph(f, area, "Recovery Center", lines);
+}
+
+// --- 20 Context Overview ----------------------------------------------------
+
+/// Nombre de cada nivel de fidelidad (`handoff_items.fidelity`); los mismos que `symphony
+/// context inspect` y `symphony_context::handoff::fidelity`.
+fn fidelity_name(level: Option<i64>) -> &'static str {
+    match level {
+        Some(0) => "omitido",
+        Some(1) => "referencia",
+        Some(2) => "esqueleto",
+        Some(3) => "resumen",
+        Some(4) => "recortado",
+        Some(5) => "completo",
+        _ => "—",
+    }
+}
+
+fn context_overview(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(o) = app.ctx_overview.as_ref() else {
+        lines.push(Line::from(dim("Cargando…")));
+        return paragraph(f, area, "Contexto del handoff", lines);
+    };
+    if o["handoff"].is_null() {
+        lines.push(Line::raw("Este agente todavía no tiene handoffs."));
+        lines.push(Line::from(dim(
+            "Aparece uno cuando continúa en otro modelo o proveedor.",
+        )));
+        return paragraph(f, area, "Contexto del handoff", lines);
+    }
+    let h = &o["handoff"];
+    let raw = h["tokens_raw_estimate"].as_i64();
+    let sent = h["tokens_sent"].as_i64();
+    let saved = match (raw, sent) {
+        (Some(r), Some(s)) if r > 0 => format!(" ({}% del original)", s * 100 / r),
+        _ => String::new(),
+    };
+    lines.push(Line::from(vec![
+        bold("Modo: "),
+        Span::raw(text(&h["mode"])),
+        Span::raw("   "),
+        bold("Enviado: "),
+        Span::raw(format!("{} tokens{saved}", num(&h["tokens_sent"]))),
+        Span::raw("   "),
+        bold("Original: "),
+        Span::raw(format!("{} tokens", num(&h["tokens_raw_estimate"]))),
+    ]));
+    lines.push(Line::from(dim(format!(
+        "  armado en {} ms · resultado: {}",
+        num(&h["build_ms"]),
+        h["outcome"].as_str().unwrap_or("sin dato")
+    ))));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(dim(format!(
+        "  {:<13} {:<40} {:<13} {:>7}",
+        "SECCIÓN", "RUTA", "FIDELIDAD", "TOKENS"
+    ))));
+    let items = app.overview_items();
+    for (i, it) in items.iter().enumerate() {
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            Span::raw(format!(
+                "{:<13} {:<40} {:<13} {:>7}",
+                text(&it["section"]),
+                it["path"].as_str().unwrap_or("—"),
+                fidelity_name(it["fidelity"].as_i64()),
+                num(&it["tokens"])
+            )),
+        ]));
+    }
+    if items.is_empty() {
+        lines.push(Line::from(dim("  El handoff no detalla partes.")));
+    }
+    paragraph(f, area, "Contexto del handoff", lines);
+}
+
+// --- 21 Context Object ------------------------------------------------------
+
+fn context_object(app: &App, f: &mut Frame, area: Rect) {
+    let uri = app.ctx_uri.clone().unwrap_or_default();
+    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![bold("Dirección: "), Span::raw(uri)])];
+    match app.ctx_object.as_ref() {
+        None => lines.push(Line::from(dim("Cargando…"))),
+        Some(o) => {
+            lines.push(Line::from(dim(format!(
+                "  {} · {} bytes · compresor {} · {} → {} tokens",
+                text(&o["kind"]),
+                num(&o["bytes"]),
+                o["compressor"].as_str().unwrap_or("ninguno"),
+                num(&o["tokens_original"]),
+                num(&o["tokens_compressed"])
+            ))));
+            lines.push(Line::raw(""));
+            let skip = usize::from(app.ctx_scroll);
+            for l in o["text"].as_str().unwrap_or("").lines().skip(skip) {
+                lines.push(Line::raw(l.to_string()));
+            }
+        }
+    }
+    paragraph(f, area, "Objeto de contexto", lines);
+}
+
+// --- 32 Shared Skills / 33 Shared MCP ---------------------------------------
+
+fn switch_span(item: &Value) -> Span<'static> {
+    if item["enabled"].as_bool() == Some(true) {
+        colored("[on ] ", Color::Green)
+    } else {
+        dim("[off] ")
+    }
+}
+
+fn shared_skills(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.shared_skills.is_empty() {
+        lines.push(Line::raw("No hay skills compartidas."));
+        lines.push(Line::from(dim(
+            "Crea ~/.symphony/skills/<nombre>/SKILL.md o .symphony/skills/<nombre>/SKILL.md.",
+        )));
+    }
+    for (i, s) in app.shared_skills.iter().enumerate() {
+        let shadow = if s["shadowed"].as_bool() == Some(true) {
+            " · tapada por la del proyecto"
+        } else {
+            ""
+        };
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            switch_span(s),
+            bold(format!("{:<22} ", text(&s["name"]))),
+            dim(format!("{:<8} ", text(&s["scope"]))),
+            Span::raw(s["description"].as_str().unwrap_or("").to_string()),
+            dim(shadow.to_string()),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(dim(
+        "Claude las carga como plugin de sesión. Codex no tiene un directorio de skills por invocación: aún no las recibe.",
+    )));
+    paragraph(f, area, "Skills compartidas", lines);
+}
+
+fn shared_mcp(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.shared_mcp.is_empty() {
+        lines.push(Line::raw("No hay servidores MCP compartidos."));
+        lines.push(Line::from(dim(
+            "Defínelos en ~/.symphony/mcp.toml o .symphony/mcp.toml con [servers.<nombre>].",
+        )));
+    }
+    for (i, s) in app.shared_mcp.iter().enumerate() {
+        let target = s["command"]
+            .as_str()
+            .or_else(|| s["url"].as_str())
+            .unwrap_or("")
+            .to_string();
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            switch_span(s),
+            bold(format!("{:<18} ", text(&s["name"]))),
+            dim(format!(
+                "{:<8} {:<6} ",
+                text(&s["scope"]),
+                text(&s["transport"])
+            )),
+            Span::raw(target),
+        ]));
+        if let Some(n) = s["note"].as_str() {
+            lines.push(Line::from(dim(format!("      {n}"))));
+        }
+    }
+    for w in &app.shared_warnings {
+        lines.push(Line::from(colored(format!("aviso: {w}"), Color::Yellow)));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(dim(
+        "El broker de contexto (symphony-context) siempre está: no se apaga aquí.",
+    )));
+    paragraph(f, area, "Servidores MCP", lines);
+}
+
+// --- 35 Usage / Context Stats -----------------------------------------------
+
+fn stats(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(s) = app.ctx_stats.as_ref() else {
+        lines.push(Line::from(dim("Cargando…")));
+        return paragraph(f, area, "Uso y contexto", lines);
+    };
+    lines.push(section("CONTEXTO"));
+    lines.push(Line::raw(format!(
+        "  {} objetos · {} chunks indexados",
+        num(&s["objects"]),
+        num(&s["chunks"])
+    )));
+    lines.push(Line::from(dim(format!(
+        "  {:<14} {:>8} {:>12} {:>12}",
+        "COMPRESOR", "OBJETOS", "ORIGINAL", "COMPRIMIDO"
+    ))));
+    for c in s["compression"].as_array().cloned().unwrap_or_default() {
+        lines.push(Line::raw(format!(
+            "  {:<14} {:>8} {:>12} {:>12}",
+            text(&c["compressor"]),
+            num(&c["objects"]),
+            num(&c["tokens_original"]),
+            num(&c["tokens_compressed"])
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(dim(format!(
+        "  {:<12} {:>9} {:>11} {:>10} {:>11} {:>8}",
+        "HANDOFF", "HANDOFFS", "ORIGINAL", "ENVIADO", "RECUPERÓ", "FALLÓ"
+    ))));
+    for h in s["handoffs"].as_array().cloned().unwrap_or_default() {
+        lines.push(Line::raw(format!(
+            "  {:<12} {:>9} {:>11} {:>10} {:>11} {:>8}",
+            text(&h["mode"]),
+            num(&h["handoffs"]),
+            num(&h["tokens_raw"]),
+            num(&h["tokens_sent"]),
+            num(&h["needed_retrieval"]),
+            num(&h["failed_to_continue"])
+        )));
+    }
+    let r = &s["retrievals"];
+    lines.push(Line::raw(""));
+    lines.push(Line::raw(format!(
+        "  Recuperaciones: {} ({} sin resultado) · {} tokens devueltos",
+        num(&r["total"]),
+        num(&r["misses"]),
+        num(&r["tokens_returned"])
+    )));
+    lines.push(Line::raw(""));
+    lines.push(section("USO POR PROVEEDOR (7 días)"));
+    let usage = app
+        .usage
+        .as_ref()
+        .and_then(|u| u["usage"].as_array().cloned())
+        .unwrap_or_default();
+    if usage.is_empty() {
+        lines.push(Line::from(dim("  Sin uso registrado.")));
+    }
+    for u in usage {
+        let source = match u["source"].as_str() {
+            Some("REPORTED") => "reportado",
+            Some("ESTIMATED") => "estimado",
+            _ => "—",
+        };
+        lines.push(Line::raw(format!(
+            "  {:<10} {:<20} {:<10} {:>3} corridas {:>10} ent. {:>8} sal.",
+            text(&u["provider_id"]),
+            text(&u["model_id"]),
+            source,
+            num(&u["runs"]),
+            num(&u["tokens_in"]),
+            num(&u["tokens_out"])
+        )));
+    }
+    paragraph(f, area, "Uso y contexto", lines);
 }
 
 // --- selección con el ratón -------------------------------------------------

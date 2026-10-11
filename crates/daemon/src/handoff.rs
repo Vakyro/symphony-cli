@@ -7,7 +7,9 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use serde_json::Value;
-use symphony_context::handoff::{self, ChatMessage, HandoffInput, LastCommand, NewFile, Speaker};
+use symphony_context::handoff::{
+    self, ChatMessage, HandoffInput, LastCommand, NewFile, ProjectFact, Speaker,
+};
 use symphony_core::{AgentId, CheckpointId, ContextMode, redact};
 use symphony_git::{FileStatus, Repo};
 use symphony_object_store::ObjectStore;
@@ -28,6 +30,7 @@ pub struct PreparedHandoff {
     pub tokens_sent: i64,
     pub tokens_raw_estimate: i64,
     pub build_ms: i64,
+    pub items: Vec<repo::NewHandoffItem>,
 }
 
 /// Git vivo del worktree.
@@ -155,7 +158,7 @@ pub async fn prepare(
     reason: &str,
 ) -> Result<PreparedHandoff, String> {
     let started = Instant::now();
-    let (a, wt, checkpoint, conversation) = {
+    let (a, wt, checkpoint, conversation, facts) = {
         let conn = reader
             .lock()
             .map_err(|_| "lector de la base no disponible")?;
@@ -166,7 +169,16 @@ pub async fn prepare(
             .map_err(|e| e.to_string())?
             .ok_or("el agente no tiene un checkpoint válido")?;
         let conversation = conversation(&conn, objects, agent)?;
-        (a, wt, checkpoint, conversation)
+        let facts = symphony_store::context::get_current_facts(&conn, &a.project_id.to_string())
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|f| ProjectFact {
+                key: f.key,
+                value: f.value,
+                kind: f.kind,
+            })
+            .collect();
+        (a, wt, checkpoint, conversation, facts)
     };
     let (path, base) = (wt.path.clone(), wt.base_ref.clone());
     let git = tokio::task::spawn_blocking(move || live_git(Path::new(&path), &base))
@@ -214,6 +226,7 @@ pub async fn prepare(
         diff_uri: checkpoint.diff_uri,
         new_files: git.new_files,
         conversation,
+        facts,
     };
     let built = handoff::assemble(&input, a.context_mode);
     let raw = handoff::assemble(&input, ContextMode::Raw).tokens_sent;
@@ -226,5 +239,15 @@ pub async fn prepare(
         tokens_sent: built.tokens_sent,
         tokens_raw_estimate: raw,
         build_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+        items: built
+            .items
+            .into_iter()
+            .map(|i| repo::NewHandoffItem {
+                section: i.section.as_str(),
+                path: i.path,
+                fidelity: i.fidelity,
+                tokens: i.tokens,
+            })
+            .collect(),
     })
 }

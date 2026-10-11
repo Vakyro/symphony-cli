@@ -133,6 +133,51 @@ impl ClaudeAdapter {
         if let Some(hook) = &req.hook {
             spec = spec.arg("--settings").arg(hook_settings(hook).to_string());
         }
+        // Broker MCP del contexto (P09.S8). Sin verificar en vivo: necesita cuota (STATUS).
+        // Más los servidores de `mcp.toml` (P09.S9): se permiten por servidor, porque en
+        // headless nadie puede contestar el permiso.
+        let mut servers = serde_json::Map::new();
+        let mut allowed: Vec<String> = Vec::new();
+        if let Some((cmd, env)) = symphony_adapter_common::broker(req) {
+            let name = symphony_adapter_common::MCP_SERVER_NAME;
+            servers.insert(
+                name.into(),
+                json!({
+                    "command": cmd.program.to_string_lossy(),
+                    "args": cmd.args,
+                    "env": env.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+                }),
+            );
+            allowed.extend(
+                symphony_adapter_common::MCP_TOOLS
+                    .iter()
+                    .map(|t| format!("mcp__{name}__{t}")),
+            );
+        }
+        for m in symphony_adapter_common::extra_mcp(req) {
+            let def = if m.http {
+                json!({ "type": "http", "url": m.url })
+            } else {
+                json!({
+                    "command": m.command,
+                    "args": m.args,
+                    "env": m.env.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
+                })
+            };
+            allowed.push(format!("mcp__{}", m.name));
+            servers.insert(m.name, def);
+        }
+        if !servers.is_empty() {
+            spec = spec
+                .arg("--mcp-config")
+                .arg(json!({ "mcpServers": servers }).to_string())
+                .arg("--allowedTools")
+                .arg(allowed.join(","));
+        }
+        // Skills compartidas como plugin de sesión: sin tocar el repo ni `~/.claude`.
+        if let Some(dir) = symphony_adapter_common::plugin_dir(req) {
+            spec = spec.arg("--plugin-dir").arg(dir);
+        }
         for (k, v) in &req.env {
             spec = spec.env(k, v);
         }

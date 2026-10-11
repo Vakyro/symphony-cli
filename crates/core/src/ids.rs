@@ -60,6 +60,7 @@ macro_rules! ulid_id {
 }
 
 ulid_id!(
+    HandoffItemId,
     ProjectId,
     SessionId,
     TaskId,
@@ -76,7 +77,10 @@ ulid_id!(
     ExecutorChangeId,
     ProviderHealthId,
     UsageRecordId,
-    RoutingDecisionId
+    RoutingDecisionId,
+    FactId,
+    SkillId,
+    McpServerId,
 );
 
 #[cfg(test)]

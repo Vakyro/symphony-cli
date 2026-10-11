@@ -114,6 +114,22 @@ Leo probó la vista Chat en su terminal (Claude `haiku` y Codex `gpt-5.6-luna`, 
 | 6 | Exportar a `.md` | Media, barata |
 | 5 | Animaciones / mascota | Baja; después de lo funcional (posible GUI P14) |
 
+## Nuevas ideas de producto (Leo · Octubre 2026)
+
+### 1. Control remoto vía SSH (Acceso móvil / teléfono)
+* **Objetivo:** Poder supervisar agentes, autorizar herramientas, leer respuestas o enviar mensajes desde el teléfono móvil sin depender de estar físicamente frente a la laptop.
+* **Mecanismo:** 
+  - Al estar Symphony desacoplado en Daemon (`symphonyd`) + TUI en Ratatui, permite conectarse por SSH al equipo host (ej. vía Tailscale / SSH server en Windows/WSL) y abrir la TUI directamente en clientes móviles como Termius, Prompt o Termux en una sesión persistente (`tmux`/`screen`).
+  - Posible adición futura: Bridge ligero para notificaciones push en el móvil (webhooks/notificaciones de estado "Agente bloqueado" o "Turno finalizado").
+
+### 2. Sesiones pequeñas / Micro-sesiones de bajo impacto en proveedores
+* **Objetivo:** Minimizar el consumo acumulado de tokens y el impacto en las cuotas/límites de rate limit de los proveedores (especialmente crítico en cuentas Pro con límites por ventana de 5 horas o diarios).
+* **Mecanismo:**
+  - Diseñar flujos donde los turnos del chat y las tareas de agentes operen en "micro-sesiones" acotadas con objetivos atómicos y entrega de resultados condensados.
+  - Aprovechar el motor de contexto de P09 (`BALANCED`/`AGGRESSIVE`, compresión determinista de logs/diffs y AST contextual) para enviar solo el diferencial relevante en lugar de reinyectar historiales conversacionales crudos de 50k–100k tokens en cada continuación.
+
 ## Referencias externas
 
-Conversaciones con ChatGPT y Claude sobre Herdr, AX y la evaluación del repo: [referencias-herdr-ax.md](referencias-herdr-ax.md). Sus puntos sobre `phase + conditions`, event bus, suspend/resume y `Workspace` entran al ADR de P07.S10.
+- Conversaciones con ChatGPT y Claude sobre Herdr, AX y la evaluación del repo: [referencias-herdr-ax.md](referencias-herdr-ax.md). Sus puntos sobre `phase + conditions`, event bus, suspend/resume y `Workspace` entran al ADR de P07.S10.
+- Evaluación y comparativa técnica realizada por Devin AI: [evaluacion-devin-ai.md](evaluacion-devin-ai.md).
+

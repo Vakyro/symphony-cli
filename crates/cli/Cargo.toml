@@ -20,6 +20,8 @@ symphony-protocol = { path = "../protocol" }
 symphony-tui = { path = "../tui" }
 clap.workspace = true
 miette = { workspace = true, features = ["fancy"] }
+rmcp.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "macros"] }

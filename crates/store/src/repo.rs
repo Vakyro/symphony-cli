@@ -940,6 +940,21 @@ pub fn prune_checkpoints(
         .prepare(&format!("SELECT o.blob_hash {orphans}"))?
         .query_map([&agent], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
+    // Lo que cuelga de un objeto de contexto se va con él: sus chunks (y su índice FTS por los
+    // triggers), sus recuperaciones y la referencia desde los items de un handoff.
+    let ids = format!("SELECT o.id {orphans}");
+    conn.execute(
+        &format!("DELETE FROM context_chunks WHERE object_id IN ({ids})"),
+        [&agent],
+    )?;
+    conn.execute(
+        &format!("DELETE FROM context_retrievals WHERE object_id IN ({ids})"),
+        [&agent],
+    )?;
+    conn.execute(
+        &format!("UPDATE handoff_items SET object_id = NULL WHERE object_id IN ({ids})"),
+        [&agent],
+    )?;
     conn.execute(&format!("DELETE {orphans}"), [&agent])?;
     Ok(hashes)
 }
@@ -1006,6 +1021,17 @@ pub struct NewHandoff {
     pub tokens_raw_estimate: i64,
     pub tokens_sent: i64,
     pub build_ms: i64,
+    /// Qué entró al prompt y con qué fidelidad (`handoff_items`); vacío en el primer spawn.
+    pub items: Vec<NewHandoffItem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewHandoffItem {
+    /// `OBJECTIVE` · `PLAN` · `DECISIONS` · `FAILURES` · `CODE` · `DIFF` · `REFERENCES`.
+    pub section: &'static str,
+    pub path: Option<String>,
+    pub fidelity: u8,
+    pub tokens: i64,
 }
 
 /// Un handoff inicia exactamente un run (`to_run_id` UNIQUE).
@@ -1025,6 +1051,19 @@ pub fn insert_handoff(conn: &Connection, h: &NewHandoff, now: i64) -> Result<(),
             now
         ],
     )?;
+    for i in &h.items {
+        conn.execute(
+            "INSERT INTO handoff_items (id, handoff_id, section, path, fidelity, tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                symphony_core::HandoffItemId::new().to_string(),
+                h.id.to_string(),
+                i.section,
+                i.path,
+                i.fidelity,
+                i.tokens
+            ],
+        )?;
+    }
     Ok(())
 }
 
@@ -1034,9 +1073,24 @@ pub fn set_handoff_outcome(
     to_run: RunId,
     outcome: &str,
 ) -> Result<(), RepoError> {
+    // `NEEDED_RETRIEVAL` (el run pidió más contexto) es más informativo que `CONTINUED`: el
+    // cierre normal del run no lo pisa.
     conn.execute(
-        "UPDATE handoffs SET outcome = ?2 WHERE to_run_id = ?1",
+        "UPDATE handoffs
+         SET outcome = CASE WHEN outcome = 'NEEDED_RETRIEVAL' AND ?2 = 'CONTINUED' THEN outcome ELSE ?2 END
+         WHERE to_run_id = ?1",
         params![to_run.to_string(), outcome],
+    )?;
+    Ok(())
+}
+
+/// El run pidió contexto por el broker MCP: su handoff «necesitó recuperar». No cambia un
+/// resultado ya decidido (`FAILED_TO_CONTINUE`, `RETRIED_SAFER`).
+pub fn mark_needed_retrieval(conn: &Connection, to_run: RunId) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE handoffs SET outcome = 'NEEDED_RETRIEVAL'
+         WHERE to_run_id = ?1 AND (outcome IS NULL OR outcome = 'CONTINUED')",
+        [to_run.to_string()],
     )?;
     Ok(())
 }

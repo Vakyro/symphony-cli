@@ -481,6 +481,197 @@ fn view_30_recovery_center() {
     insta::assert_snapshot!(draw(&app));
 }
 
+// --- P09.S9: contexto, skills y MCP compartidos (FLOW 20, 21, 32, 33, 35) ------
+
+fn command(app: &mut App, text: &str) -> Vec<Call> {
+    press(app, KeyCode::Char(':'));
+    typed(app, text);
+    press(app, KeyCode::Enter)
+}
+
+fn context_inspect() -> Value {
+    json!({
+        "agent_id": "01AGENT1",
+        "handoff": {
+            "id": "01HANDOFF", "mode": "BALANCED", "tokens_raw_estimate": 21512, "tokens_sent": 1412,
+            "build_ms": 14, "outcome": "COMPLETED", "created_at": NOW - 60_000
+        },
+        "items": [
+            { "section": "GOAL", "path": null, "fidelity": 5, "tokens": 120 },
+            { "section": "FILES", "path": "src/auth.ts", "fidelity": 1, "tokens": 310 },
+            { "section": "DIFF", "path": "ctx://diff/01AGENT1/ab12cd", "fidelity": 0, "tokens": 40 },
+            { "section": "FILES", "path": "src/session.ts", "fidelity": 3, "tokens": 540 }
+        ]
+    })
+}
+
+#[test]
+fn view_20_context_overview() {
+    let mut app = agent_app(Tab::Overview);
+    let calls = press(&mut app, KeyCode::Char('c'));
+    assert_eq!(app.screen, Screen::ContextOverview);
+    assert_eq!(methods(&calls), ["context.inspect"]);
+    assert_eq!(calls[0].params["agent_id"], "01AGENT1");
+    ok(&mut app, Req::ContextInspect, context_inspect());
+    insta::assert_snapshot!(draw(&app));
+}
+
+#[test]
+fn view_20_without_handoffs_says_so() {
+    let mut app = agent_app(Tab::Overview);
+    press(&mut app, KeyCode::Char('c'));
+    ok(
+        &mut app,
+        Req::ContextInspect,
+        json!({ "agent_id": "01AGENT1", "handoff": null, "items": [] }),
+    );
+    assert!(draw(&app).contains("todavía no tiene handoffs"));
+}
+
+#[test]
+fn context_without_an_agent_or_chat_is_an_error() {
+    let mut app = home_app();
+    let calls = command(&mut app, "context");
+    assert!(calls.is_empty());
+    assert!(matches!(app.notice, Some(Notice::Error(_))));
+}
+
+#[test]
+fn view_21_context_object_opens_from_an_item() {
+    let mut app = agent_app(Tab::Overview);
+    press(&mut app, KeyCode::Char('c'));
+    ok(&mut app, Req::ContextInspect, context_inspect());
+    // Una parte sin objeto (el objetivo) no abre nada.
+    let calls = press(&mut app, KeyCode::Enter);
+    assert!(calls.is_empty());
+    assert_eq!(app.screen, Screen::ContextOverview);
+    // Un archivo se abre como ctx://file/<ruta>.
+    press(&mut app, KeyCode::Down);
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen, Screen::ContextObject);
+    assert_eq!(methods(&calls), ["context.raw"]);
+    assert_eq!(calls[0].params["uri"], "ctx://file/src/auth.ts");
+    ok(
+        &mut app,
+        Req::ContextRaw,
+        json!({
+            "uri": "ctx://file/src/auth.ts", "kind": "FILE", "bytes": 96,
+            "text": "export function login(user: string) {\n  return sign(user);\n}\n\nexport function logout() {}\n",
+            "compressor": null, "tokens_original": 24, "tokens_compressed": null
+        }),
+    );
+    insta::assert_snapshot!(draw(&app));
+    // Esc vuelve al resumen; una dirección ctx:// se abre tal cual.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::ContextOverview);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(calls[0].params["uri"], "ctx://diff/01AGENT1/ab12cd");
+}
+
+fn shared_skills() -> Value {
+    json!({ "skills": [
+        { "name": "revisar", "scope": "PROJECT", "path": "/work/.symphony/skills/revisar", "enabled": true,
+          "description": "Revisa un diff y lista los riesgos", "providers": [], "shadowed": false },
+        { "name": "revisar", "scope": "USER", "path": "/home/.symphony/skills/revisar", "enabled": true,
+          "description": "Revisión general", "providers": [], "shadowed": true },
+        { "name": "release-notes", "scope": "USER", "path": "/home/.symphony/skills/release-notes", "enabled": false,
+          "description": "Redacta las notas de versión", "providers": ["anthropic"], "shadowed": false }
+    ]})
+}
+
+#[test]
+fn view_32_shared_skills_toggle() {
+    let mut app = home_app();
+    let calls = command(&mut app, "skills");
+    assert_eq!(app.screen, Screen::SharedSkills);
+    assert_eq!(methods(&calls), ["skills.shared"]);
+    ok(&mut app, Req::SharedSkills, shared_skills());
+    insta::assert_snapshot!(draw(&app));
+    // Espacio apaga la elegida y vuelve a leer.
+    let calls = press(&mut app, KeyCode::Char(' '));
+    assert_eq!(methods(&calls), ["skills.set_enabled"]);
+    assert_eq!(calls[0].params["name"], "revisar");
+    assert_eq!(calls[0].params["enabled"], false);
+    let calls = ok(&mut app, Req::SharedToggle, json!({ "updated": 1 }));
+    assert_eq!(methods(&calls), ["skills.shared"]);
+    // Una apagada se enciende.
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(calls[0].params["name"], "release-notes");
+    assert_eq!(calls[0].params["enabled"], true);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::Home);
+}
+
+#[test]
+fn view_33_shared_mcp_with_warnings() {
+    let mut app = home_app();
+    let calls = command(&mut app, "mcp");
+    assert_eq!(app.screen, Screen::SharedMcp);
+    assert_eq!(methods(&calls), ["mcp.list"]);
+    ok(
+        &mut app,
+        Req::SharedMcp,
+        json!({
+            "servers": [
+                { "name": "fs", "scope": "PROJECT", "transport": "STDIO", "share_mode": "PER_CLIENT",
+                  "command": "npx", "url": null, "enabled": true, "note": null },
+                { "name": "docs", "scope": "USER", "transport": "HTTP", "share_mode": "PER_CLIENT",
+                  "command": null, "url": "https://example.test/mcp", "enabled": false, "note": null },
+                { "name": "indexador", "scope": "USER", "transport": "STDIO", "share_mode": "SHARED",
+                  "command": "indexer", "url": null, "enabled": true,
+                  "note": "instancia compartida sin soporte: no se registra" }
+            ],
+            "warnings": ["mcp.toml: `roto`: falta `url`"]
+        }),
+    );
+    insta::assert_snapshot!(draw(&app));
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["mcp.set_enabled"]);
+    assert_eq!(calls[0].params["name"], "fs");
+    assert_eq!(calls[0].params["enabled"], false);
+}
+
+#[test]
+fn view_35_usage_and_context_stats() {
+    let mut app = home_app();
+    let calls = command(&mut app, "stats");
+    assert_eq!(app.screen, Screen::Stats);
+    assert_eq!(methods(&calls), ["context.stats", "usage.get"]);
+    ok(
+        &mut app,
+        Req::ContextStats,
+        json!({
+            "objects": 142, "chunks": 903,
+            "compression": [
+                { "compressor": "DIFF", "objects": 12, "tokens_original": 80_000, "tokens_compressed": 1_900 },
+                { "compressor": "LOG", "objects": 5, "tokens_original": 14_200, "tokens_compressed": 1_100 }
+            ],
+            "handoffs": [
+                { "mode": "BALANCED", "handoffs": 6, "tokens_raw": 126_000, "tokens_sent": 8_400,
+                  "needed_retrieval": 1, "failed_to_continue": 0 },
+                { "mode": "RAW", "handoffs": 1, "tokens_raw": 21_500, "tokens_sent": 21_500,
+                  "needed_retrieval": 0, "failed_to_continue": 0 }
+            ],
+            "retrievals": { "total": 9, "misses": 2, "tokens_returned": 5_300 }
+        }),
+    );
+    ok(
+        &mut app,
+        Req::Usage,
+        json!({ "days": 7, "usage": [
+            { "provider_id": "anthropic", "model_id": "claude/sonnet", "source": "REPORTED",
+              "runs": 14, "tokens_in": 9_661_214, "tokens_out": 0 },
+            { "provider_id": "github", "model_id": "github/auto", "source": "ESTIMATED",
+              "runs": 2, "tokens_in": 48_000, "tokens_out": 0 }
+        ]}),
+    );
+    insta::assert_snapshot!(draw(&app));
+}
+
 // --- ramas de FLOW -------------------------------------------------------------
 
 #[test]

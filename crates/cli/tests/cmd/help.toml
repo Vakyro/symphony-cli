@@ -19,10 +19,14 @@ Commands:
   kill           Termina forzosamente el executor y cancela el agente
   switch         Cambia el modelo del agente a uno exacto y reinicia el executor
   explain-route  Por qué se eligió el modelo de un agente: decisiones de routing y candidatos evaluados
+  context        Context engine: qué entró al último handoff, estadísticas y el original de un objeto
+  fact           Hechos consolidados del proyecto (arquitectura, decisiones, restricciones, convenciones)
   diff           Muestra el git diff del worktree del agente contra su commit base
   logs           Muestra el historial de mensajes/conversación del agente
   attach         Abre la sesión del agente en el CLI oficial (Claude Code, Codex) en una terminal nueva
   inspect        Inspecciona en detalle el estado, tarea, worktree, checkpoints y runs del agente
+  skills         Skills compartidas entre proveedores (`~/.symphony/skills`, `.symphony/skills`)
+  mcp            Servidores MCP compartidos (`mcp.toml`) y el broker de contexto
   help           Print this message or the help of the given subcommand(s)
 
 Options:

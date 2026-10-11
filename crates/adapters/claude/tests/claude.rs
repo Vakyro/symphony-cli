@@ -191,6 +191,19 @@ fn spawn_uses_headless_stream_json_and_injects_hooks_per_invocation() {
         "acceptEdits"
     );
 
+    // El broker MCP del contexto va por invocación y sus herramientas se permiten por nombre.
+    let mcp: Value =
+        serde_json::from_str(&args[args.iter().position(|a| a == "--mcp-config").unwrap() + 1])
+            .unwrap();
+    let server = &mcp["mcpServers"]["symphony-context"];
+    assert_eq!(server["command"], r"C:\Program Files\Symphony\symphony.exe");
+    assert_eq!(server["args"], serde_json::json!(["mcp", "serve"]));
+    assert_eq!(server["env"]["SYMPHONY_AGENT_ID"], "a1");
+    assert_eq!(
+        args[args.iter().position(|a| a == "--allowedTools").unwrap() + 1],
+        "mcp__symphony-context__context_search,mcp__symphony-context__context_retrieve,mcp__symphony-context__context_lines"
+    );
+
     // Los 8 hooks llaman a `symphony hook emit`, con comillas por el espacio en la ruta.
     let settings: Value =
         serde_json::from_str(&args[args.iter().position(|a| a == "--settings").unwrap() + 1])
@@ -328,4 +341,48 @@ fn result_reports_turn_usage_before_finishing() {
             },
         ]
     );
+}
+
+#[test]
+fn shared_skills_plugin_and_extra_mcp_servers_are_registered_per_invocation() {
+    let extra = serde_json::json!([
+        { "name": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "server-fs"], "env": { "RAIZ": "." } },
+        { "name": "remoto", "transport": "http", "url": "https://example.test/mcp" },
+        { "name": "symphony-context", "transport": "stdio", "command": "intruso" }
+    ]);
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "sonnet".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        // Sin hook no hay broker propio, pero los servidores del usuario igual se registran.
+        hook: None,
+        env: vec![
+            ("SYMPHONY_MCP_EXTRA".into(), extra.to_string()),
+            (
+                "SYMPHONY_PLUGIN_DIR".into(),
+                "/runtime/claude-plugin".into(),
+            ),
+        ],
+    };
+    let args: Vec<String> = adapter()
+        .spawn_spec(&req)
+        .unwrap()
+        .args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    let at = |flag: &str| args[args.iter().position(|a| a == flag).unwrap() + 1].clone();
+    assert_eq!(at("--plugin-dir"), "/runtime/claude-plugin");
+    let cfg: Value = serde_json::from_str(&at("--mcp-config")).unwrap();
+    let servers = cfg["mcpServers"].as_object().unwrap();
+    assert_eq!(
+        servers.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["fs", "remoto"],
+        "el nombre reservado del broker no se puede pisar"
+    );
+    assert_eq!(servers["fs"]["command"], "npx");
+    assert_eq!(servers["fs"]["env"]["RAIZ"], ".");
+    assert_eq!(servers["remoto"]["type"], "http");
+    assert_eq!(at("--allowedTools"), "mcp__fs,mcp__remoto");
 }

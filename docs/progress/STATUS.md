@@ -1,14 +1,14 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-01 · por claude-code/sonnet-5.5
-**Fase actual:** P09 · Context Engine (ADR-0010: P10 → P09 → P08, completas). P10 cerrada (`p10-done`, `v0.5.0`); P11 cerrada; P07.S10 cerrada por ADR-0010
-**Paso actual:** P09.S1 · migración 003. P12–P16 siguen provisionales
+**Actualizado:** 2026-10-10 · por claude-code/sonnet-5.5
+**Fase actual:** P09 · Context Engine cerrada (`p09-done`). Orden de ADR-0010: P10 ✅ → P09 ✅ → **P08 (decisiones de Leo pendientes, ver abajo)**. P11 y P10 cerradas; P07.S10 cerrada por ADR-0010
+**Paso actual:** ninguno en curso. Siguen, en orden: OpenCode como proveedor (ADR-0012), correcciones F5/F6 de Signalia y, con las decisiones de Leo, P08 (ADR-0011). P12–P16 siguen provisionales
 **Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
 **Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
-**En curso por:** —
+**En curso por:** nadie (cola lista para la próxima sesión)
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (250 tests; los live se omiten sin `SYMPHONY_LIVE=1`). Los tests intermitentes del chat y de cuota (fallaban en Linux en 4 de 5 corridas del CI) tenían dos causas, ya corregidas (LEARNINGS P07.5): choque de git sobre el índice y `EPIPE` al escribir el prompt a un CLI que ya salió.
+- `cargo xtask check`: ✅ (443 tests en `phase/p09-context-engine`; los live se omiten sin `SYMPHONY_LIVE=1`). Los tests intermitentes del chat y de cuota (fallaban en Linux en 4 de 5 corridas del CI) tenían dos causas, ya corregidas (LEARNINGS P07.5): choque de git sobre el índice y `EPIPE` al escribir el prompt a un CLI que ya salió.
 - `cargo deny check`: ✅ (solo avisos de duplicados)
 - CI en main: ✅ (ubuntu, windows, macos, msrv, deny). La rama `phase/p07-tui` y el tag `v0.1.0` se pushean en P07.S8.
 - Tests conocidos en rojo: ninguno.
@@ -37,12 +37,18 @@
 - [x] P07.5.S9 Cierre (gate)
 
 ## Próxima acción concreta
-0. **P11 ✅ cerrada (2026-10-01, tag `p11-done`):** Kimi, Antigravity y Copilot con el mismo contrato (bitácora `docs/phases/P11-proveedores.md`, investigación `docs/research/cli-p11.md`). Matriz de handoff: 20 pares con `fake-agent` y 3 pares live ✅; revisión de código (10 hallazgos: 7 corregidos, 3 documentados); CI verde en ubuntu, windows, macos, msrv y deny; 299 tests. **Pendiente de Leo:** (a) ToS de los tres proveedores; (b) permisos: Kimi no tiene sandbox (`--print` aprueba todo) y Antigravity/Copilot no ejecutan comandos salvo `skip_permissions`/`allow_all_tools`, hoy solo en código, sin `config.toml`; (c) skills nativas de los tres en el chat; (d) Copilot solo ofrece `auto` en esta cuenta; (e) elegir la próxima fase: P10 recortada (salud y failover con N proveedores), P09 recortada (coste del handoff largo) o la revisión de P08–P16 con uso real.
-1. **P07.S10:** revisar P08–P16 a partir de la propuesta «Chat agéntico con failover» (abajo) y de lo que Leo anote en `docs/research/uso-v0.1.md`; escribir el ADR de replanificación.
-1b. Coste real medido el 2026-09-30 (bitácora P07.5 § S9): un cambio de proveedor cuesta el arranque del CLI de destino (Claude ~27,5k, Codex ~18k tokens) más el handoff (~2,4k–2,9k); n = 1 y conversación corta. Falta: una conversación larga (≥ 100 mensajes) y entender por qué Codex «continuar» sube a 48k. Cambio menor sin aplicar: `scan_plugins` en `skills.rs` no necesita el parámetro `commands`.
-2. Para probar S1–S3 en tu máquina hay que reinstalar (`symphony daemon stop` y los dos `cargo install --force` de QUICKSTART §1). Las copias viejas de `%APPDATA%
-pm` ya se borraron; hoy hay una sola instalación en `~/.cargo/bin` (con S1, sin S3).
-3. ADR-0007 (aceptado): el gate de ≥ 2 semanas pasa a criterio de contenido. Ya se atendieron (antes de S8) las observaciones del Día 2 (`uso-v0.1.md`): 1) ~~textos cortados (bug)~~ ✅ corregido, 2) ~~proceso del agente en vivo~~ ✅ primera versión (herramientas intercaladas + «pensando… N s»); falta medir `resume` sin cambio de proveedor y el texto en construcción (deltas de Claude), 3) ~~copiar y pegar~~ ✅ (Ctrl+Y, pegado multilínea, F2 selección), ~~scroll de respuesta~~ ✅ (bug de ↑/↓ invertidos en la vista de agente), y ~~exportar a `.md`~~ ✅ (Ctrl+E / e → `.symphony/exports/`). Leo sigue anotando en `uso-v0.1.md`.
+Cola de trabajo, en orden. Base verificada el 2026-10-10: `cargo xtask check` ✅ (427 tests). La rama `phase/p09-context-engine` no está pusheada (13 commits sobre `main`). Cada paso: leer su sección del PLAN o su ADR, bitácora, commit `[PNN.SX]`, STATUS. **Los puntos marcados con ⛔ son de parada:** se documentan y se sigue con el siguiente que no dependa de ellos.
+
+1. ~~**P09.S8 · Broker MCP**~~ ✅ hecho (bitácora P09 § S8). **Pendiente:** live (que Claude/Codex llamen `context_search`) y registro en Kimi, Antigravity y Copilot; se hace con el adapter de OpenCode (gratuito, permitido por Leo) o con permiso para gastar cuota.
+2. ~~**P09.S9 · Skills y MCP compartidos**~~ ✅ hecho (bitácora P09 § S9). Codex sin traducción de skills (sin directorio por invocación) y Kimi/Antigravity/Copilot sin traducción: pendientes de su re-validación.
+3. ~~**P09.S11 · Cierre**~~ ✅ hecho: revisión de código (8 hallazgos corregidos, 4 documentados), CI verde en ubuntu, windows, macos, msrv y deny, merge a `main` y tag `p09-done`. **Pendiente (live):** broker MCP, registro en los CLIs y S10 con proveedores reales.
+4. **OpenCode como proveedor** (ADR-0012, rama `phase/p11-opencode`): agregar el paso `P11.S7 · OpenCode` al PLAN; crate `symphony-adapter-opencode` según ADR-0012 § Decisión (ids `opencode/<modelo>` y `opencode/<proveedor>:<modelo>`, failover automático, `resume` con `-s`); fixtures recapturados con un modelo gratuito y sanitizados; suite de contrato; registro del broker MCP de S8 si OpenCode lo admite; QUICKSTART (permisos: sin sandbox). Lo observado del CLI está en `docs/research/opencode-y-calidad-de-proveedores.md` § 2. Prueba live con modelos gratuitos de OpenCode (`opencode/…-free`, `opencode/big-pickle`): **permitida** por Leo (2026-10-10). No usar la credencial de Copilot dentro de OpenCode sin revisar antes `docs/research/tos.md`.
+5. **Correcciones de Signalia sin ADR** (`docs/research/uso-signalia.md` § 6, rama `phase/p10-fixes`): **F5** un run que muere poco después de un rate limit o una cuota registrada termina con esa causa y no como `NO_HEARTBEAT`/`CRASH`; **F6** `resume` reanuda un agente `FAILED` con el mismo modelo (la transición `FAILED → READY` ya existe) sin pasar por `switch`. Si alguna exige tocar enums o transiciones del core: ⛔ ADR primero.
+6. ⛔ **P08 · Decisiones de Leo antes de empezar.** Con lo de arriba hecho, se puede dejar listo, sin código: (a) una propuesta de ADR (estado PROPUESTO) que integre ADR-0011 (plan por fases y tareas, sesión nueva por fase, `/compact` entre tareas, configuración `auto`/`preguntar`, mínimo 2 tareas por fase) en el diseño de P08; (b) qué features candidatas de Signalia entran en P08 (F1 modo delegado del chat, F2 `agent.*` por MCP, F3 plan de lote, F4 concurrencia según cuota, F7 gate y commit por agente, F8 preparación del worktree, F9 capacidades por proveedor, F10 lista de modelos permitidos, F11–F13); (c) la decisión «phase + conditions» frente a los 12 estados (P08.S1); (d) la migración de Fase 2 será la 004, no la 002 que dice el PLAN. P08 no empieza sin la aprobación de Leo.
+
+**Permiso de Leo (2026-10-10):** pruebas live (`SYMPHONY_LIVE=1`) **solo con modelos gratuitos** (hoy, los gratuitos de OpenCode). **Siempre ⛔ (necesitan a Leo):** cualquier prueba live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); la re-validación de Kimi, Antigravity y Copilot (criterios en `docs/research/opencode-y-calidad-de-proveedores.md` § 4; Leo: solo Claude Code y Codex le han funcionado bien); ToS de los proveedores de P11; permisos de proveedores en `config.toml`.
+
+**Datos que siguen sirviendo:** un cambio de proveedor cuesta el arranque del CLI de destino (Claude ~27,5k, Codex ~18k tokens) más el handoff (~2,4k–2,9k), medido el 2026-09-30 con n = 1; falta una conversación larga (≥ 100 mensajes) y entender por qué Codex «continuar» sube a 48k.
 
 ## Propuesta clave para S10: Chat agentico con failover entre proveedores
 
@@ -94,6 +100,6 @@ Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y val
 | P07.5 | ✅ | p075-done |
 | P11 (adelantada por ADR-0008) | ✅ | p11-done |
 | P10 | ✅ | p10-done, v0.5.0 |
-| P09 | 🟡 en curso | |
-| P08 | ⏳ (tras P09) | |
+| P09 | ✅ | p09-done |
+| P08 | ⏳ (tras decisiones de Leo; ADR-0011) | |
 | P12–P16 | ⏳ (provisionales) | |

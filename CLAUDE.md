@@ -9,177 +9,161 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Read these first, in order:**
 1. [`AGENTS.md`](AGENTS.md) — rules and identity for any agent (human or code) working here.
 2. [`PLAN.md`](PLAN.md) — phases, steps, protocol, and what comes next.
-3. [`docs/progress/STATUS.md`](docs/progress/STATUS.md) — where we are now and what's blocked.
+3. [`docs/progress/STATUS.md`](docs/progress/STATUS.md) — current phase/step, blockers, handoff notes. Its header is the source of truth; the long "Próxima acción" list below it can lag behind.
 
-**One thing per step.** Commit small, verify with tests, update STATUS and the phase bitácora when done. Never work on `main` — use `phase/pNN-...` branches.
+**One thing per step.** Commit small, verify with tests, update STATUS and the phase bitácora (`docs/phases/PNN-*.md`) when done. Never work on `main` — use `phase/pNN-...` branches.
+
+Project docs, bitácoras, ADRs and commit messages are written in **Spanish**; keep that.
+
+For a quick map of the code (crate deps, which file queries which table, IPC methods, migrated vs spec-only tables) read `graphify-smart-out/GRAPH_REPORT.md` (gitignored; rebuild with `python graphify-smart-out/build.py <trigger>`).
 
 ---
 
 ## Quick Commands
 
 ```bash
-# Build and test everything
-cargo xtask check          # format + clippy + nextest (required before commit)
+# Gate before every commit: fmt --check + clippy -D warnings + nextest (xtask/src/main.rs)
+cargo xtask check
 
-# Run tests
+# Tests
 cargo nextest run --workspace
-cargo nextest run -p symphony-cli --test agents    # single test file
-cargo nextest run -p symphony-tui::views            # snapshot tests
+cargo nextest run -p symphony-cli --test agents                 # one test file
+cargo nextest run -p symphony-daemon --test runtime handoff_    # filter by test name
+cargo nextest run -p symphony-tui --test views                  # TUI snapshot tests
+INSTA_UPDATE=always cargo nextest run -p symphony-tui           # accept snapshot changes (review the diff!)
+SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_handoff   # L3: real CLIs, spends quota — ask Leo first
 
-# Run the binaries
-cargo run -p symphony-cli -- --version
+# Benchmarks (criterion)
+cargo bench -p symphony-context --bench compress                # also: -p symphony-router --bench router, -p symphony-store --bench store
+
+# Run
+cargo run -p symphony-cli -- --version     # binary: symphony
 cargo run -p symphony-daemon --bin symphonyd
 
-# Format and lint
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
+# Install locally (symphony finds symphonyd next to its own exe)
+symphony daemon stop                        # Windows: otherwise install fails with "Acceso denegado"
+cargo install --path crates/cli --locked --force
+cargo install --path crates/daemon --locked --force
 
-# Update snapshots (TUI views)
-INSTA_UPDATE=always cargo nextest run -p symphony-tui
-
-# Generate CHANGELOG
-git cliff -o CHANGELOG.md    # after release tags
-
-# Build release binary
-cargo build -p symphony-daemon -p symphony-cli --release
+cargo deny check                            # licenses/advisories (CI runs it)
+git cliff -o CHANGELOG.md                   # after release tags
 ```
+
+MSRV is 1.95 (`Cargo.toml` `rust-version`); CI runs `cargo xtask check` + `cargo deny` on ubuntu/windows/macos plus an MSRV job.
 
 ---
 
-## Architecture at a Glance
+## Architecture
 
-**Core principle:** Agent ≠ Model. Agents persist in SQLite; models can swap.
+**Core principle:** Agent ≠ Model. An agent = task + worktree + branch + checkpoints, persisted by Symphony. The model running it is just the current `agent_runs` row and can be swapped (failover, user switch) without losing work.
 
-### Crate map
-
-| Crate | Purpose | Key files |
-|-------|---------|-----------|
-| **protocol** | IPC contract (framed JSON, versioned) | `src/lib.rs` → `Request`, `Response`, `Subscribe` |
-| **core** | Domain types (states, enums, IDs) | `src/lib.rs` → `AgentState`, `TaskStatus`, ulid newtype |
-| **store** | SQLite writer, repos, object store | `src/writer.rs` (single writer), `src/repo/` (entidades), `src/object_store.rs` |
-| **daemon** | Runtime: event bus, adapters, scheduling | `src/runtime.rs` (agent creation/state), `src/providers.rs` (detect/list), `src/main.rs` |
-| **cli** | Terminal UI (v0.1 TUI, v0 CLI cmds) + IPC client | `src/main.rs` (commands), `tests/` (fixtures) |
-| **tui** | Ratatui app (views, state, I/O, daemon loop) | `src/app.rs` (state machine), `src/ui.rs` (render), `src/lib.rs` (terminal loop) |
-| **adapters/claude, codex, common** | Provider detection, spawning, event parsing | `src/lib.rs` impl `ProviderAdapter` trait |
-| **git** | Git CLI wrapper: worktrees, status, diff | `src/lib.rs` → safe porcelain calls |
-| **process** | ProcessSupervisor: spawn, kill-tree, stream | `src/lib.rs` → trait + OS impl (ProcessKit or nix/windows-sys) |
-| **object-store** | Content-addressed storage (BLAKE3 + zstd) | `src/lib.rs` → `put()`, `get()`, atomic writes |
-| **testkit** | `fake-agent` CLI for testing without real providers | `src/bin/fake_agent.rs` → responds to `--version`, streams work |
-| **context** | (stub for P09, not yet in use) | — |
-
-### Data flow
+### Process model
 
 ```
-symphony (CLI/TUI) 
-  ↓ IPC (named pipe / unix socket, JSON, protocol v1)
-symphonyd (daemon)
-  ├─ Event bus ← hooks from each provider (agent/run/task events)
-  ├─ Store writer ← persists events to SQLite, blobs to object-store
-  ├─ Runtime ← creates agents, spawns adapters, emits IPC replies
-  ├─ Adapters (Claude, Codex, later: Kimi/Antigravity/Copilot)
-  └─ Git (worktrees per agent, status, diff, merge preflight)
+symphony (crates/cli: clap commands; no args → TUI from crates/tui)
+  │ IPC: length-prefixed JSON frames, protocol v1 (crates/protocol), named pipe / unix socket
+  ▼
+symphonyd (crates/daemon) — owns all project state
+  ├─ server.rs     dispatch table of IPC methods ("agent.create", "chat.get", "fact.set", "hook.emit", …)
+  ├─ runtime.rs    create agent: git worktree first, then ONE transaction (project, session, task,
+  │                worktree, agent, initial checkpoint, run); rolls back the worktree on failure
+  ├─ executor.rs   live provider CLI processes: spawn via crates/process, read stdout/stderr,
+  │                hand lines to the adapter parser, stop/replace the run (failover / switch)
+  ├─ bus.rs        event bus: persist first (store writer, batched) → then broadcast to TUI + watch
+  ├─ recorder.rs   mirrors canonical events into messages / tool_calls (dedups hook vs stream)
+  ├─ handoff.rs    last valid checkpoint + live git state → crates/context assembler
+  ├─ routing.rs    calls crates/router (deterministic scoring) for failover and profiles
+  └─ watcher.rs / context_index.rs   notify-based file watcher feeding ctx:// chunks (P09)
 ```
+
+Provider CLIs also report through their hooks: the hook runs `symphony hook emit`, which reaches the daemon as the `hook.emit` IPC method.
+
+### Crates
+
+| Crate (package) | Role |
+|---|---|
+| `protocol` | IPC framing + typed, versioned `Request`/`Response`. Transport is chosen by the caller. |
+| `core` | Domain enums (`enums.rs`, checked against the DB spec by a test), ULID ids, pure state transitions (`transitions.rs`), config, health state machine, secret redaction. No I/O. |
+| `store` | SQLite: `writer.rs` is the single writer thread (bounded channel, batched transactions); `repo.rs`, `context.rs`, `health.rs` are the repositories. Migrations live in top-level `migrations/` (001 core, 002 health/routing, 003 context). |
+| `object-store` | Content-addressed blobs (BLAKE3 + zstd, atomic writes). |
+| `git` | Git CLI wrapper: worktrees, status, diff. |
+| `process` | Process supervisor: spawn, stream, kill-tree (ADR-0002). |
+| `adapters/common` | `ProviderAdapter` trait + shared parsing. One crate per provider: `claude`, `codex`, `kimi`, `antigravity`, `copilot`. |
+| `router` | Deterministic model router: availability filter → weighted score per profile → explanation. No I/O, no LLM. |
+| `context` | Context engine: handoff assembler (modes RAW/SAFE/BALANCED/AGGRESSIVE), `ctx://` URIs, chunking, deterministic compressors, tree-sitter AST levels L0–L5. |
+| `daemon` | `symphonyd`; wires everything above. Biggest files: `executor.rs`, `server.rs`, `runtime.rs`. |
+| `tui` | Ratatui app: `app.rs` state + pure logic, `ui.rs` render, `io.rs` IPC, `lib.rs` terminal loop. Default view is the Chat. |
+| `cli` | `symphony` binary: subcommands (agents, providers, context, fact, daemon, …) and launches the TUI. |
+| `testkit` | `fake-agent` binary (deterministic stand-in for provider CLIs) and test fixtures. |
+
+The general chat (P07.5, ADR-0006) is an agent with a fixed worktree/branch `symphony/chat`; a finished turn goes `RUNNING → READY` instead of `COMPLETED`, with one commit per turn.
 
 ### Key invariants (PLAN §2)
 
-- **One SQLite writer thread** — all other callers go through daemon IPC, never directly.
+- **One SQLite writer** (`store::writer`). The daemon reads SQLite directly for views; every write goes through the writer. Nothing outside the daemon touches the DB.
 - **One worktree per agent** — no two agents share a directory.
-- **Checkpoint before failure** — recovery items are written continuously, not on crash.
-- **Deterministic routing** — rules, parsers, scheduler are not LLM; no ML in the critical path.
-- **No unwrap/expect/panic in runtime paths** — fail with `Result` and error codes (`thiserror`).
-- **Prohibitions:** no Node/Python runtime, no PostgreSQL, no gRPC, no embeddings v1, no telemetry.
+- **Checkpoint continuously**, not on crash; recovery items feed the Recovery Center.
+- **Deterministic routing/parsing/scheduling** — no LLM or ML in the critical path.
+- **No `unwrap`/`expect`/`panic` in runtime code** — `Result` + `thiserror`; clippy denies `unwrap_used`.
+- **Prohibitions:** no Node/Python runtime, no PostgreSQL, no gRPC, no embeddings in v1, no telemetry. See `CONSTRAINTS.md`.
+
+### State machines
+
+States are DB strings defined in `crates/core/src/enums.rs`; legal moves are the exact tables in `crates/core/src/transitions.rs` (tested). Never set a state without going through `transition()`.
+
+- **Agent:** `CREATED, READY, RUNNING, WAITING_PROVIDER, WAITING_RESOURCE, WAITING_DEPENDENCY, TESTING, BLOCKED, PAUSED, COMPLETED, FAILED, CANCELLED`
+- **Task:** `BACKLOG, READY, RUNNING, WAITING, BLOCKED, DONE, FAILED, CANCELLED`
+- **Run** (`agent_runs`): `STARTING, RUNNING, EXITED, KILLED, FAILED, HANDED_OFF`, with an end reason (`COMPLETED, QUOTA_EXHAUSTED, RATE_LIMITED, AUTH_ERROR, CRASH, NO_HEARTBEAT, USER_SWITCH, USER_STOP`).
+
+Adding a state or transition changes the core → ADR first (like ADR-0009).
 
 ---
 
-## Testing
+## Testing levels
 
-| Type | How | When |
-|------|-----|------|
-| Unit | `cargo nextest run -p <crate>` | Every crate with logic |
-| Snapshot (TUI) | `INSTA_UPDATE=always cargo nextest run -p symphony-tui` | Every view change |
-| Integration | `cargo nextest run -p symphony-cli --test <name>` | E2E flows, provider detection |
-| Property-based | `proptest` in unit tests | State machines, framing, routing |
-| E2E (live) | `SYMPHONY_LIVE=1 cargo nextest run` | **with Leo's permission only** — uses real CLIs and cuota |
+| Level | What | Notes |
+|---|---|---|
+| L1 | Fixtures (recorded provider output in `fixtures/`) | parsers, adapters |
+| L2 | `fake-agent` from `testkit` driving the real daemon | runtime, handoff, failover, chat |
+| L3 | Real CLIs, `SYMPHONY_LIVE=1` (`live_*.rs` tests) | **only with Leo's permission** — spends quota |
 
-**CI never spends cuota.** L1 (fixtures), L2 (`fake-agent`), L3 (live with permission).
+CI never spends quota. Snapshots (`insta`) live in `crates/tui/tests/snapshots/` and `crates/context/src/snapshots/`. Property tests (`proptest`) cover state machines and framing.
 
----
-
-## State Machine & Lifecycle
-
-**Agent states** (DB `agents.state`): CREATED → READY → RUNNING → STOPPED / FAILED / INTERRUPTED / RECOVERED
-
-**Run states** (DB `agent_runs.status`): QUEUED → STARTED → ENDED / FAILED / INTERRUPTED
-
-**Transitions** are pure functions in `core::transitions::*`. Never create invalid state directly.
-
-**Recovery**: interrupted sessions → `INTERRUPTED` + `recovery_items` (FLOW Journey E).
+If a test leaves an orphaned `symphonyd.exe`, the next build fails with "Acceso denegado" on Windows — kill it first.
 
 ---
 
 ## Workflow (per phase step)
 
-1. **Read the step** in PLAN (what, why, docs, verifica).
-2. **Check STATUS.md** — has the spec changed? Are there blockers?
-3. **Run `cargo xtask check`** before you touch code — if it fails and STATUS doesn't report it, fix that first.
-4. **Work on `phase/pNN-*` branch** (never `main`).
-5. **Commit small** — one logical change per commit, `Conventional Commits` + `[PNN.SX]` step tag.
-6. **Verify** with the step's test command (`Verifica` section).
-7. **Update the bitácora** (`docs/phases/PNN-*.md`) — what you did, files changed, blockers, next action.
-8. **Update STATUS.md** — mark step done, point to next one.
-9. **`git push` only the phase branch** — merge to main only at phase close (PLAN §4.6, Leo's approval).
+1. Read the step in PLAN (what, why, docs, **Verifica**) and check STATUS for changes/blockers.
+2. Run `cargo xtask check` before touching code; if it fails and STATUS doesn't say so, fix that first.
+3. Work on `phase/pNN-*`; commit with Conventional Commits + step tag, e.g. `feat: [P09.S7] …`.
+4. Verify with the step's command, then update the bitácora (what, files, blockers, next action), STATUS, and `docs/progress/SESSIONS.md`; lessons go to `docs/progress/LEARNINGS.md`.
+5. Push only the phase branch. Phase close = code review, green CI, `merge --no-ff` to `main`, tag `pNN-done` (PLAN §4.6).
+
+**Doc precedence when they disagree:** ADR > PLAN > DB spec > STACK > FLOW > IDEA. New dependencies need a STACK §58 reference or an ADR.
 
 ---
 
-## Important Files & Decisions
+## Phase status (see STATUS.md for the live version)
 
-| File | Why it matters |
-|------|---|
-| `PLAN.md` | Source of truth for what comes next, order, protocol. Changes go via ADR. |
-| `docs/progress/STATUS.md` | Current phase + step. Read before any work. |
-| `docs/adr/*.md` | Decisions that changed spec, architecture, or order. Precedence over PLAN. |
-| `CONSTRAINTS.md` | Hard limits: safety, performance, dependencies, no `unsafe`. Verified in CI. |
-| `docs/spec/symphony_database.md` | Schema: 42 tables, enums, indices. Don't commit migrations without it. |
-| `Cargo.toml` [workspace.dependencies] | Approved crates. Add new ones only with STACK §58 ref or an ADR. |
-| `.github/workflows/ci.yml` | Runs `cargo xtask check` + `cargo deny` on ubuntu/windows/macos, MSRV 1.95. |
-
----
-
-## Common Pitfalls
-
-- **Unwrap in runtime code:** Use `Result<T, E>` + `thiserror`. CI rejects `unwrap_used`.
-- **Adding deps without STACK reference:** Check `docs/spec/Symphony_CLI_Ideal_Technology_Stack.md` §58. If not there, justify in the bitácora or write an ADR.
-- **Forgetting to update snapshots:** TUI tests use `insta`. Run `INSTA_UPDATE=always cargo nextest run -p symphony-tui` when views change, review diffs before commit.
-- **Two agents in one worktree:** Never. Each agent gets its own isolated Git worktree.
-- **Querying SQLite directly from adapters:** Go through daemon IPC. The writer is single-threaded; concurrent reads are fine, but never write outside it.
-- **Letting tests leave orphaned daemons:** If `symphonyd` hangs after a test, the next build fails with "access denied" on Windows. Kill the process or restart before retrying.
-
----
-
-## Phase Roadmap (v0.1 done, now at S10)
-
-- ✅ **P00–P07**: Core (daemon, SQLite, adapters, TUI, release)
-- 🟡 **P07.S10**: Usage phase — Leo uses v0.1 for 2+ weeks, logs learnings → triggers ADR replan
-- ⏳ **P08–P16**: Multi-agent scheduler, Context Engine, Failover, more providers, GUI (Tauri), v1.0
-
-**P08+ are provisional** until we have usage data. No work on those phases until ADR-replan is approved.
+- ✅ P00–P07 (v0.1.0), P07.5 (general chat), P11 (Kimi, Antigravity, Copilot), P10 (health, router, profiles, failover — v0.5.0).
+- 🟡 **P09 Context Engine** in progress on `phase/p09-context-engine` (order set by ADR-0010: P10 → P09 → P08).
+- ⏳ P08 multi-agent runtime after P09; it must account for ADR-0011 (agents plan by phases/tasks; fresh session per phase, `/compact` between tasks, both automatic by default and configurable). P12–P16 remain provisional.
 
 ---
 
 ## When to Ask Leo
 
-- Before running live tests (`SYMPHONY_LIVE=1`) — costs his cuota.
-- Before creating the remote repo, first push, or publishing releases — check with him.
-- If a gate fails (P00.S0, P01, P07.S10, P08, P14) — these are decision points.
-- If you find a contradiction between docs — the precedence is ADR > PLAN > DB > STACK > FLOW > IDEA.
-- If a step is impossible as written — document it, don't guess.
+- Before live tests (`SYMPHONY_LIVE=1`) — costs his quota.
+- Before creating remotes, first pushes of new branches, or publishing releases.
+- At gate steps, or when a step is impossible as written — document it, don't guess.
+- When docs contradict each other beyond what the precedence rule resolves.
 
 ---
 
 ## Quick Links
 
-- Spec: [`docs/spec/idea.md`](docs/spec/idea.md) (vision), [`docs/spec/symphony_database.md`](docs/spec/symphony_database.md) (schema)
-- Flow: [`docs/spec/Symphony_CLI_User_Flow_and_Views.html`](docs/spec/Symphony_CLI_User_Flow_and_Views.html) (35 views, journeys A–E)
-- Stack: [`docs/spec/Symphony_CLI_Ideal_Technology_Stack.md`](docs/spec/Symphony_CLI_Ideal_Technology_Stack.md) (tech choices, prohibitions)
-- Progress: [`docs/progress/STATUS.md`](docs/progress/STATUS.md), [`docs/progress/LEARNINGS.md`](docs/progress/LEARNINGS.md)
-- ADRs: [`docs/adr/`](docs/adr/) — 0001 (crate versions), 0002 (process layer), 0003 (hooks hold), 0004 (handoff viability), 0005 (interaction mode)
+- Spec: [`docs/spec/idea.md`](docs/spec/idea.md) (vision), [`docs/spec/symphony_database.md`](docs/spec/symphony_database.md) (schema), [`docs/spec/Symphony_CLI_User_Flow_and_Views.html`](docs/spec/Symphony_CLI_User_Flow_and_Views.html) (views, journeys A–F), [`docs/spec/Symphony_CLI_Ideal_Technology_Stack.md`](docs/spec/Symphony_CLI_Ideal_Technology_Stack.md) (stack, §58 deps)
+- Usage: [`QUICKSTART.md`](QUICKSTART.md) (install, providers and their permission limits)
+- ADRs: [`docs/adr/`](docs/adr/) — 0001–0011

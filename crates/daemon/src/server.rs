@@ -175,6 +175,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         crate::providers::builtin_arc(),
         hook_cmd,
     );
+    runtime.watch_active_projects();
 
     match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
         Ok(config) => {
@@ -379,6 +380,14 @@ async fn dispatch(req: Request, state: &State) -> Response {
                 .map(|d| json!({ "agent_id": agent, "decisions": d }))
                 .map_err(rusqlite::Error::from)
         }),
+        "context.inspect" => agent_view(req, state, crate::context_views::inspect),
+        "context.stats" => read_view(req, state, crate::context_views::stats),
+        "context.raw" => context_raw(req, state),
+        "context.search" | "context.retrieve" | "context.lines" => context_mcp(req, state).await,
+        "skills.shared" | "mcp.list" => shared_list(req, state).await,
+        "skills.set_enabled" | "mcp.set_enabled" => shared_toggle(req, state).await,
+        "fact.set" => fact_set(req, state).await,
+        "fact.list" => fact_list(req, state),
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
@@ -866,6 +875,220 @@ fn read_view(
     }
 }
 
+/// El original de un objeto de contexto por su `ctx://`.
+fn context_raw(req: Request, state: &State) -> Response {
+    let Some(uri) = req.params.get("uri").and_then(Value::as_str) else {
+        return Response::error(req.id, "invalid_params", "falta `uri`");
+    };
+    // `ctx://file/…` es relativo al proyecto: con `project_id` o `project_root` se acota;
+    // sin ellos queda el más reciente (compatibilidad con `symphony context raw` antiguos).
+    let project =
+        if req.params.get("project_id").is_some() || req.params.get("project_root").is_some() {
+            resolve_project(state, &req.params)
+                .ok()
+                .map(|p| p.id.to_string())
+        } else {
+            None
+        };
+    let objects = symphony_object_store::ObjectStore::new(
+        symphony_core::SymphonyHome::at(&state.home).objects_dir(),
+    );
+    let out = match state.reader.lock() {
+        Ok(c) => crate::context_views::raw(&c, &objects, project.as_deref(), uri),
+        Err(_) => Err("lector de la base no disponible".to_string()),
+    };
+    match out {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "context_not_found", e),
+    }
+}
+
+/// `context.search|retrieve|lines` del broker MCP (P09.S8): lee el contexto del proyecto y deja
+/// constancia en `context_retrievals` del run que preguntó (`run_id`, si viene y existe).
+async fn context_mcp(req: Request, state: &State) -> Response {
+    use crate::context_mcp as mcp;
+    let p = &req.params;
+    let project = match resolve_project(state, p) {
+        Ok(pr) => pr.id.to_string(),
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let s = |k: &str| p.get(k).and_then(Value::as_str);
+    let n = |k: &str| p.get(k).and_then(Value::as_i64);
+    let objects = symphony_object_store::ObjectStore::new(
+        symphony_core::SymphonyHome::at(&state.home).objects_dir(),
+    );
+    let answer = match state.reader.lock() {
+        Ok(c) => match req.method.as_str() {
+            "context.search" => match s("query") {
+                Some(q) => mcp::search(&c, &project, q, s("uri"), n("limit")),
+                None => Err(("invalid_params", "falta `query`".to_string())),
+            },
+            "context.retrieve" => match s("uri") {
+                Some(u) => mcp::retrieve(&c, &objects, &project, u),
+                None => Err(("invalid_params", "falta `uri`".to_string())),
+            },
+            _ => match (s("uri"), n("from"), n("to")) {
+                (Some(u), Some(from), Some(to)) => mcp::lines(&c, &objects, &project, u, from, to),
+                _ => Err(("invalid_params", "faltan `uri`, `from` y `to`".to_string())),
+            },
+        },
+        Err(_) => Err(("store_error", "lector de la base no disponible".to_string())),
+    };
+    let answer = match answer {
+        Ok(a) => a,
+        Err((code, msg)) => return Response::error(req.id, code, msg),
+    };
+    if let Some(run) = s("run_id").and_then(|r| r.parse::<symphony_core::RunId>().ok()) {
+        let now = now_ms();
+        let retrievals = answer.retrievals;
+        // Un run que ya no existe (FK) no tiene que estropear la respuesta: se descarta.
+        let _ = state
+            .writer
+            .write(Box::new(move |t| {
+                if retrievals.iter().any(|r| r.found) {
+                    let _ = symphony_store::repo::mark_needed_retrieval(t, run);
+                }
+                for r in &retrievals {
+                    let _ = symphony_store::context::record_retrieval(
+                        t,
+                        run,
+                        &r.object_id,
+                        r.operation,
+                        r.query.as_deref(),
+                        Some(r.tokens),
+                        r.found,
+                        now,
+                    );
+                }
+                Ok(())
+            }))
+            .await;
+    }
+    Response::ok(req.id, answer.value)
+}
+
+/// `skills.shared` y `mcp.list` (P09.S9): escanea los archivos, deja al día el índice y lista
+/// con el interruptor de cada uno. Lo inválido de `mcp.toml` va en `warnings`.
+async fn shared_list(req: Request, state: &State) -> Response {
+    use crate::shared;
+    use symphony_store::shared as index;
+    let project = match resolve_project(state, &req.params) {
+        Ok(pr) => pr,
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let root = PathBuf::from(&project.root_path);
+    let pid = project.id.to_string();
+    let skills = shared::scan_skills(&state.home, Some(&root));
+    let mut warnings = Vec::new();
+    let servers = shared::scan_mcp(&state.home, Some(&root), &mut warnings);
+    let found_skills: Vec<_> = skills.iter().map(shared::SkillDef::found).collect();
+    let found_servers: Vec<_> = servers.iter().map(shared::McpDef::found).collect();
+    // Con un `mcp.toml` roto no se borra nada: el interruptor del usuario no se pierde.
+    let prune = warnings.is_empty();
+    let (p, now) = (pid.clone(), now_ms());
+    let synced = state
+        .writer
+        .write(Box::new(move |t| {
+            index::sync_skills(t, &p, &found_skills, now, prune)?;
+            index::sync_mcp(t, &p, &found_servers, prune)?;
+            Ok(())
+        }))
+        .await;
+    if let Err(e) = synced {
+        return Response::error(req.id, "store_error", e.to_string());
+    }
+    let conn = match state.reader.lock() {
+        Ok(c) => c,
+        Err(_) => return Response::error(req.id, "store_error", "lector no disponible"),
+    };
+    if req.method == "mcp.list" {
+        let rows = match index::list_mcp(&conn, &pid) {
+            Ok(r) => r,
+            Err(e) => return Response::error(req.id, "store_error", e.to_string()),
+        };
+        let list: Vec<Value> = rows
+            .iter()
+            .map(|r| {
+                // El archivo es la fuente: lo que no se registra por invocación se avisa.
+                let note = if r.share_mode == "SHARED" {
+                    Some("instancia compartida sin soporte: no se registra")
+                } else {
+                    None
+                };
+                json!({
+                    "name": r.name, "scope": r.scope, "transport": r.transport,
+                    "share_mode": r.share_mode, "command": r.command, "url": r.url,
+                    "enabled": r.enabled, "note": note,
+                })
+            })
+            .collect();
+        return Response::ok(req.id, json!({ "servers": list, "warnings": warnings }));
+    }
+    let rows = match index::list_skills(&conn, &pid) {
+        Ok(r) => r,
+        Err(e) => return Response::error(req.id, "store_error", e.to_string()),
+    };
+    let list: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let def = skills
+                .iter()
+                .find(|s| s.name == r.name && s.scope == r.scope);
+            let shadowed = r.scope == "USER"
+                && skills
+                    .iter()
+                    .any(|s| s.scope == "PROJECT" && s.name == r.name);
+            json!({
+                "name": r.name, "scope": r.scope, "path": r.path, "enabled": r.enabled,
+                "description": def.map(|d| d.description.clone()),
+                "providers": def.map(|d| d.providers.clone()).unwrap_or_default(),
+                "shadowed": shadowed,
+            })
+        })
+        .collect();
+    Response::ok(req.id, json!({ "skills": list }))
+}
+
+/// `skills.set_enabled` y `mcp.set_enabled`: `{name, enabled}` sobre el proyecto.
+async fn shared_toggle(req: Request, state: &State) -> Response {
+    use symphony_store::shared as index;
+    let p = &req.params;
+    let (Some(name), Some(enabled)) = (
+        p.get("name").and_then(Value::as_str).map(str::to_string),
+        p.get("enabled").and_then(Value::as_bool),
+    ) else {
+        return Response::error(req.id, "invalid_params", "faltan `name` y `enabled`");
+    };
+    let project = match resolve_project(state, p) {
+        Ok(pr) => pr.id.to_string(),
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let is_skill = req.method == "skills.set_enabled";
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let n = if is_skill {
+                index::set_skill_enabled(t, &project, &name, enabled)?
+            } else {
+                index::set_mcp_enabled(t, &project, &name, enabled)?
+            };
+            let _ = tx.send(n);
+            Ok(())
+        }))
+        .await;
+    match (written, rx.await) {
+        (Ok(()), Ok(0)) => Response::error(
+            req.id,
+            "not_found",
+            "no hay una skill o un servidor con ese nombre (revisa `symphony skills` o `symphony mcp list`)",
+        ),
+        (Ok(()), Ok(n)) => Response::ok(req.id, json!({ "updated": n, "enabled": enabled })),
+        (Err(e), _) => Response::error(req.id, "store_error", e.to_string()),
+        (_, Err(_)) => Response::error(req.id, "internal", "no se pudo actualizar"),
+    }
+}
+
 fn agent_view(
     req: Request,
     state: &State,
@@ -917,6 +1140,125 @@ fn project_root_param(p: &Value) -> PathBuf {
         Some(r) => PathBuf::from(r),
         None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     }
+}
+
+fn resolve_project(state: &State, p: &Value) -> Result<repo::Project, String> {
+    if let Some(id) = p.get("project_id").and_then(Value::as_str) {
+        let conn = state.reader.lock().map_err(|_| "lector no disponible")?;
+        let pid = id
+            .parse::<symphony_core::ProjectId>()
+            .map_err(|e| e.to_string())?;
+        return repo::get_project(&conn, pid).map_err(|e| e.to_string());
+    }
+    let root = project_root_param(p);
+    let probe = root.clone();
+    let repo_root = symphony_git::Repo::discover(&probe)
+        .map(|r| r.root().display().to_string())
+        .unwrap_or_else(|_| root.display().to_string());
+    let conn = state.reader.lock().map_err(|_| "lector no disponible")?;
+    repo::project_by_root(&conn, &repo_root)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no hay un proyecto registrado para `{repo_root}`"))
+}
+
+async fn fact_set(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let (key, value) = match (
+        p.get("key").and_then(Value::as_str),
+        p.get("value").and_then(Value::as_str),
+    ) {
+        (Some(k), Some(v)) if !k.trim().is_empty() && !v.trim().is_empty() => {
+            (k.trim().to_string(), v.trim().to_string())
+        }
+        _ => return Response::error(req.id, "invalid_params", "faltan `key` y `value`"),
+    };
+    let kind = p
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("DECISION")
+        .to_ascii_uppercase();
+    if !matches!(
+        kind.as_str(),
+        "ARCHITECTURE" | "DECISION" | "CONSTRAINT" | "CONVENTION"
+    ) {
+        return Response::error(
+            req.id,
+            "invalid_params",
+            "`kind` tiene que ser ARCHITECTURE, DECISION, CONSTRAINT o CONVENTION",
+        );
+    }
+    let project = match resolve_project(state, p) {
+        Ok(pr) => pr,
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let project_id = project.id.to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let now = now_ms();
+    let (k, v, kd) = (key.clone(), value.clone(), kind.clone());
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let row =
+                symphony_store::context::set_fact(t, &project_id, &k, &v, &kd, None, None, now)?;
+            let _ = tx.send(row);
+            Ok(())
+        }))
+        .await;
+    match (written, rx.await) {
+        (Ok(()), Ok(fact)) => Response::ok(
+            req.id,
+            json!({
+                "id": fact.id,
+                "project_id": fact.project_id,
+                "key": fact.key,
+                "value": fact.value,
+                "kind": fact.kind,
+                "status": fact.status,
+                "created_at": fact.created_at,
+            }),
+        ),
+        (Err(e), _) => Response::error(req.id, "store_error", e.to_string()),
+        (_, Err(_)) => Response::error(req.id, "internal", "no se pudo registrar el hecho"),
+    }
+}
+
+fn fact_list(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let project = match resolve_project(state, p) {
+        Ok(pr) => pr,
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let all = p.get("all").and_then(Value::as_bool).unwrap_or(false);
+    let status = if all {
+        None
+    } else {
+        p.get("status").and_then(Value::as_str).or(Some("CURRENT"))
+    };
+    let facts = match state.reader.lock() {
+        Ok(conn) => {
+            match symphony_store::context::list_facts(&conn, &project.id.to_string(), status) {
+                Ok(f) => f,
+                Err(e) => return Response::error(req.id, "store_error", e.to_string()),
+            }
+        }
+        Err(_) => return Response::error(req.id, "store_error", "lector no disponible"),
+    };
+    let list: Vec<Value> = facts
+        .into_iter()
+        .map(|f| {
+            json!({
+                "id": f.id,
+                "project_id": f.project_id,
+                "key": f.key,
+                "value": f.value,
+                "kind": f.kind,
+                "status": f.status,
+                "superseded_by_id": f.superseded_by_id,
+                "created_at": f.created_at,
+            })
+        })
+        .collect();
+    Response::ok(req.id, json!({ "facts": list }))
 }
 
 /// Launch (FLOW §4.1): ¿es un repo?, ¿está inicializado?, ¿hay algo que recuperar?

@@ -26,9 +26,10 @@ pub use health::{
     OFFLINE_AFTER, RATE_LIMIT_COOLDOWN_MS, THROTTLE_AFTER, THROTTLED_COOLDOWN_MS,
 };
 pub use ids::{
-    AgentId, CheckpointId, ContextObjectId, ExecutorChangeId, HandoffId, InvalidId, MessageId,
-    ProjectId, ProviderFailureId, ProviderHealthId, RecoveryItemId, RoutingDecisionId, RunId,
-    SessionId, TaskId, ToolCallId, UsageRecordId, WorktreeId,
+    AgentId, CheckpointId, ContextObjectId, ExecutorChangeId, FactId, HandoffId, HandoffItemId,
+    InvalidId, McpServerId, MessageId, ProjectId, ProviderFailureId, ProviderHealthId,
+    RecoveryItemId, RoutingDecisionId, RunId, SessionId, SkillId, TaskId, ToolCallId,
+    UsageRecordId, WorktreeId,
 };
 pub use redact::{REDACTED, redact};
 pub use transitions::InvalidTransition;

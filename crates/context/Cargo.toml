@@ -12,6 +12,20 @@ workspace = true
 
 [dependencies]
 symphony-core = { path = "../core" }
+regex.workspace = true
+serde_json.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 insta.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "compress"
+harness = false
