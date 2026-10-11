@@ -2,10 +2,10 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA CON PENDIENTES (los live) |
 | Rama | phase/p09-context-engine |
 | Inicio / cierre | 2026-10-02 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S7, S9, S10), claude-code/opus-5.5 (planificación y STATUS) |
 | Tag | p09-done (pendiente) |
 | Docs usados | IDEA §5.6, §5.12; STACK §13–§16; DB §3.G, §3.J, §6; FLOW §11; ADR-0004, ADR-0010 |
 
@@ -102,19 +102,58 @@ Límites: retrievals y misses dan 0 porque todavía no hay broker MCP (S8); con 
 ## Qué funciona (verificado)
 | Funcionalidad | Cómo se verificó | Resultado |
 |---|---|---|
+| Migración 003 (chunks + FTS5, items, retrievals, hechos, skills, MCP) | `cargo nextest run -p symphony-store` (migración 002 → 003 con datos) | ✅ |
+| `ctx://` sin escapar de su raíz, chunks y búsqueda BM25 | tests de traversal y de `store::context`; `context_mcp_search_retrieve_and_lines` | ✅ |
+| Compresores deterministas (nunca pierden el original ni inflan) | corpus golden con `insta` + proptest | ✅ |
+| AST L0–L5 (Rust, Python, JS, TS) y esqueleto L3 en el handoff | snapshots por lenguaje y nivel | ✅ |
+| Watcher por proyecto con `.gitignore` y debounce | `project_files_stay_searchable_as_they_change` | ✅ |
+| Handoff v2: `raw` ≥ `safe` ≥ `balanced` ≥ `aggressive`, `raw` no omite nada | proptest + `handoff_evaluation_forced_kill_by_context_mode` | ✅ BALANCED = 6,6 % de RAW sin perder la tarea (L2) |
+| Hechos consolidados y `symphony fact` | `project_facts_ipc_and_handoff_integration` | ✅ |
+| Broker MCP por stdio contra un daemon real | `crates/cli/tests/mcp.rs` (handshake, `tools/list`, búsqueda, retrieve, lines, traversal, misses) | ✅ |
+| Skills canónicas, `mcp.toml`, interruptores y traducción de argv en Claude y Codex | `crates/daemon/src/shared.rs` (unit), `crates/cli/tests/shared.rs`, tests de spawn de los adapters | ✅ |
+| Vistas 20, 21, 32, 33 y 35 de la TUI | snapshots `insta` y flujos de teclas | ✅ |
 
 ## Qué está roto o incompleto
 | Problema | Impacto | Cómo reproducir | Plan / issue |
 |---|---|---|---|
+| Sin live del broker MCP: que Claude o Codex llamen de verdad a `context_search` | No se sabe si cada CLI acepta el registro por invocación y si Codex aprueba las herramientas MCP en `exec` | `SYMPHONY_LIVE=1` con un agente que pida contexto | Con un modelo gratuito de OpenCode (ADR-0012) o con permiso de Leo |
+| Sin live de la evaluación RAW contra BALANCED con proveedores reales (S10) | La tabla de ahorro es de un CLI falso | Repetir S10 con Claude/Codex | Permiso de Leo (cuota) |
+| Un `context_retrieve` de un `ctx://` inexistente, o una búsqueda sin resultados y sin `uri`, no deja fila en `context_retrievals` | Esos misses no cuentan en `symphony context stats` | `context_retrieve` con `ctx://file/nada.ts` | `object_id` es obligatorio (migración 003); relajarlo es una migración (la 004 de P08) |
+| Skills compartidas sin traducción en Codex, Kimi, Antigravity y Copilot | Solo Claude las recibe | `symphony skills` + agente de Codex | Codex no tiene directorio de skills por invocación; los otros tres, en su re-validación |
+| `share_mode = "shared"` de `mcp.toml` no se registra | Un servidor definido así no llega a ningún CLI | `mcp.toml` con `share_mode = "shared"` | Exige que el daemon haga de proxy MCP; se avisa en la vista 33 |
+| El pie de la vista de agente se trunca a 96 columnas (ya pasaba antes de `c contexto`) | `x detener` y `Esc` no se ven en terminales angostas | Terminal de 96 columnas | Acortar los rótulos o dar al pie dos líneas (P08.S8) |
 | (corregido en S6) La poda de checkpoints borraba diffs con chunks indexados y fallaba por la clave foránea: el checkpoint siguiente no se guardaba | Perdía checkpoints en agentes con muchos cambios; lo cazó `checkpoints_stay_monotonic_and_consistent` | 38+ checkpoints con diffs indexados | `prune_checkpoints` borra antes chunks y recuperaciones y anula `handoff_items.object_id`; test de regresión en `crates/store/tests/context.rs` |
 
 ## Decisiones tomadas
 - ADR-0010: P10 → P09 → P08 completas.
+- Durante la fase se aceptaron ADR-0011 (agentes con plan por fases, impacta P08) y ADR-0012 (OpenCode como proveedor); ninguno cambia el alcance de P09.
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
 | PLAN P09.S1 | «Migración 003» | `003_context.sql` | ya era la siguiente en el orden de ejecución |
+| PLAN P09.S8 | Herramientas `context.retrieve`, `context.search`, `context.lines` | `context_retrieve`, `context_search`, `context_lines` (los métodos IPC conservan el punto) | varios CLIs solo aceptan `[A-Za-z0-9_-]` en el nombre de una herramienta |
+| STACK §15.1 | El broker vive en un crate `mcp` | Módulo `crates/cli/src/mcp.rs` | es un proceso mínimo que solo reenvía al daemon con el cliente IPC del CLI; un crate aparte obligaba a extraer el cliente |
+| PLAN P09.S9 | Skills «traducidas por cada adapter» | Solo Claude (plugin de sesión) | Codex no tiene un directorio de skills por invocación; el resto, sin investigar |
+| PLAN P09.S9 | Vistas 20, 21, 32, 33, 35 | Cinco pantallas de solo lectura más interruptores; sin búsqueda interactiva en 21 | la búsqueda ya está en `symphony context` y en el broker |
+
+## Métricas
+- Handoff (evaluación L2 de S10): BALANCED = 1.412 tokens frente a 21.512 de RAW (6,6 %), AGGRESSIVE = 788 (3,7 %).
+- Suite completa: `cargo xtask check` → 443 tests, ≈ 2 min en la máquina de Leo (Windows 11).
+
+## Pruebas
+- Comandos: `cargo xtask check`, `cargo deny check`, `cargo nextest run -p symphony-cli --test mcp`, `INSTA_UPDATE=always cargo nextest run -p symphony-tui` (y revisar el diff).
+- Totales: 443 passed, 0 failed, 2 omitidos (los live, sin `SYMPHONY_LIVE=1`).
+- Hallazgo de cierre: `context_commands_on_a_fresh_project` fallaba en CI porque dependía de un CLI real instalado; ahora usa el `claude` falso compartido (`tests/common`).
+
+## Estado final
+P09 está construida: el contexto se indexa, se comprime sin perder el original, se recupera por `ctx://` desde un broker MCP y entra al handoff con su fidelidad. Skills y servidores MCP del usuario se comparten entre proveedores (Claude completo; Codex solo los servidores). Quedan los live (broker, S10 con proveedores reales y el registro en cada CLI), que se hacen con un modelo gratuito de OpenCode o con permiso de Leo. Siguen OpenCode (ADR-0012), las correcciones de Signalia y P08 con ADR-0011.
+
+## Notas para el siguiente agente
+- `heredoc` largo con comillas en el shell de esta máquina falla: crea el archivo con la herramienta de escritura y ejecuta un script.
+- Los tests e2e del CLI siempre llevan `path_with_fake_claude` en el PATH; sin él fallan en CI aunque pasen en la máquina de Leo.
+- Un test que deja un `symphonyd-…` huérfano rompe el siguiente build en Windows («Acceso denegado»): mátalo antes de reintentar.
+- No registres un servidor MCP nuevo en un adapter sin `claude plugin validate` o su equivalente: lo que no se puede probar sin cuota queda anotado como «sin verificar en vivo».
 
 ## Dependencias agregadas
 `regex` y `serde_json` (ya aprobadas, workspace) en `symphony-context`; `criterion` como dev-dependency. S8: `rmcp` 3.5 (Apache-2.0, ADR-0001; `default-features = false`, `server`, `macros`, `transport-io`) en el CLI. S4: `tree-sitter` 0.27 (ADR-0001) y las gramáticas `tree-sitter-rust` 0.24.2, `tree-sitter-python` 0.25.0, `tree-sitter-javascript` 0.25.0 y `tree-sitter-typescript` 0.23.2 (MIT; compilan C con `cc`).
