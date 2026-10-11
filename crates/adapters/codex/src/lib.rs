@@ -30,7 +30,7 @@ const HOOK_EVENTS: [&str; 6] = [
     "Stop",
     "SessionEnd",
 ];
-const HOOK_TIMEOUT_SECS: u32 = 30;
+const HOOK_TIMEOUT_SECS: u64 = symphony_adapter_common::hooks::HoldTimes::CODEX.hook_secs;
 
 #[derive(Debug, Clone)]
 pub struct CodexAdapter {

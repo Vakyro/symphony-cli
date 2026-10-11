@@ -10,5 +10,8 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[dependencies]
+symphony-core = { path = "../core" }
+
 [dev-dependencies]
 proptest.workspace = true

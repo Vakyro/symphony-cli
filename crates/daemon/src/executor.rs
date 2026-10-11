@@ -254,6 +254,7 @@ impl Runtime {
             ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
             ("SYMPHONY_PROJECT_ID".into(), l.project_id.to_string()),
             ("SYMPHONY_RUN_ID".into(), l.run_id.to_string()),
+            ("SYMPHONY_PROVIDER".into(), l.provider_id.clone()),
             ("SYMPHONY_HOME".into(), self.home.display().to_string()),
         ];
         env.extend(self.shared_env(&l).await);

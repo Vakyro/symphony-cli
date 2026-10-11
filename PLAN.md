@@ -931,7 +931,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** reglas de clase 0–4 (IDEA §5.4) sobre `tool_name` + comando; muestreo con sysinfo cada 5–10 s en `resource_samples`, agregado por minuto a las 24 h.
 - **Verifica:** tabla de casos (`npm test` → 3, `pnpm build` → 4, `rg` → 1…).
 
-### P08.S3 · Scheduler
+### P08.S3 · Scheduler ✅
 - **Qué:** crate `scheduler` (STACK §8): HeavySemaphore, cola por prioridad, fairness entre agentes, perfiles `eco`/`balanced`/`performance`/`custom` desde config, y QueueExplainer (texto humano de FLOW §10.1). Integración con `hook emit`: `QUEUED` → retención → `ALLOW`. `tool_calls.blocked_by_tool_call_id` y `enforcement`.
 - **Verifica:** simulación determinista + proptest: nunca más de N pesados; ningún agente espera indefinidamente con slots libres.
 

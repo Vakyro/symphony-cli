@@ -19,6 +19,7 @@ async fn samples_cpu_and_ram_into_the_database() {
         PerformanceProfile::Performance,
         Duration::from_millis(50),
         shutdown.clone(),
+        |_, _| {},
     );
 
     // El primer refresco de CPU de sysinfo puede tardar (en Windows, cientos de ms):

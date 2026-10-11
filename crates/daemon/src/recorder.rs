@@ -74,6 +74,22 @@ impl Recorder {
         self.health.lock().map(|h| h.clone()).unwrap_or_default()
     }
 
+    /// El scheduler ya registró esta herramienta (cola, `HOOK_HOLD`): el `ToolRequested` que
+    /// llega después no la vuelve a insertar y el `ToolFinished` la cierra con este id.
+    /// `false` si ya había una con ese `tool_use_id`.
+    pub fn adopt_tool_call(&self, run: RunId, tool_use_id: &str, id: ToolCallId) -> bool {
+        let Ok(mut open) = self.open.lock() else {
+            return false;
+        };
+        match open.by_use_id.entry((run, tool_use_id.to_string())) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert((id, false));
+                true
+            }
+        }
+    }
+
     /// Suelta el estado en memoria de un run que terminó.
     pub fn run_ended(&self, run: RunId) {
         if let Ok(mut open) = self.open.lock() {

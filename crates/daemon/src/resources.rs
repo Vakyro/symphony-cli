@@ -56,6 +56,7 @@ pub fn spawn(
     profile: PerformanceProfile,
     every: Duration,
     shutdown: CancellationToken,
+    on_sample: impl Fn(f64, f64) + Send + 'static,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut sys = System::new();
@@ -71,6 +72,7 @@ pub fn spawn(
                 _ = tick.tick() => {}
             }
             let (cpu_pct, ram_pct) = read(&mut sys);
+            on_sample(cpu_pct, ram_pct);
             let sample = NewSample {
                 cpu_pct,
                 ram_pct,

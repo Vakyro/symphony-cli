@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use symphony_adapter_common::AgentEvent;
 use symphony_protocol::transport::{self, ListenerExt as _, LocalStream};
 use symphony_protocol::{Connection, Event, Message, PROTOCOL_VERSION, Request, Response};
 use symphony_store::{Writer, repo};
@@ -104,6 +105,8 @@ struct State {
     bus: EventBus,
     writer: symphony_store::WriterHandle,
     runtime: crate::runtime::Runtime,
+    /// Cola de operaciones pesadas (P08.S3).
+    scheduling: Arc<crate::scheduling::Scheduling>,
 }
 
 fn now_ms() -> i64 {
@@ -177,14 +180,23 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     );
     runtime.watch_active_projects();
 
+    let scheduling = Arc::new(crate::scheduling::Scheduling::new(
+        symphony_scheduler::Limits::default(),
+    ));
+    scheduling.spawn(writer.handle(), shutdown.clone());
+
     match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
         Ok(config) => {
             bus.set_health_config(crate::health::HealthConfig::from_config(&config));
+            scheduling.set_limits(symphony_scheduler::Limits::from_config(&config.performance));
+            scheduling.set_hold_cap(config.performance.hold_max_secs);
+            let pressure = scheduling.clone();
             crate::resources::spawn(
                 writer.handle(),
                 config.performance.profile,
                 crate::resources::SAMPLE_EVERY,
                 shutdown.clone(),
+                move |cpu, ram| pressure.set_pressure(cpu, ram),
             );
             // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
             if config.routing.default_profile.starts_with('@') {
@@ -205,6 +217,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         bus,
         writer: writer.handle(),
         runtime,
+        scheduling,
     });
     let tracker = TaskTracker::new();
 
@@ -1522,7 +1535,31 @@ async fn hook_emit(req: Request, state: &State) -> Response {
     }
     // El esquema de hooks es común a Claude Code y Codex (P01 Test B). Con el
     // registro de adapters (P05.S6) se usa el `parse_hook` del proveedor.
-    let events = symphony_adapter_common::hooks::parse_standard_hook(payload);
+    let mut events = symphony_adapter_common::hooks::parse_standard_hook(payload);
+    // Una operación pesada pasa por el scheduler antes de empezar (P08.S3): puede esperar
+    // su turno aquí mismo y, si el turno no llega, se rechaza con la razón.
+    let denied = match text("run_id") {
+        Some(run) => {
+            gate_heavy_tool(state, &agent_id, &run, text("provider").as_deref(), &events).await
+        }
+        None => None,
+    };
+    if denied.is_some() {
+        // Lo rechazado no empezó: no es un comando pendiente en el checkpoint.
+        events.retain(|e| !matches!(e, AgentEvent::ToolRequested { .. }));
+    }
+    // Las que terminaron liberan su slot.
+    if let Some(run) = text("run_id") {
+        for e in &events {
+            if let AgentEvent::ToolFinished {
+                tool_use_id: Some(u),
+                ..
+            } = e
+            {
+                state.scheduling.release(&format!("{run}:{u}"));
+            }
+        }
+    }
     let n = events.len();
     for event in events {
         let ev = BusEvent {
@@ -1541,7 +1578,154 @@ async fn hook_emit(req: Request, state: &State) -> Response {
             );
         }
     }
-    Response::ok(req.id, json!({ "decision": "allow", "events": n }))
+    match denied {
+        Some(reason) => Response::ok(
+            req.id,
+            json!({ "decision": "deny", "reason": reason, "events": n }),
+        ),
+        None => Response::ok(req.id, json!({ "decision": "allow", "events": n })),
+    }
+}
+
+/// Decisión del scheduler sobre un `PreToolUse`: `None` deja correr; `Some(razón)` rechaza.
+/// Registra la operación en `tool_calls` (`QUEUED`/`RUNNING`, `HOOK_HOLD`) y mientras espera
+/// el agente queda en `WAITING_RESOURCE`.
+async fn gate_heavy_tool(
+    state: &State,
+    agent_id: &str,
+    run_id: &str,
+    provider: Option<&str>,
+    events: &[AgentEvent],
+) -> Option<String> {
+    use crate::scheduling::{Submitted, Waited, denial_text};
+    use symphony_core::{AgentState, ToolCallId};
+
+    let (use_id, tool, command) = events.iter().find_map(|e| match e {
+        AgentEvent::ToolRequested {
+            tool_use_id: Some(u),
+            tool,
+            kind,
+            command,
+        } if *kind != symphony_adapter_common::ToolKind::Edit => {
+            Some((u.clone(), tool.clone(), command.clone()))
+        }
+        _ => None,
+    })?;
+    let class = symphony_scheduler::classify(&tool, command.as_deref());
+    if !class.is_heavy() {
+        return None;
+    }
+    let run: symphony_core::RunId = run_id.parse().ok()?;
+    let agent: symphony_core::AgentId = agent_id.parse().ok()?;
+    let id = ToolCallId::new();
+    // Sin id propio de la herramienta o repetida: pasa sin retención (nunca se rompe al CLI).
+    if !state.bus.adopt_tool_call(run, &use_id, id) {
+        return None;
+    }
+    let (number, priority): (i64, i64) = state
+        .reader
+        .lock()
+        .ok()
+        .and_then(|c| {
+            c.query_row(
+                "SELECT number, priority FROM agents WHERE id = ?1",
+                [agent_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()
+        })
+        .unwrap_or((0, 0));
+    let now = now_ms();
+    let req = symphony_scheduler::Request {
+        id: format!("{run_id}:{use_id}"),
+        tag: id.to_string(),
+        agent: agent_id.to_string(),
+        agent_label: format!("Agent #{number}"),
+        class,
+        priority: i32::try_from(priority).unwrap_or(0),
+        command: command.clone(),
+        now_ms: now,
+    };
+    let call = repo::NewToolCall {
+        id,
+        agent_id: agent,
+        run_id: run,
+        tool_name: tool,
+        command,
+        op_class: class.as_i64(),
+    };
+    // La escritura de un cambio de estado nunca es crítica: si el agente ya no está en el
+    // estado esperado (murió, lo pausaron), se deja como está.
+    let set_state = |from: AgentState, to: AgentState, why: Option<String>| {
+        let writer = state.writer.clone();
+        async move {
+            let _ = writer
+                .write(Box::new(move |t| {
+                    match repo::get_agent(t, agent) {
+                        Ok(a) if a.state == from => {
+                            if let Err(e) =
+                                repo::set_agent_state(t, agent, to, why.as_deref(), now_ms())
+                            {
+                                tracing::warn!(error = %e, "el scheduler no pudo cambiar el estado del agente");
+                            }
+                        }
+                        Ok(a) => tracing::debug!(state = %a.state, "el agente ya no está en el estado esperado"),
+                        Err(e) => tracing::warn!(error = %e, "el scheduler no encontró al agente"),
+                    }
+                    Ok(())
+                }))
+                .await;
+        }
+    };
+
+    match state.scheduling.submit(req) {
+        Submitted::Run { .. } => {
+            let _ = state
+                .writer
+                .write(Box::new(move |t| {
+                    repo::insert_scheduled_tool_call(t, &call, None, now)?;
+                    Ok(())
+                }))
+                .await;
+            None
+        }
+        Submitted::Queued(q) => {
+            let why = symphony_scheduler::explain(&q.reason);
+            let blocker = q
+                .reason
+                .blocker()
+                .and_then(|h| h.tag.parse::<ToolCallId>().ok());
+            let stored = why.clone();
+            let _ = state
+                .writer
+                .write(Box::new(move |t| {
+                    repo::insert_scheduled_tool_call(t, &call, Some((&stored, blocker)), now)?;
+                    Ok(())
+                }))
+                .await;
+            set_state(AgentState::Running, AgentState::WaitingResource, Some(why)).await;
+
+            let hold = state.scheduling.hold_for(provider);
+            let outcome = state.scheduling.wait(q, hold).await;
+            let denial = match &outcome {
+                Waited::Granted { .. } => None,
+                Waited::TimedOut { reason } => Some(denial_text(reason, hold)),
+            };
+            let (ended, text) = (now_ms(), denial.clone());
+            let _ = state
+                .writer
+                .write(Box::new(move |t| {
+                    match &text {
+                        None => repo::start_queued_tool_call(t, id, ended)?,
+                        Some(reason) => repo::deny_queued_tool_call(t, id, reason, ended)?,
+                    }
+                    Ok(())
+                }))
+                .await;
+            set_state(AgentState::WaitingResource, AgentState::Running, None).await;
+            denial
+        }
+    }
 }
 
 fn status(state: &State) -> Value {

@@ -6,8 +6,8 @@
 //! - Nunca rompe al CLI: cualquier problema (daemon caído, timeout, JSON raro)
 //!   termina con exit 0 y sin salida.
 //! - Nunca arranca el daemon.
-//! - En P05 no imprime nada: el CLI sigue su flujo normal de permisos. Imprimir
-//!   `allow` le saltearía al usuario sus propias reglas; el `deny` llega con el scheduler (P08).
+//! - No imprime `allow`: eso le saltearía al usuario sus propias reglas. Solo imprime el
+//!   `deny` con su razón cuando el scheduler rechaza una operación pesada (P08.S3).
 
 use std::io::Read;
 use std::time::Duration;
@@ -17,9 +17,8 @@ use symphony_protocol::{Message, Outcome, Request, transport};
 
 /// Límite del payload: un hook normal pesa unos KB.
 const MAX_PAYLOAD: u64 = 4 * 1024 * 1024;
-/// Cuánto se espera la decisión del daemon. Tiene que ser menor que el `timeout`
-/// del hook en el CLI (ADR-0003: Codex no mata hooks vencidos).
-const DECISION_TIMEOUT: Duration = Duration::from_secs(10);
+/// Cuánto se espera al daemon en eventos que no retienen.
+const QUICK_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -43,11 +42,22 @@ pub fn emit() {
     let Ok(home) = symphony_core::SymphonyHome::resolve() else {
         return;
     };
+    // Solo `PreToolUse` puede quedar retenido; esperar de más en el resto no sirve de nada.
+    let provider = env("SYMPHONY_PROVIDER");
+    let may_hold = payload.get("hook_event_name").and_then(Value::as_str) == Some("PreToolUse");
+    let wait = if may_hold {
+        Duration::from_secs(
+            symphony_adapter_common::hooks::HoldTimes::for_provider(provider.as_deref())
+                .client_secs,
+        )
+    } else {
+        QUICK_TIMEOUT
+    };
     let params = json!({
         "agent_id": agent_id,
         "run_id": env("SYMPHONY_RUN_ID"),
         "project_id": env("SYMPHONY_PROJECT_ID"),
-        "provider": env("SYMPHONY_PROVIDER"),
+        "provider": provider,
         "payload": payload,
     });
     let Ok(rt) = tokio::runtime::Builder::new_current_thread()
@@ -56,7 +66,7 @@ pub fn emit() {
     else {
         return;
     };
-    let _decision = rt.block_on(async {
+    let decision = rt.block_on(async {
         let exchange = async {
             let mut conn = transport::connect(home.root()).await.ok()?;
             let id = symphony_core::RunId::new().to_string();
@@ -71,9 +81,52 @@ pub fn emit() {
                 _ => None,
             }
         };
-        tokio::time::timeout(DECISION_TIMEOUT, exchange)
-            .await
-            .ok()
-            .flatten()
+        tokio::time::timeout(wait, exchange).await.ok().flatten()
     });
+    if let Some(out) = decision.as_ref().and_then(deny_output) {
+        println!("{out}");
+    }
+}
+
+/// Respuesta de `PreToolUse` que impide la operación, con la razón para el modelo
+/// (formato común a Claude Code y Codex, P01 Test B).
+fn deny_output(decision: &Value) -> Option<String> {
+    if decision.get("decision").and_then(Value::as_str) != Some("deny") {
+        return None;
+    }
+    let reason = decision
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("operación en cola en Symphony; reintenta en unos segundos");
+    Some(
+        json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        })
+        .to_string(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_deny_decision_prints_something() {
+        assert_eq!(
+            deny_output(&json!({ "decision": "allow", "events": 1 })),
+            None
+        );
+        let out = deny_output(&json!({ "decision": "deny", "reason": "en cola" })).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecisionReason"],
+            "en cola"
+        );
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    }
 }

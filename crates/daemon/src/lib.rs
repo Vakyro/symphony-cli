@@ -16,6 +16,7 @@ pub mod recorder;
 pub mod resources;
 pub mod routing;
 pub mod runtime;
+pub mod scheduling;
 pub mod server;
 pub mod shared;
 pub mod skills;

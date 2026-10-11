@@ -1316,6 +1316,69 @@ pub fn insert_tool_call(conn: &Connection, c: &NewToolCall, now: i64) -> Result<
     Ok(())
 }
 
+/// Una operación pesada que pasa por el scheduler (P08.S3): corre ya (`RUNNING`) o queda
+/// en cola (`QUEUED`, con su razón y quién la bloquea). Siempre `HOOK_HOLD`.
+pub fn insert_scheduled_tool_call(
+    conn: &Connection,
+    c: &NewToolCall,
+    queued: Option<(&str, Option<symphony_core::ToolCallId>)>,
+    now: i64,
+) -> Result<(), RepoError> {
+    let (status, reason, blocked_by, started) = match queued {
+        Some((reason, by)) => ("QUEUED", Some(reason), by.map(|b| b.to_string()), None),
+        None => ("RUNNING", None, None, Some(now)),
+    };
+    conn.execute(
+        "INSERT INTO tool_calls (id, agent_id, run_id, tool_name, command, op_class, status,
+                                 queue_reason, blocked_by_tool_call_id, enforcement, requested_at, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'HOOK_HOLD', ?10, ?11)",
+        params![
+            c.id.to_string(),
+            c.agent_id.to_string(),
+            c.run_id.to_string(),
+            c.tool_name,
+            c.command,
+            c.op_class,
+            status,
+            reason,
+            blocked_by,
+            now,
+            started
+        ],
+    )?;
+    Ok(())
+}
+
+/// Una operación en cola obtuvo su slot: pasa a `RUNNING`.
+pub fn start_queued_tool_call(
+    conn: &Connection,
+    id: symphony_core::ToolCallId,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE tool_calls SET status = 'RUNNING', started_at = ?2, queue_reason = NULL
+         WHERE id = ?1 AND status = 'QUEUED'",
+        params![id.to_string(), now],
+    )?;
+    Ok(())
+}
+
+/// Una operación en cola se rechazó (esperó más que el máximo del hook): `DENIED`, con la
+/// razón que recibe el modelo.
+pub fn deny_queued_tool_call(
+    conn: &Connection,
+    id: symphony_core::ToolCallId,
+    reason: &str,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE tool_calls SET status = 'DENIED', queue_reason = ?2, finished_at = ?3
+         WHERE id = ?1 AND status = 'QUEUED'",
+        params![id.to_string(), reason, now],
+    )?;
+    Ok(())
+}
+
 /// Cierra una tool call abierta (`DONE` o `FAILED`). Una ya cerrada no cambia.
 pub fn finish_tool_call(
     conn: &Connection,

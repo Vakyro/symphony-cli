@@ -104,6 +104,15 @@ pub struct ChatConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct PerformanceConfig {
     pub profile: PerformanceProfile,
+    /// Procesos pesados (clases 3–4) simultáneos; pisa el valor del perfil.
+    pub max_heavy: Option<u32>,
+    /// Techo de CPU (%) por encima del cual los pesados esperan; pisa el del perfil.
+    pub cpu_ceiling_pct: Option<f64>,
+    /// Techo de RAM (%); pisa el del perfil.
+    pub ram_ceiling_pct: Option<f64>,
+    /// Máximo de segundos que un hook retiene una operación pesada en cola antes de
+    /// rechazarla con su razón. Por defecto, el del proveedor (ADR-0003).
+    pub hold_max_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -153,6 +162,10 @@ impl Default for PerformanceConfig {
     fn default() -> Self {
         Self {
             profile: PerformanceProfile::Balanced,
+            max_heavy: None,
+            cpu_ceiling_pct: None,
+            ram_ceiling_pct: None,
+            hold_max_secs: None,
         }
     }
 }
@@ -197,6 +210,11 @@ pub const DEFAULT_CONFIG: &str = r#"# Configuración de Symphony. Symphony conse
 [performance]
 # ECO · BALANCED · PERFORMANCE · CUSTOM
 profile = "BALANCED"
+# Opcionales: pisan los límites del perfil.
+# max_heavy = 1
+# cpu_ceiling_pct = 70.0
+# ram_ceiling_pct = 70.0
+# hold_max_secs = 60
 
 [routing]
 # Profile o modelo por defecto al crear un agente.
@@ -250,6 +268,27 @@ impl Config {
             if l.window_hours == Some(0) || l.window_tokens == Some(0) {
                 return Err(invalid(format!(
                     "providers.limits.{id}: window_hours y window_tokens deben ser mayores que 0"
+                )));
+            }
+        }
+        let perf = &self.performance;
+        if perf.max_heavy == Some(0) {
+            return Err(invalid("performance.max_heavy debe ser mayor que 0".into()));
+        }
+        if perf.hold_max_secs == Some(0) {
+            return Err(invalid(
+                "performance.hold_max_secs debe ser mayor que 0".into(),
+            ));
+        }
+        for (name, v) in [
+            ("cpu_ceiling_pct", perf.cpu_ceiling_pct),
+            ("ram_ceiling_pct", perf.ram_ceiling_pct),
+        ] {
+            if let Some(v) = v
+                && !(1.0..=100.0).contains(&v)
+            {
+                return Err(invalid(format!(
+                    "performance.{name} = {v} debe estar entre 1 y 100"
                 )));
             }
         }

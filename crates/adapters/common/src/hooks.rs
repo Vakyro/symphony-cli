@@ -9,6 +9,41 @@ use symphony_core::FailureType;
 use crate::{AgentEvent, ProviderError, ToolKind};
 
 /// `Bash`/`exec_command` → comando; `Write`/`Edit`/`MultiEdit`/`apply_patch` → edición.
+/// Tiempos de un hook que puede retener una operación (ADR-0003). Cada nivel tiene que ser
+/// menor que el siguiente: el daemon retiene, `hook emit` espera un poco más y el CLI
+/// mata el hook un poco después (Codex no mata a los vencidos: por eso el cliente corta antes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HoldTimes {
+    /// Cuánto retiene el daemon antes de rechazar con una razón.
+    pub hold_secs: u64,
+    /// Cuánto espera `symphony hook emit` la respuesta del daemon.
+    pub client_secs: u64,
+    /// `timeout` que se escribe en el hook del CLI.
+    pub hook_secs: u64,
+}
+
+impl HoldTimes {
+    pub const CLAUDE: Self = Self {
+        hold_secs: 100,
+        client_secs: 110,
+        hook_secs: 120,
+    };
+    pub const CODEX: Self = Self {
+        hold_secs: 40,
+        client_secs: 50,
+        hook_secs: 60,
+    };
+
+    /// Claude Code aguanta esperas largas con un `timeout` explícito; Codex hasta ~60 s
+    /// (medido en P01, Test C).
+    pub fn for_provider(provider: Option<&str>) -> Self {
+        match provider {
+            Some("openai") => Self::CODEX,
+            _ => Self::CLAUDE,
+        }
+    }
+}
+
 pub fn tool_kind(tool: &str) -> ToolKind {
     match tool {
         "Bash" | "exec_command" | "shell" => ToolKind::Command,
