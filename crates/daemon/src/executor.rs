@@ -77,6 +77,36 @@ pub struct LiveRun {
 }
 
 /// Fallos que justifican cambiar de executor (P06.S5): cuota agotada o login.
+/// Cuánto antes de la muerte de un run cuenta un límite o un login rechazado como su causa.
+/// En Signalia (2026-10-03) pasaron ~15 min entre el rate limit y el corte por falta de latido.
+const DEATH_CAUSE_WINDOW_MS: i64 = 30 * 60 * 1000;
+
+/// Un run que muere sin explicación poco después de un límite registrado murió por eso: el motivo
+/// de cierre, el tipo de item del Recovery Center y la frase (F5 de `docs/research/uso-signalia.md`).
+fn death_cause(f: FailureType) -> Option<(RunEndReason, &'static str, &'static str)> {
+    match f {
+        FailureType::TempRateLimit | FailureType::Rpm | FailureType::Tpm => Some((
+            RunEndReason::RateLimited,
+            "RATE_LIMITED",
+            "el proveedor limitó las solicitudes (rate limit) y el executor dejó de responder",
+        )),
+        FailureType::DailyQuota
+        | FailureType::WeeklyQuota
+        | FailureType::ModelLimit
+        | FailureType::AccountLimit => Some((
+            RunEndReason::QuotaExhausted,
+            "RATE_LIMITED",
+            "el proveedor se quedó sin cuota y el executor dejó de responder",
+        )),
+        FailureType::Auth => Some((
+            RunEndReason::AuthError,
+            "AUTH_ERROR",
+            "el proveedor rechazó el login y el executor dejó de responder",
+        )),
+        _ => None,
+    }
+}
+
 pub(crate) fn needs_failover(e: &ProviderError) -> bool {
     !e.transient
         && matches!(
@@ -404,6 +434,15 @@ impl Runtime {
                     .writer
                     .write(Box::new(move |t| {
                         let now = now_ms();
+                        // Sin latido, pero con un límite o un login rechazado poco antes: esa es
+                        // la causa, y así se registra (no `NO_HEARTBEAT`).
+                        let cause = if matches!(kind, StopKind::NoHeartbeat) {
+                            repo::recent_run_failure(t, run, now, DEATH_CAUSE_WINDOW_MS)?
+                                .and_then(|(f, _)| death_cause(f))
+                        } else {
+                            None
+                        };
+                        let end = cause.map_or(end, |c| c.0);
                         repo::close_run(t, run, status, end, code, now)?;
                         // Un fallo de cuota o de login que llegó justo antes de la parada no se
                         // pierde: el recorder lo dejó para el failover, que ya no va a correr.
@@ -429,9 +468,13 @@ impl Runtime {
                             }
                             StopKind::NoHeartbeat => {
                                 repo::set_handoff_outcome(t, run, "FAILED_TO_CONTINUE")?;
-                                let reason = "el executor dejó de responder; el workspace y \
-                                                el último checkpoint quedan intactos"
-                                    .to_string();
+                                let (kind_name, why) = match cause {
+                                    Some((_, k, phrase)) => (k, phrase),
+                                    None => ("NO_HEARTBEAT", "el executor dejó de responder"),
+                                };
+                                let reason = format!(
+                                    "{why}; el workspace y el último checkpoint quedan intactos"
+                                );
                                 repo::set_agent_state(
                                     t,
                                     agent,
@@ -444,7 +487,7 @@ impl Runtime {
                                     project,
                                     Some(agent),
                                     Some(run),
-                                    "NO_HEARTBEAT",
+                                    kind_name,
                                     &reason,
                                     now,
                                 )?;
@@ -620,7 +663,16 @@ impl Runtime {
             .writer
             .write(Box::new(move |t| {
                 let now = now_ms();
-                repo::close_run(t, run, status, RunEndReason::Crash, code, now)?;
+                // Salió con error poco después de un límite o un login rechazado: esa es la
+                // causa (el `EXECUTOR_EXITED` genérico no ayudaba a decidir qué hacer).
+                let cause = repo::recent_run_failure(t, run, now, DEATH_CAUSE_WINDOW_MS)?
+                    .and_then(|(f, _)| death_cause(f));
+                let end = cause.map_or(RunEndReason::Crash, |c| c.0);
+                let (kind_name, reason) = match cause {
+                    Some((_, k, phrase)) => (k, format!("{phrase}. {reason}")),
+                    None => ("EXECUTOR_EXITED", reason),
+                };
+                repo::close_run(t, run, status, end, code, now)?;
                 crate::health::on_run_finished(t, run, &health_cfg, now)?;
                 repo::set_handoff_outcome(t, run, "FAILED_TO_CONTINUE")?;
                 repo::set_agent_state(t, agent, AgentState::Failed, Some(&reason), now)?;
@@ -629,7 +681,7 @@ impl Runtime {
                     project,
                     Some(agent),
                     Some(run),
-                    "EXECUTOR_EXITED",
+                    kind_name,
                     &reason,
                     now,
                 )?;
@@ -1657,10 +1709,35 @@ impl Runtime {
         self.set_state(agent, AgentState::Paused).await
     }
 
-    /// Reanuda un executor pausado. El agente vuelve a `RUNNING`.
+    /// Reanuda un agente: un executor pausado vuelve a `RUNNING`; un agente `FAILED` (sin latido,
+    /// con un límite de proveedor o con un crash) se reabre desde su último checkpoint con el mismo
+    /// proveedor y modelo, sin pasar por `switch` (F6 de `docs/research/uso-signalia.md`).
     pub async fn resume(&self, agent: AgentId) -> Result<(), AgentOpError> {
-        self.live_parts(agent)?;
         let from = self.read_op(|c| repo::get_agent(c, agent))?.state;
+        if from == AgentState::Failed {
+            let last = self
+                .read_op(|c| repo::runs_of(c, agent))?
+                .pop()
+                .ok_or_else(|| AgentOpError("el agente no tiene ningún run".into()))?;
+            // Sin latido (o un límite que lo causó): el workspace puede tener cambios sin
+            // checkpoint; el resto se reinicia desde el último checkpoint.
+            let silent = last.end_reason.is_some_and(|e| {
+                matches!(
+                    e,
+                    RunEndReason::NoHeartbeat
+                        | RunEndReason::RateLimited
+                        | RunEndReason::QuotaExhausted
+                        | RunEndReason::AuthError
+                )
+            });
+            if silent {
+                self.reclaim(agent).await?;
+            } else {
+                self.restart(agent).await?;
+            }
+            return Ok(());
+        }
+        self.live_parts(agent)?;
         if from != AgentState::Paused {
             return Err(AgentOpError(format!(
                 "el agente no está pausado ({})",

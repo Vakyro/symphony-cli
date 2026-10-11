@@ -1715,6 +1715,90 @@ kind = "hang"
     e.writer.shutdown();
 }
 
+/// F5 (`docs/research/uso-signalia.md`): un run que se queda mudo poco después de un rate limit
+/// murió por el rate limit, no «sin latido»; el Recovery Center lo dice así.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_that_goes_silent_after_a_rate_limit_is_closed_with_that_cause() {
+    let script = r#"
+[[step]]
+kind = "say"
+text = "trabajando"
+[[step]]
+kind = "rate_limit"
+retry_after_ms = 60000
+[[step]]
+kind = "hang"
+"#;
+    let e = env_with_watchdog(
+        &[("fake", script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "limitado", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "RATE_LIMITED"
+    );
+    assert_eq!(one::<String>(&e, "SELECT status FROM agent_runs"), "FAILED");
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "FAILED");
+    assert_eq!(
+        one::<String>(&e, "SELECT kind FROM recovery_items"),
+        "RATE_LIMITED"
+    );
+    let detail = one::<String>(&e, "SELECT detail FROM recovery_items");
+    assert!(detail.contains("rate limit"), "{detail}");
+    assert!(created.worktree.is_dir());
+
+    // F6: `resume` lo reabre con el mismo modelo, sin `switch`.
+    e.runtime.resume(created.agent_id).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(count(&e, "agent_runs"), 2);
+    assert_eq!(
+        one::<String>(&e, "SELECT model_id FROM agent_runs WHERE seq = 2"),
+        "fake/fast"
+    );
+    e.writer.shutdown();
+}
+
+/// F6: `resume` también reabre un agente que salió con error.
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_reopens_a_crashed_agent_with_the_same_model() {
+    let e = env("[[step]]\nkind = \"crash\"\n", None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "crash", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "FAILED");
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "CRASH"
+    );
+
+    e.runtime.resume(created.agent_id).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(count(&e, "agent_runs"), 2);
+    assert_eq!(
+        one::<String>(&e, "SELECT reason FROM executor_changes"),
+        "RESTART"
+    );
+    // El segundo run también se cae (es el mismo guion): el agente queda otra vez `FAILED`.
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "FAILED");
+    e.writer.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn crashed_executor_can_restart_from_its_checkpoint() {
     let e = env("[[step]]\nkind = \"crash\"\n", None).await;
