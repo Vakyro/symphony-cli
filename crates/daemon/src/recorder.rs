@@ -42,12 +42,11 @@ impl Open {
     }
 }
 
-/// Clase de operación provisional hasta el clasificador del scheduler (P08).
-fn op_class(kind: ToolKind) -> i64 {
-    // ponytail: todo comando es "medio"; P08 clasifica por comando real (test, build, install…).
+/// Clase de operación (IDEA §5.4): por herramienta y, en el shell, por el comando real.
+fn op_class(kind: ToolKind, tool: &str, command: Option<&str>) -> i64 {
     match kind {
-        ToolKind::Command => 2,
-        ToolKind::Edit | ToolKind::Other => 1,
+        ToolKind::Edit => symphony_scheduler::OpClass::Cheap.as_i64(),
+        ToolKind::Command | ToolKind::Other => symphony_scheduler::classify(tool, command).as_i64(),
     }
 }
 
@@ -131,7 +130,7 @@ impl Recorder {
                     command: command
                         .as_deref()
                         .map(|c| symphony_core::redact(c).into_owned()),
-                    op_class: op_class(*kind),
+                    op_class: op_class(*kind, tool, command.as_deref()),
                 };
                 Some(Box::new(move |t| {
                     Ok(repo::insert_tool_call(t, &call, now)?)
@@ -173,7 +172,7 @@ impl Recorder {
                     run_id: run,
                     tool_name: tool.clone(),
                     command: None,
-                    op_class: op_class(*kind),
+                    op_class: op_class(*kind, tool, None),
                 });
                 let (ok, exit_code) = (*ok, *exit_code);
                 Some(Box::new(move |t| {

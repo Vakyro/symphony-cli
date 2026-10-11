@@ -41,3 +41,4 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-10-02 · antigravity/gemini-2.5-pro · pausa · P09.S7 ✅: consolidación de hechos (`project_facts`), `symphony fact set/list`, IPC `fact.set`/`fact.list`, inclusión en handoff de `ProjectFact`, 427 tests verdes. Sigue: P09.S8 (broker MCP).
 
 - 2026-10-11 · claude-code/sonnet-5.5 · pausa · P08.S1 ✅ en `phase/p08-runtime-multiagente`: migración 004 (9 tablas de Fase 2, FK de `tasks.milestone_id`, `PHASE_DONE` en `agent_runs`), con test de migración 003 → 004 con datos; 464 tests verdes. ADR-0013 ACEPTADO por Leo. Sigue P08.S2.
+- 2026-10-11 · claude-code/sonnet-5.5 · pausa · P08.S2 ✅: crate `scheduler` con el clasificador de operaciones (clases 0–4, tabla de casos y proptest) ya usado por el recorder, y Resource Manager (muestreo de CPU/RAM cada 5 s a `resource_samples`, agregado por minuto tras 24 h). 474 tests verdes. Sigue P08.S3.

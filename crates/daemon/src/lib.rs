@@ -13,6 +13,7 @@ pub mod health;
 pub mod logging;
 pub mod providers;
 pub mod recorder;
+pub mod resources;
 pub mod routing;
 pub mod runtime;
 pub mod server;

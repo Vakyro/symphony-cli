@@ -180,6 +180,12 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
         Ok(config) => {
             bus.set_health_config(crate::health::HealthConfig::from_config(&config));
+            crate::resources::spawn(
+                writer.handle(),
+                config.performance.profile,
+                crate::resources::SAMPLE_EVERY,
+                shutdown.clone(),
+            );
             // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
             if config.routing.default_profile.starts_with('@') {
                 runtime.set_default_profile(&config.routing.default_profile);

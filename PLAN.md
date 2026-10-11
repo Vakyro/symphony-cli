@@ -927,7 +927,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** (la 004, no la 002: ADR-0010/0013; además `PHASE_DONE` en `agent_runs.end_reason`) tablas de Fase 2: task_dependencies, milestones, processes, resource_samples, validation_runs, validation_checks, merge_requests, merge_conflicts y reviews (DB §3).
 - **Verifica:** migración 001 → 002 sobre una DB con datos de P07 sin pérdida.
 
-### P08.S2 · Clasificador de operaciones y Resource Manager
+### P08.S2 · Clasificador de operaciones y Resource Manager ✅
 - **Qué:** reglas de clase 0–4 (IDEA §5.4) sobre `tool_name` + comando; muestreo con sysinfo cada 5–10 s en `resource_samples`, agregado por minuto a las 24 h.
 - **Verifica:** tabla de casos (`npm test` → 3, `pnpm build` → 4, `rg` → 1…).
 

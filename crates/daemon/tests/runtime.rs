@@ -779,7 +779,8 @@ text = "{long}"
         calls.iter().all(|c| c.5),
         "toda tool call cerrada: {calls:?}"
     );
-    assert_eq!((calls[0].4, calls[1].4), (2, 1));
+    // P08.S2: `git status` es lectura (clase 1), igual que escribir un archivo.
+    assert_eq!((calls[0].4, calls[1].4), (1, 1));
     e.writer.shutdown();
 }
 

@@ -2919,8 +2919,10 @@ dependencies = [
  "symphony-process",
  "symphony-protocol",
  "symphony-router",
+ "symphony-scheduler",
  "symphony-store",
  "symphony-testkit",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -2984,6 +2986,13 @@ dependencies = [
  "proptest",
  "serde_json",
  "symphony-core",
+]
+
+[[package]]
+name = "symphony-scheduler"
+version = "0.1.0"
+dependencies = [
+ "proptest",
 ]
 
 [[package]]
