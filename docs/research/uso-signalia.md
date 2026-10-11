@@ -122,6 +122,10 @@ No son decisiones: son lo que la evidencia sugiere, ordenado por cuánto respald
 | F12 | **Contabilidad de tokens utilizable:** `tokens_out` casi nunca se llena y `tokens_in` (~157 M) no se compara con la cuota | Estimar coste por tarea para planificar oleadas (F4) | § 3 | P10 (uso) |
 | F13 | **Chat principal consciente de lo que delegó:** al volver Leo, el resumen de «qué hizo cada agente, qué se integró, qué falta» sale de Symphony, no de un doc | Cierra el ciclo de F1 | 5.11 | P07.5, P09 hechos |
 
+### Hechas (2026-10-11)
+- **F5:** un run que muere sin latido, o que sale con error, poco (30 min) después de un rate limit, una cuota o un login rechazado registrado se cierra con esa causa (`RATE_LIMITED`, `QUOTA_EXHAUSTED`, `AUTH_ERROR`) y abre un item `RATE_LIMITED` o `AUTH_ERROR` en el Recovery Center en vez de `NO_HEARTBEAT` o `EXECUTOR_EXITED`.
+- **F6:** `symphony resume N` (y `agent.resume`) reabre un agente `FAILED` desde su último checkpoint con el mismo proveedor y modelo (`reclaim` si murió en silencio, `restart` si salió con error). Ya no hace falta `switch`.
+
 ### Orden sugerido (tentativo)
 1. **F5 y F6** son correcciones chicas, sin ADR (clasificación y reanudación). Mejoran lo que ya existe.
 2. **F11 y F8** son vistas y un hook; bajo riesgo.

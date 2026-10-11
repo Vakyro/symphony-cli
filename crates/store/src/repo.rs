@@ -667,6 +667,25 @@ pub fn runs_of(conn: &Connection, agent: AgentId) -> Result<Vec<AgentRun>, RepoE
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// El último fallo de proveedor registrado para `run` en los `window_ms` anteriores a `now`
+/// (tipo y mensaje). Sirve para explicar un run que murió en silencio.
+pub fn recent_run_failure(
+    conn: &Connection,
+    run: RunId,
+    now: i64,
+    window_ms: i64,
+) -> Result<Option<(symphony_core::FailureType, String)>, RepoError> {
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT failure_type, message FROM provider_failures
+             WHERE run_id = ?1 AND occurred_at >= ?2 ORDER BY occurred_at DESC, rowid DESC LIMIT 1",
+            params![run.to_string(), now - window_ms],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(row.and_then(|(t, m)| t.parse().ok().map(|t| (t, m))))
+}
+
 /// Datos del CLI que se conocen después del spawn.
 pub fn set_run_process(
     conn: &Connection,
