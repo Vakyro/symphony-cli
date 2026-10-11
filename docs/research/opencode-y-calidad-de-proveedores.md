@@ -155,7 +155,11 @@ Los niveles L1/L2 ya existen (fixtures y `fake-agent`); lo que falta es L3 con c
 
 ---
 
-## 5. Límites de este registro
+## 5. Actualización 2026-10-11: ya está integrado
+
+OpenCode se integró (ADR-0012, bitácora P11 § S7, [cli-opencode.md](cli-opencode.md)) y se probó en vivo con modelos gratuitos: escribe en su worktree (con las dos correcciones de § 2 que no se conocían), `resume` conserva el contexto, el handoff entre dos modelos de OpenCode funciona y el broker MCP responde. **Sigue sin validarse como proveedor de uso diario:** no se probaron cuota ni auth reales, ni el handoff con Claude o Codex, y sus modelos gratuitos fallaron por upstream (429).
+
+## 6. Límites de este registro
 
 - No se corrió ninguna prueba con la cuota de Claude, Codex ni Copilot; todo lo de OpenCode salió de modelos gratuitos.
 - No se probó cuota, rate limit ni auth de OpenCode.

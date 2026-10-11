@@ -21,6 +21,7 @@ symphony-adapter-codex = { path = "../adapters/codex" }
 symphony-adapter-common = { path = "../adapters/common" }
 symphony-adapter-copilot = { path = "../adapters/copilot" }
 symphony-adapter-kimi = { path = "../adapters/kimi" }
+symphony-adapter-opencode = { path = "../adapters/opencode" }
 symphony-context = { path = "../context" }
 symphony-router = { path = "../router" }
 symphony-core = { path = "../core" }

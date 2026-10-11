@@ -301,3 +301,24 @@ fn extra_mcp_servers_become_c_overrides() {
         assert!(args.iter().any(|a| a == want), "falta {want}: {args:?}");
     }
 }
+
+#[test]
+fn native_codex_is_found_in_both_npm_layouts() {
+    use symphony_adapter_codex::native_codex_in;
+    let d = tempfile::tempdir().unwrap();
+    let touch = |rel: &str| {
+        let p = d.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"x").unwrap();
+        p
+    };
+    assert_eq!(native_codex_in(d.path()), None);
+    // Disposición nueva: `vendor/<triple>/bin/codex.exe` directo en el paquete.
+    let flat = touch("node_modules/@openai/codex/vendor/x86_64-pc-windows-msvc/bin/codex.exe");
+    assert_eq!(native_codex_in(d.path()), Some(flat));
+    // Disposición anterior: el subpaquete de plataforma; gana por ser la que ya se conocía.
+    let nested = touch(
+        "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    );
+    assert_eq!(native_codex_in(d.path()), Some(nested));
+}

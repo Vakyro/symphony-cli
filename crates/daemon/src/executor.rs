@@ -271,7 +271,8 @@ impl Runtime {
                 }
                 other => other.map_err(|e| e.to_string()),
             };
-            exited_early(proc.write_stdin(&l.adapter.encode_prompt(&l.prompt)).await)?;
+            let framed = l.adapter.frame_prompt(&l.prompt, &l.worktree);
+            exited_early(proc.write_stdin(&l.adapter.encode_prompt(&framed)).await)?;
             if l.adapter.close_stdin_after_prompt() {
                 exited_early(proc.close_stdin().await)?;
             }

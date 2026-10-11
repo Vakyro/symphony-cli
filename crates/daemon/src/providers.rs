@@ -10,6 +10,7 @@ use symphony_adapter_codex::CodexAdapter;
 use symphony_adapter_common::{AdapterError, ProviderAdapter};
 use symphony_adapter_copilot::CopilotAdapter;
 use symphony_adapter_kimi::KimiAdapter;
+use symphony_adapter_opencode::OpenCodeAdapter;
 use symphony_store::{StoreError, WriterHandle, repo};
 
 use std::sync::Arc;
@@ -22,6 +23,7 @@ pub fn builtin() -> Vec<Box<dyn ProviderAdapter>> {
         Box::new(KimiAdapter::default()),
         Box::new(AntigravityAdapter::default()),
         Box::new(CopilotAdapter::default()),
+        Box::new(OpenCodeAdapter::default()),
     ]
 }
 
@@ -33,6 +35,7 @@ pub fn builtin_arc() -> Vec<Arc<dyn ProviderAdapter>> {
         Arc::new(KimiAdapter::default()),
         Arc::new(AntigravityAdapter::default()),
         Arc::new(CopilotAdapter::default()),
+        Arc::new(OpenCodeAdapter::default()),
     ]
 }
 
