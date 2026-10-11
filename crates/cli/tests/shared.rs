@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::symphonyd;
+use common::{path_with_fake_claude, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -24,6 +24,7 @@ fn symphony(home: &Path, cwd: &Path, args: &[&str]) -> (bool, String, String) {
         .args(args)
         .env("SYMPHONY_HOME", home)
         .env("SYMPHONYD", symphonyd())
+        .env("PATH", path_with_fake_claude(home))
         .output()
         .unwrap();
     (
