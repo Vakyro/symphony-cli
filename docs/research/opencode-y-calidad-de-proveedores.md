@@ -103,10 +103,10 @@ Sigue el patrón de P11 (ADR-0008, `docs/research/cli-p11.md`): un crate por pro
 | Verificación | fixtures sanitizados + suite de contrato (L1), `fake-agent` ya cubre el runtime (L2); una prueba live con un modelo gratuito de OpenCode no gasta la cuota de Leo |
 | Docs | `docs/research/cli-opencode.md`, QUICKSTART (permisos y límites), README |
 
-**Decisiones que quedan para Leo:**
-1. ¿Paso del PLAN o ADR corto como el de P11? Agregar un proveedor ya tiene precedente (ADR-0008), pero CLAUDE.md pide ADR para cambios de orden o de spec.
-2. ¿Se acepta el esquema de ids `opencode/<proveedor>:<modelo>`?
-3. ¿OpenCode entra al failover automático desde el inicio o solo por elección manual hasta que se valide (§ 4)?
+**Decisiones de Leo (2026-10-10), registradas en [ADR-0012](../adr/0012-opencode-como-proveedor.md):**
+1. ADR corto, no un paso suelto del PLAN.
+2. Esquema de ids `opencode/<proveedor>:<modelo>`: aprobado.
+3. Failover automático desde el inicio, sin esperar a validarlo (§ 4).
 
 ---
 
