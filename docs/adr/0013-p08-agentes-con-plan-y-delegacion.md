@@ -1,8 +1,8 @@
 # ADR-0013 · P08: cómo entran el plan por fases (ADR-0011) y la delegación desde el chat
 
-- **Estado:** PROPUESTO (pendiente de decisión de Leo; P08 no empieza sin él)
+- **Estado:** ACEPTADO (Leo, 2026-10-11)
 - **Fecha:** 2026-10-11
-- **Autor:** claude-code/sonnet-5.5 · **Aprobado por:** pendiente
+- **Autor:** claude-code/sonnet-5.5 · **Aprobado por:** Leo
 - **Fase/paso:** P08 (runtime multiagente) · afecta P08.S1, S3, S5, S6, S7, S8 y S9
 
 ## Contexto
@@ -67,7 +67,14 @@ ADR-0006/0010 dejó esta decisión para P08.S1 «con datos del scheduler». Lo q
 9. **S9** benchmark principal (gate, opinión de Leo) con el live que Leo autorice.
 10. **S10** cierre.
 
-## Qué necesito de Leo
+## Decisión de Leo (2026-10-11)
+1. **D1: A (archivo de plan)**, con estas reglas: `.symphony/plan/<task_id>.md` es **temporal**; mientras la tarea corre documenta lo hecho y lo que falló; **al terminar la tarea se borran las instrucciones** (aunque algo haya fallado). Lo hecho y los fallos pasan antes al checkpoint y a la bitácora del agente, porque el archivo no sobrevive.
+2. **D2: `PHASE_DONE` aprobado** (migración 004).
+3. **D3: se mantienen los 12 estados.**
+4. **D4: entra todo lo marcado «Sí»**; F12 va aparte, medido antes de P08.S3.
+5. **Benchmark live de P08.S9: se pueden usar todos los proveedores**, con solo 2 mensajes sencillos por agente y el menor gasto de tokens posible.
+
+## Preguntas que había (resueltas arriba)
 1. ¿D1: archivo de plan (A) o tablas (B)?
 2. ¿D2: apruebas `PHASE_DONE` (cambio de core con migración 004)?
 3. ¿D3: se mantienen los 12 estados?
