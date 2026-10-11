@@ -27,7 +27,7 @@ pub use health::{
 };
 pub use ids::{
     AgentId, CheckpointId, ContextObjectId, ExecutorChangeId, FactId, HandoffId, HandoffItemId,
-    InvalidId, McpServerId, MessageId, ProjectId, ProviderFailureId, ProviderHealthId,
+    InvalidId, McpServerId, MessageId, ProcessId, ProjectId, ProviderFailureId, ProviderHealthId,
     RecoveryItemId, RoutingDecisionId, RunId, SessionId, SkillId, TaskId, ToolCallId,
     UsageRecordId, WorktreeId,
 };

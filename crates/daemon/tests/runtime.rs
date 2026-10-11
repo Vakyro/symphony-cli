@@ -283,6 +283,53 @@ async fn exact_model_creates_everything_and_runs_the_executor() {
     e.writer.shutdown();
 }
 
+/// P08.S4: el árbol de procesos del run queda en `processes` y se cierra al terminar.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_process_tree_of_a_run_is_recorded_and_closed() {
+    // El CLI vive más que la primera foto (que se toma al arrancar el run).
+    let script = r#"
+[[step]]
+kind = "say"
+text = "Pensando"
+
+[[step]]
+kind = "sleep"
+ms = 1500
+"#;
+    let e = env(script, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Proceso", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let (run_id, _) = created.run.clone().unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let pid: i64 = one(
+        &e,
+        &format!("SELECT pid FROM agent_runs WHERE id='{run_id}'"),
+    );
+    let root: String = one(
+        &e,
+        &format!(
+            "SELECT pid || '|' || (ended_at IS NOT NULL) || '|' || (command IS NOT NULL) FROM processes
+             WHERE run_id='{run_id}' AND parent_process_id IS NULL ORDER BY started_at LIMIT 1"
+        ),
+    );
+    assert_eq!(
+        root,
+        format!("{pid}|1|1"),
+        "la raíz es el CLI y quedó cerrada"
+    );
+    let open: i64 = one(
+        &e,
+        &format!("SELECT COUNT(*) FROM processes WHERE run_id='{run_id}' AND ended_at IS NULL"),
+    );
+    assert_eq!(open, 0, "al terminar el run no queda nada abierto");
+    e.writer.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn decide_later_creates_a_ready_agent_without_executor() {
     let e = env(WORK, None).await;

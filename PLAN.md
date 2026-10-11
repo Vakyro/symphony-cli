@@ -935,7 +935,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** crate `scheduler` (STACK §8): HeavySemaphore, cola por prioridad, fairness entre agentes, perfiles `eco`/`balanced`/`performance`/`custom` desde config, y QueueExplainer (texto humano de FLOW §10.1). Integración con `hook emit`: `QUEUED` → retención → `ALLOW`. `tool_calls.blocked_by_tool_call_id` y `enforcement`.
 - **Verifica:** simulación determinista + proptest: nunca más de N pesados; ningún agente espera indefinidamente con slots libres.
 
-### P08.S4 · Enforcement a nivel OS
+### P08.S4 · Enforcement a nivel OS ✅
 - **Qué:** Job Objects (Windows), cgroups v2 (Linux) y process groups (macOS) sobre el árbol de cada run. En los CLIs sin hook-hold (ADR-0003), el límite se aplica aquí. Llenar `processes`.
 - **Verifica:** test que lanza una carga CPU-bound bajo límite y mide que se respeta (por OS en CI).
 

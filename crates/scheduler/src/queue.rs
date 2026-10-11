@@ -76,6 +76,34 @@ impl Limits {
     }
 }
 
+/// Límites que el SO hace cumplir sobre el árbol de procesos de cada agente (S4).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct OsLimits {
+    pub cpu_cores: Option<f64>,
+    pub max_memory_bytes: Option<u64>,
+    pub max_processes: Option<u32>,
+}
+
+impl OsLimits {
+    /// La CPU sale del perfil (`ECO` 1 núcleo, `BALANCED` 2, `PERFORMANCE` sin límite) y los
+    /// tres se pueden fijar en `[performance]`. Memoria y procesos: solo si se piden.
+    pub fn from_config(cfg: &symphony_core::PerformanceConfig) -> Self {
+        use symphony_core::PerformanceProfile as P;
+        let by_profile = match cfg.profile {
+            P::Eco => Some(1.0),
+            P::Balanced => Some(2.0),
+            P::Performance | P::Custom => None,
+        };
+        Self {
+            cpu_cores: cfg.os_cpu_cores.or(by_profile),
+            max_memory_bytes: cfg
+                .os_max_memory_mb
+                .map(|mb| mb.saturating_mul(1024 * 1024)),
+            max_processes: cfg.os_max_processes,
+        }
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self::balanced()

@@ -113,6 +113,13 @@ pub struct PerformanceConfig {
     /// Máximo de segundos que un hook retiene una operación pesada en cola antes de
     /// rechazarla con su razón. Por defecto, el del proveedor (ADR-0003).
     pub hold_max_secs: Option<u64>,
+    /// Núcleos que puede usar el árbol de procesos de cada agente (límite del SO). Por
+    /// defecto lo da el perfil: `ECO` 1, `BALANCED` 2, `PERFORMANCE` sin límite.
+    pub os_cpu_cores: Option<f64>,
+    /// Memoria máxima del árbol de cada agente, en MB. Sin límite por defecto.
+    pub os_max_memory_mb: Option<u64>,
+    /// Procesos máximos por agente. Sin límite por defecto.
+    pub os_max_processes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -166,6 +173,9 @@ impl Default for PerformanceConfig {
             cpu_ceiling_pct: None,
             ram_ceiling_pct: None,
             hold_max_secs: None,
+            os_cpu_cores: None,
+            os_max_memory_mb: None,
+            os_max_processes: None,
         }
     }
 }
@@ -215,6 +225,11 @@ profile = "BALANCED"
 # cpu_ceiling_pct = 70.0
 # ram_ceiling_pct = 70.0
 # hold_max_secs = 60
+# Límites del SO por agente (Job Object en Windows, cgroup v2 en Linux). Sin límite de
+# memoria ni de procesos por defecto; la CPU la da el perfil (ECO 1, BALANCED 2).
+# os_cpu_cores = 2.0
+# os_max_memory_mb = 4096
+# os_max_processes = 512
 
 [routing]
 # Profile o modelo por defecto al crear un agente.
@@ -274,6 +289,16 @@ impl Config {
         let perf = &self.performance;
         if perf.max_heavy == Some(0) {
             return Err(invalid("performance.max_heavy debe ser mayor que 0".into()));
+        }
+        if perf.os_cpu_cores.is_some_and(|c| c.is_nan() || c <= 0.0) {
+            return Err(invalid(
+                "performance.os_cpu_cores debe ser mayor que 0".into(),
+            ));
+        }
+        if perf.os_max_memory_mb == Some(0) || perf.os_max_processes == Some(0) {
+            return Err(invalid(
+                "performance.os_max_memory_mb y os_max_processes deben ser mayores que 0".into(),
+            ));
         }
         if perf.hold_max_secs == Some(0) {
             return Err(invalid(

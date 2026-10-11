@@ -10,5 +10,5 @@ mod queue;
 pub use classify::{OpClass, classify};
 pub use concurrency::agent_concurrency;
 pub use queue::{
-    Admission, Grant, Holder, Limits, Request, Scheduler, Snapshot, WaitReason, explain,
+    Admission, Grant, Holder, Limits, OsLimits, Request, Scheduler, Snapshot, WaitReason, explain,
 };

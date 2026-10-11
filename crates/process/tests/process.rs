@@ -177,3 +177,77 @@ async fn suspend_resume_and_guarantees() {
     p.terminate_tree().unwrap();
     assert!(p.wait_timeout(Duration::from_secs(10)).await.is_some());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn process_tree_lists_the_root_and_its_descendants() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = format!("tree-snap-{}", std::process::id());
+    let mut p = spawn(ProcessSpec::new("node").arg(tree_script(&dir)).arg(&marker))
+        .await
+        .unwrap();
+    assert_eq!(
+        p.next_output().await,
+        Some(OutputLine::Stdout("tree-ready".into()))
+    );
+    // Los hijos y nietos tardan un instante en aparecer: 1 raíz + 3 hijos + 6 nietos.
+    let mut tree = Vec::new();
+    for _ in 0..100 {
+        tree = p.process_tree();
+        if tree.len() == 10 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(tree.len(), 10, "{tree:?}");
+    let root = p.pid().unwrap();
+    let info = tree.iter().find(|i| i.pid == root).expect("la raíz");
+    assert_eq!(info.parent_pid, None);
+    assert!(info.command.contains(&marker), "{}", info.command);
+    assert!(info.rss_bytes > 0);
+    // Todos los demás cuelgan de alguien del árbol.
+    let pids: std::collections::HashSet<u32> = tree.iter().map(|i| i.pid).collect();
+    for i in tree.iter().filter(|i| i.pid != root) {
+        assert!(i.parent_pid.is_some_and(|pp| pids.contains(&pp)), "{i:?}");
+    }
+    p.terminate_tree().unwrap();
+    assert!(p.wait_timeout(Duration::from_secs(10)).await.is_some());
+}
+
+/// P08.S4: una carga CPU-bound bajo un límite de núcleos no lo rebasa (donde el SO lo aplica).
+#[tokio::test(flavor = "multi_thread")]
+async fn cpu_limit_is_enforced_on_a_busy_loop() {
+    let busy = "const end = Date.now() + 60000; while (Date.now() < end) {}";
+    let mut p = spawn(ProcessSpec::new("node").args(["-e", busy]).limits(
+        symphony_process::Limits {
+            cpu_cores: Some(0.5),
+            ..Default::default()
+        },
+    ))
+    .await
+    .unwrap();
+    let g = p.guarantees().clone();
+    let cpu_ms = |p: &symphony_process::Supervised| -> u64 {
+        p.stats().cpu_time.map_or_else(
+            || p.process_tree().iter().map(|i| i.cpu_time_ms).sum(),
+            |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX),
+        )
+    };
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let (t0, c0) = (std::time::Instant::now(), cpu_ms(&p));
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let (wall, used) = (t0.elapsed(), cpu_ms(&p).saturating_sub(c0));
+    p.terminate_tree().unwrap();
+    assert!(p.wait_timeout(Duration::from_secs(10)).await.is_some());
+    if !g.limits_enforced {
+        eprintln!(
+            "el SO no aplica el límite aquí ({:?}): sin aserción",
+            g.limits_note
+        );
+        return;
+    }
+    // 0,5 núcleos durante `wall`: se acepta hasta 0,8 (muestreo y arranque del cuota).
+    let ratio = used as f64 / wall.as_millis() as f64;
+    eprintln!("CPU usada: {used} ms en {wall:?} → {ratio:.2} núcleos (límite 0.5)");
+    assert!(ratio < 0.8, "el límite no se respetó: {ratio:.2} núcleos");
+    assert!(ratio > 0.1, "el proceso casi no corrió: {ratio:.2}");
+}

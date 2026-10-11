@@ -63,13 +63,14 @@ fn is_shell(tool: &str) -> bool {
         || tool.contains("shell")
 }
 
-/// El mayor costo de los segmentos de una línea (`a && b | c; d`).
+/// El mayor costo de los segmentos de una línea (`a && b | c; d`). Una línea vacía no
+/// ejecuta nada: clase 1.
 fn classify_command(line: &str) -> OpClass {
     split_segments(line)
         .into_iter()
         .map(classify_segment)
         .max()
-        .unwrap_or(OpClass::Medium)
+        .unwrap_or(OpClass::Cheap)
 }
 
 /// Parte por `&&`, `||`, `;`, `|` y saltos de línea. Es textual: no entiende comillas
@@ -355,6 +356,13 @@ mod tests {
         // Shell sin comando conocido: el costo conservador.
         assert_eq!(classify("Bash", None), Medium);
         assert_eq!(classify("exec_command", Some("pnpm build")), VeryHeavy);
+    }
+
+    #[test]
+    fn an_empty_line_runs_nothing() {
+        assert_eq!(sh(""), Cheap);
+        assert_eq!(sh("  "), Cheap);
+        assert_eq!(sh(" ; && "), Cheap);
     }
 
     #[test]

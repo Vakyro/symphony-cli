@@ -6,9 +6,10 @@
 //! suspender, reanudar). La tarea que lee su salida es la única dueña del proceso.
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use symphony_adapter_common::{
     AgentEvent, ProviderAdapter, ProviderError, ResumeRequest, SpawnRequest,
@@ -26,6 +27,21 @@ use crate::bus::{BusEvent, EventSource};
 use crate::runtime::{Runtime, now_ms};
 
 /// Lo que hace falta para lanzar un executor.
+/// Cada cuánto se toma la foto del árbol de procesos de un run.
+const PROCESS_SAMPLE_EVERY: Duration = Duration::from_secs(5);
+
+/// Límites del SO según `[performance]` del `config.toml` (se relee en cada lanzamiento).
+fn os_limits(home: &Path) -> symphony_process::Limits {
+    let limits = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home))
+        .map(|c| symphony_scheduler::OsLimits::from_config(&c.performance))
+        .unwrap_or_default();
+    symphony_process::Limits {
+        max_memory_bytes: limits.max_memory_bytes,
+        cpu_cores: limits.cpu_cores,
+        max_processes: limits.max_processes,
+    }
+}
+
 pub(crate) struct Launch {
     pub adapter: Arc<dyn ProviderAdapter>,
     pub project_id: ProjectId,
@@ -281,7 +297,7 @@ impl Runtime {
             return Err("la base de datos no acepta escrituras".into());
         }
         let started = async {
-            let spec = match &l.resume_session {
+            let mut spec = match &l.resume_session {
                 Some(id) => l.adapter.resume_spec(&ResumeRequest {
                     spawn: spawn_req.clone(),
                     cli_session_id: id.clone(),
@@ -289,9 +305,22 @@ impl Runtime {
                 None => l.adapter.spawn_spec(&spawn_req),
             }
             .map_err(|e| e.to_string())?;
+            // Capa 2 del scheduler (ADR-0002/0003): el SO hace cumplir el límite del árbol.
+            spec.limits = os_limits(&self.home);
             let mut proc = symphony_process::spawn(spec)
                 .await
                 .map_err(|e| e.to_string())?;
+            let g = proc.guarantees();
+            if g.limits_enforced {
+                tracing::debug!(run = %l.run_id, mechanism = g.mechanism, "grupo de procesos creado");
+            } else {
+                tracing::warn!(
+                    run = %l.run_id,
+                    mechanism = g.mechanism,
+                    note = g.limits_note.as_deref().unwrap_or(""),
+                    "el SO no puede aplicar los límites pedidos: solo hay control por concurrencia"
+                );
+            }
             // Un CLI que falla rápido (login, cuota) sale antes de leer su prompt: el `EPIPE` no es
             // un fallo de arranque; `pump` recoge su salida y su código de salida reales.
             let exited_early = |r: Result<(), symphony_process::ProcessError>| match r {
@@ -355,12 +384,46 @@ impl Runtime {
         Ok(())
     }
 
+    /// Foto del árbol de procesos del run hacia la tabla `processes` (P08.S4).
+    async fn record_processes(&self, l: &Launch, proc: &Supervised) {
+        let samples: Vec<symphony_store::processes::ProcSample> = proc
+            .process_tree()
+            .into_iter()
+            .map(|p| symphony_store::processes::ProcSample {
+                pid: p.pid,
+                parent_pid: p.parent_pid,
+                // Una línea de comando puede llevar secretos: se redacta como todo lo que se guarda.
+                command: symphony_core::redact(&p.command).into_owned(),
+                rss_bytes: p.rss_bytes,
+                cpu_time_ms: p.cpu_time_ms,
+            })
+            .collect();
+        if samples.is_empty() {
+            return;
+        }
+        let run = l.run_id;
+        let _ = self
+            .writer
+            .write(Box::new(move |t| {
+                Ok(symphony_store::processes::sync_processes(
+                    t,
+                    run,
+                    &samples,
+                    now_ms(),
+                )?)
+            }))
+            .await;
+    }
+
     /// Lee la salida del CLI y atiende el control hasta que el proceso termina.
     async fn pump(self, l: Launch, mut proc: Supervised, mut rx: mpsc::UnboundedReceiver<Control>) {
         let mut fatal: Option<ProviderError> = None;
         let mut control_open = true;
+        let mut monitor = tokio::time::interval(PROCESS_SAMPLE_EVERY);
+        monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let stopped = loop {
             tokio::select! {
+                _ = monitor.tick() => self.record_processes(&l, &proc).await,
                 line = proc.next_output() => match line {
                     None => break None,
                     Some(OutputLine::Stdout(line)) => {
@@ -413,6 +476,17 @@ impl Runtime {
             }
         };
         let exit = proc.wait().await;
+        let run = l.run_id;
+        let _ = self
+            .writer
+            .write(Box::new(move |t| {
+                Ok(symphony_store::processes::close_processes(
+                    t,
+                    run,
+                    now_ms(),
+                )?)
+            }))
+            .await;
         if let Ok(mut live) = self.live.lock()
             && live.get(&l.agent_id).is_some_and(|r| r.run_id == l.run_id)
         {
