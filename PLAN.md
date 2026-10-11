@@ -955,7 +955,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** vistas 15–19 y 25–29 (FLOW §18) + System Strip real.
 - **Verifica:** snapshots `insta`.
 
-### P08.S9 · Benchmark principal (gate)
+### P08.S9 · Benchmark principal (gate) 🟡 medido; falta la opinión de Leo
 - **Qué:** harness E2E de STACK §25.2: 3 agentes, 3 worktrees, un test pesado. Primero con fake-agents y luego live (Claude Code + Codex + un tercero si ya existe, con permiso de Leo), mientras Leo usa la máquina normalmente.
 - **Salida:** tabla de RAM total, CPU p50/p95, número de procesos, latencia de cola y latencia de eventos, más la opinión de Leo sobre la fluidez de la máquina.
 - **Si falla la métrica principal:** `the-council` + ADR con el ajuste (perfiles, límites, slots). **No avanzar sin resolverlo.**

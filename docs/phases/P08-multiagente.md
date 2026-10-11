@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p08-runtime-multiagente |
 | Inicio / cierre | 2026-10-11 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S8) |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S9) |
 | Tag | p08-done (pendiente) |
 | Docs usados | ADR-0011, ADR-0013, DB §3.B/§3.C/§3.H, PLAN §P08, CONSTRAINTS A12 |
 
@@ -101,6 +101,37 @@
 - **Archivos clave:** `crates/tui/src/{app,ui}.rs`, `crates/tui/tests/views.rs` (+9 snapshots), `crates/daemon/src/{server,views}.rs`.
 - **Cómo se verificó:** `cargo xtask check` → 557 passed. Snapshots `insta` de cada vista (los de Home y de las pestañas del agente cambiaron solo por la franja de sistema y las teclas nuevas, revisados); acciones y llamadas IPC probadas sobre el estado puro; el daemon real responde `system.get`/`performance.set`/`task.list` sin proyecto.
 - **Pendiente / notas:** (1) «Enviar al agente» de la vista 28 queda en el re-run: el fallo ya vuelve al agente solo en el gate. (2) La vista 17 decide sobre milestones ya creados (por un lote o por IPC): no hay formulario para crearlos desde la TUI. (3) Las vistas se probaron sobre estado simulado, no en una terminal real con Leo (⛔ para la revisión de fluidez de S9).
+
+### P08.S9 · Benchmark principal (gate) — 🟡 medido, pendiente la opinión de Leo
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-11
+- **Qué se hizo:** dos harness (STACK §25.2). **L2** (`crates/daemon/tests/benchmark.rs`, corre en CI con `fake-agent`): 1 agente, 3 agentes en 3 worktrees y 3 agentes con una prueba pesada cada uno (el gate de validación corre `npm test`, clase 3, por el scheduler con 1 slot). **L3** (`crates/cli/tests/live_benchmark.rs`, `SYMPHONY_LIVE=1`): los **seis** proveedores a la vez (Claude, Codex, Kimi, Antigravity, Copilot y OpenCode) con dos mensajes mínimos cada uno (`spawn` y luego `send`, el plan por fases apagado), con el permiso que dio Leo (todos, dos mensajes sencillos, mínimo de tokens). Para medir bien, el motor de validación ahora registra cuándo empezó de verdad cada comando (turno concedido) y cuándo terminó, antes de soltar el slot.
+- **Máquina:** Latitude 7390, i7-8650U (4 núcleos / 8 hilos), 15,9 GB, Windows 11.
+- **Resultados L2** (3 corridas, valores típicos):
+
+| Escenario | Tiempo | RAM Δ máquina | CPU media / p50 / p95 | Hijos máx. | Cola p50 / p95 | Evento p50 / p95 / p99 |
+|---|---|---|---|---|---|---|
+| 1 agente | 1,9 s | ~0 MB | — | 0 | 0 / 0 ms | 1 / 20 / 20 ms |
+| 3 agentes / 3 worktrees | 2,3 s | 19–61 MB | 48–65 % / 50–66 % / 64–76 % | 3–4 | 0 / 0 ms | 1 / 21 / 22–77 ms |
+| 3 agentes + prueba pesada (1 slot) | 10,1 s | 27–103 MB | 38–44 % / 36–44 % / 59–73 % | 5–6 | 2,5–2,9 s / 5,2–5,4 s | 0–1 / 10–19 / 60 ms |
+
+  Nunca hubo dos pruebas pesadas a la vez; la tercera esperó a las dos primeras (cola p95 ≈ 5 s con pruebas de 1,2 s) y la máquina no pasó del 76 % de CPU (p95).
+- **Resultados L3** (seis proveedores concurrentes, dos corridas; la segunda es la válida: la primera tenía un error de conteo en el propio harness):
+
+| Agente | Proveedor | Turno 1 | Turno 2 |
+|---|---|---|---|
+| #1 | Claude haiku | 32 s | 27 s |
+| #2 | Codex gpt-5.6-luna | 109 s | 68 s |
+| #3 | Kimi | falló con `AUTH_ERROR` a los 71 s → **failover automático a Codex** (80 s) | 70 s |
+| #4 | Antigravity gemini-3.8-flash-low | 144 s | 36 s |
+| #5 | Copilot auto | 165 s | 57 s |
+| #6 | OpenCode big-pickle | 32 s | 40 s |
+
+  Los seis terminaron los dos turnos (Kimi vía Codex). Daemon en reposo **25 MB**. RAM de la máquina: **+1 487 MB** sobre la base (el árbol del daemon suma 1 993 MB de working set, que cuenta páginas compartidas). CPU de la máquina: media 36 %, p50 28 %, **p95 87 %**. Pico de **38 procesos** en el árbol. Turno 1: 167 s; turno 2: 71 s; total 238 s. Slots pesados y cola: 0 (los turnos de un CLI no son operaciones pesadas).
+- **Contra CONSTRAINTS §5:** R2 (daemon en idle < 100 MB): **cumple**, 25 MB. R1 (consumo con Symphony ≤ los mismos agentes sueltos): el sobrecoste de Symphony es el daemon (25 MB en reposo, ~32 MB en el proceso del benchmark bajo carga) frente a +1,5 GB de los CLIs, es decir ~2 %; **no se midió la línea base «sueltos»** con los seis CLIs (duplicaría la cuota) → **estimado, no medido**. R4 (evento hook → bus → TUI, p99 < 50 ms): p95 ≈ 20 ms, pero **p99 de 60–77 ms con 3 agentes** en esta máquina (medido en el bus, con un muestreador de procesos corriendo en la misma máquina). Es un objetivo, no una garantía; no se ajusta sin un ADR de Leo.
+- **Archivos clave:** `crates/daemon/tests/benchmark.rs`, `crates/cli/tests/live_benchmark.rs`, `crates/daemon/src/validation.rs` (`Timing`), `crates/store/src/repo.rs` (`mark_tool_call_started`).
+- **Cómo se verificó:** `cargo nextest run -p symphony-daemon --test benchmark --no-capture` (L2, ~18 s) y `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_benchmark --no-capture` (L3, ~4 min, gasta unos pocos tokens por proveedor). `cargo xtask check` → 559 passed.
+- **Pendiente (⛔ Leo):** la opinión sobre la fluidez de la máquina mientras corre el lote («UI del sistema responde»). El criterio de salida de P08 pide que Leo apruebe el benchmark; por eso no se etiqueta `p08-done`. Para dársela: ejecutar el L3 mientras usa la máquina con normalidad.
+- **Hallazgos para decidir:** (1) Seis CLIs simultáneos llevan la CPU al 87 % (p95) en esta máquina de 4 núcleos aunque el perfil sea `balanced` (objetivo 70 %): el scheduler solo retiene operaciones pesadas, no cuenta CLIs. Con 3 agentes el pico fue menor. Si Leo quiere un tope de agentes simultáneos por perfil (no solo de procesos pesados), es una decisión nueva (ADR), no un ajuste. (2) El p99 de eventos bajo carga supera el objetivo de 50 ms; habría que medirlo con el hook real (`symphony hook emit`) antes de ajustar nada.
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |

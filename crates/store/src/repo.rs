@@ -1422,6 +1422,21 @@ pub fn deny_queued_tool_call(
     Ok(())
 }
 
+/// Una operación que esperó turno: cuándo empezó de verdad y por qué esperó. La latencia de
+/// cola es `started_at - requested_at` (P08.S9).
+pub fn mark_tool_call_started(
+    conn: &Connection,
+    id: symphony_core::ToolCallId,
+    started_at: i64,
+    queue_reason: Option<&str>,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE tool_calls SET started_at = ?2, queue_reason = COALESCE(?3, queue_reason) WHERE id = ?1",
+        params![id.to_string(), started_at, queue_reason],
+    )?;
+    Ok(())
+}
+
 /// Cierra una tool call abierta (`DONE` o `FAILED`). Una ya cerrada no cambia.
 pub fn finish_tool_call(
     conn: &Connection,

@@ -277,7 +277,7 @@ impl Runtime {
         let timeout = Duration::from_secs(cfg.prepare_timeout_secs.unwrap_or(1_800).max(1));
         for (i, command) in cfg.prepare.iter().enumerate() {
             let key = format!("prep:{}:{i}", wt_path.display());
-            let (exec, _) = self
+            let (exec, _, _) = self
                 .run_scheduled(
                     key,
                     format!("Agent #{number}"),

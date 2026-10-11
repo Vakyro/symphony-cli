@@ -32,6 +32,8 @@ symphony-adapter-claude = { path = "../adapters/claude" }
 symphony-adapter-codex = { path = "../adapters/codex" }
 symphony-store = { path = "../store" }
 symphony-testkit = { path = "../testkit" }
+rusqlite.workspace = true
+sysinfo.workspace = true
 tempfile.workspace = true
 trycmd.workspace = true
 

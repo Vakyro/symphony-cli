@@ -101,6 +101,13 @@ impl Validation {
     }
 }
 
+/// Cuándo empezó y terminó de verdad un comando (con turno ya concedido, antes de soltarlo).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Timing {
+    pub(crate) started_ms: i64,
+    pub(crate) ended_ms: i64,
+}
+
 /// Un comando ejecutado en el shell de la plataforma.
 pub(crate) struct Exec {
     pub(crate) success: bool,
@@ -195,7 +202,7 @@ impl Runtime {
         cwd: &Path,
         timeout: Duration,
         tag: ToolCallId,
-    ) -> Result<(Exec, OpClass), String> {
+    ) -> Result<(Exec, OpClass, Timing), String> {
         let class = classify("Bash", Some(command));
         let held = match self.scheduling.get() {
             Some(s) if class.is_heavy() => {
@@ -221,12 +228,25 @@ impl Runtime {
             }
             _ => None,
         };
+
+        let started_ms = now_ms();
         let limits = crate::executor::os_limits(&self.home);
         let result = exec_shell(command, cwd, timeout, limits).await;
+        // El fin se anota antes de soltar el turno: el siguiente no puede empezar antes.
+        let ended_ms = now_ms();
         if let Some(s) = held {
             s.release(&key);
         }
-        result.map(|e| (e, class))
+        result.map(|e| {
+            (
+                e,
+                class,
+                Timing {
+                    started_ms,
+                    ended_ms,
+                },
+            )
+        })
     }
 
     /// Valida hasta el tier `up_to` en el worktree del agente. Cada tier corre solo si el
@@ -345,6 +365,7 @@ impl Runtime {
         let tool_call = ToolCallId::new();
         let class = classify("Bash", Some(command));
         let redacted = symphony_core::redact(command).into_owned();
+        let requested_at = now_ms();
         // La operación queda en `tool_calls` como cualquier comando pesado (DB §3.H).
         if let Some(run) = run {
             let call = repo::NewToolCall {
@@ -358,7 +379,7 @@ impl Runtime {
             let _ = self
                 .writer
                 .write(Box::new(move |t| {
-                    repo::insert_scheduled_tool_call(t, &call, None, now_ms())?;
+                    repo::insert_scheduled_tool_call(t, &call, None, requested_at)?;
                     Ok(())
                 }))
                 .await;
@@ -375,8 +396,9 @@ impl Runtime {
             )
             .await;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let timing = outcome.as_ref().ok().map(|(_, _, t)| *t);
         let (status, passed, failed, summary, output, exit_code, ok) = match outcome {
-            Ok((exec, _)) => {
+            Ok((exec, _, _)) => {
                 let out = symphony_core::redact(&exec.output).into_owned();
                 let s = summarize(&out, exec.success);
                 let mut text = s.text;
@@ -455,7 +477,17 @@ impl Runtime {
                 }
                 store::insert_check(t, &check)?;
                 if run.is_some() {
-                    repo::finish_tool_call(t, tool_call, ok, exit_code, now)?;
+                    // Empezó cuando se le dio el turno, no cuando lo pidió (latencia de cola).
+                    let (started, ended) =
+                        timing.map_or((requested_at, now), |t| (t.started_ms, t.ended_ms));
+                    let waited = started > requested_at;
+                    repo::mark_tool_call_started(
+                        t,
+                        tool_call,
+                        started,
+                        waited.then_some("esperó turno del scheduler"),
+                    )?;
+                    repo::finish_tool_call(t, tool_call, ok, exit_code, ended)?;
                 }
                 Ok(())
             }))
