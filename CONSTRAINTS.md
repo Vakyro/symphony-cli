@@ -19,6 +19,7 @@ Contrato de calidad y rendimiento. Cada regla dice cómo se comprueba. Una regla
 | A9 | Nunca leer, copiar ni extraer credenciales o tokens OAuth de proveedores | Revisión; grep de rutas de credenciales en code review |
 | A10 | Un solo escritor en SQLite. Hooks y procesos externos nunca abren la DB | Revisión; solo `crates/store` depende de `rusqlite` |
 | A11 | **Camino barato por evento × agente.** Lo que corre por cada evento del bus o por cada agente decide con datos en memoria; el trabajo caro (git, lecturas de DB, procesos) corre solo tras filtrar por tipo de evento y por agente, y a lo sumo una vez por turno o por run | Revisión al cerrar cada fase; test del bus de estado (P07.5.S5) |
+| A12 | **Instalación única y global; Symphony se abre solo con `symphony`.** Se instala una vez en la computadora (`symphony` + `symphonyd`) y sirve para cualquier carpeta. Nada se instala ni se configura a mano por proyecto, por carpeta ni por proveedor: hooks, skills y MCP se inyectan por invocación (sin escribir en el worktree) y el estado vive en `~/.symphony`. Un paso que exija un archivo de Symphony en el proyecto para funcionar es un defecto | Revisión; test de integración: crear un agente en una carpeta sin `.symphony/` ni configuración previa |
 
 ## 2. Prohibido en el core (STACK §36)
 

@@ -62,6 +62,12 @@ Asume `symphony` en el PATH de aquí en adelante.
 
 No hace falta instalar Symphony dentro de cada proyecto.
 
+### Qué se instala y qué no (regla de diseño)
+- **Una sola instalación global** en tu computadora (`symphony` y `symphonyd`). Después, `symphony` se abre desde cualquier carpeta y es la única puerta de entrada: el daemon lo arranca `symphony` cuando hace falta.
+- **No hay nada que instalar a mano por proyecto o carpeta**: ni Symphony, ni hooks, ni skills, ni el broker MCP en cada proveedor. Symphony los inyecta en cada ejecución del CLI del proveedor y no escribe configuración en tu proyecto (los agentes trabajan en sus worktrees bajo `~/.symphony`).
+- Lo único que haces por tu cuenta es instalar y autenticar los CLIs de los proveedores, una vez por computadora.
+- Si algún paso te pide copiar archivos de Symphony a un proyecto, es un defecto: repórtalo (CONSTRAINTS A12).
+
 ---
 
 ## 2. Entrar a tu proyecto
