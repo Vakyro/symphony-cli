@@ -59,12 +59,14 @@ fn project_for(scope: &str, project: &str) -> Option<String> {
 }
 
 /// Deja `skills` igual a lo encontrado: nuevas, actualizadas (conservan `enabled`) y borradas.
-/// Solo toca las de usuario y las de este proyecto.
+/// Solo toca las de usuario y las de este proyecto. Con `prune = false` no borra las que
+/// faltan (el escaneo no es de fiar, p. ej. un `mcp.toml` con un error de sintaxis).
 pub fn sync_skills(
     conn: &Connection,
     project: &str,
     found: &[FoundSkill],
     now: i64,
+    prune: bool,
 ) -> Result<(), RepoError> {
     for s in found {
         let proj = project_for(s.scope, project);
@@ -98,6 +100,9 @@ pub fn sync_skills(
                 )?;
             }
         }
+    }
+    if !prune {
+        return Ok(());
     }
     let mut stmt = conn.prepare(
         "SELECT id, name, scope FROM skills WHERE scope <> 'BUILTIN' AND (project_id IS NULL OR project_id = ?1)",
@@ -146,7 +151,12 @@ pub fn set_skill_enabled(
 }
 
 /// Como [`sync_skills`], para `mcp_servers`.
-pub fn sync_mcp(conn: &Connection, project: &str, found: &[FoundMcp]) -> Result<(), RepoError> {
+pub fn sync_mcp(
+    conn: &Connection,
+    project: &str,
+    found: &[FoundMcp],
+    prune: bool,
+) -> Result<(), RepoError> {
     for s in found {
         let proj = project_for(s.scope, project);
         let existing: Option<String> = conn
@@ -181,6 +191,9 @@ pub fn sync_mcp(conn: &Connection, project: &str, found: &[FoundMcp]) -> Result<
                 )?;
             }
         }
+    }
+    if !prune {
+        return Ok(());
     }
     let mut stmt = conn.prepare(
         "SELECT id, name, scope FROM mcp_servers WHERE project_id IS NULL OR project_id = ?1",

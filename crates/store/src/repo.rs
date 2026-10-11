@@ -1073,9 +1073,24 @@ pub fn set_handoff_outcome(
     to_run: RunId,
     outcome: &str,
 ) -> Result<(), RepoError> {
+    // `NEEDED_RETRIEVAL` (el run pidió más contexto) es más informativo que `CONTINUED`: el
+    // cierre normal del run no lo pisa.
     conn.execute(
-        "UPDATE handoffs SET outcome = ?2 WHERE to_run_id = ?1",
+        "UPDATE handoffs
+         SET outcome = CASE WHEN outcome = 'NEEDED_RETRIEVAL' AND ?2 = 'CONTINUED' THEN outcome ELSE ?2 END
+         WHERE to_run_id = ?1",
         params![to_run.to_string(), outcome],
+    )?;
+    Ok(())
+}
+
+/// El run pidió contexto por el broker MCP: su handoff «necesitó recuperar». No cambia un
+/// resultado ya decidido (`FAILED_TO_CONTINUE`, `RETRIED_SAFER`).
+pub fn mark_needed_retrieval(conn: &Connection, to_run: RunId) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE handoffs SET outcome = 'NEEDED_RETRIEVAL'
+         WHERE to_run_id = ?1 AND (outcome IS NULL OR outcome = 'CONTINUED')",
+        [to_run.to_string()],
     )?;
     Ok(())
 }

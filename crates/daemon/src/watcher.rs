@@ -68,6 +68,26 @@ fn gitignore(root: &Path) -> Gitignore {
     b.build().unwrap_or_else(|_| Gitignore::empty())
 }
 
+/// ¿Lo ignora un `.gitignore` de una carpeta intermedia? (`gitignore` solo conoce el de la raíz,
+/// y el recorrido inicial sí respeta los anidados.)
+fn ignored_by_nested(root: &Path, path: &Path) -> bool {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if d == root || !d.starts_with(root) {
+            break;
+        }
+        let file = d.join(".gitignore");
+        if file.is_file() {
+            let (matcher, _) = Gitignore::new(&file);
+            if matcher.matched_path_or_any_parents(path, false).is_ignore() {
+                return true;
+            }
+        }
+        dir = d.parent();
+    }
+    false
+}
+
 /// Recorrido inicial: respeta los `.gitignore` anidados y omite lo oculto.
 fn scan(root: &Path) -> Vec<Change> {
     let mut out = Vec::new();
@@ -110,13 +130,20 @@ fn changes(root: &Path, ignore: &Gitignore, paths: BTreeSet<PathBuf>) -> Vec<Cha
             continue;
         }
         let rel_s = rel.to_string_lossy().into_owned();
-        if path.is_dir() {
+        if path.is_dir() || ignored_by_nested(root, &path) {
             continue;
         }
-        out.push(Change {
-            rel: rel_s,
-            text: read_text(&path),
-        });
+        let text = read_text(&path);
+        // Un archivo bloqueado a medias de un guardado no se lee: no es un borrado, se conserva
+        // lo indexado hasta el próximo evento. Binario o demasiado grande sí sale del índice.
+        if text.is_none()
+            && path.is_file()
+            && std::fs::read(&path).is_err()
+            && std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_FILE_BYTES)
+        {
+            continue;
+        }
+        out.push(Change { rel: rel_s, text });
     }
     out
 }

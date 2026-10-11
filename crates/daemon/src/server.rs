@@ -880,11 +880,21 @@ fn context_raw(req: Request, state: &State) -> Response {
     let Some(uri) = req.params.get("uri").and_then(Value::as_str) else {
         return Response::error(req.id, "invalid_params", "falta `uri`");
     };
+    // `ctx://file/…` es relativo al proyecto: con `project_id` o `project_root` se acota;
+    // sin ellos queda el más reciente (compatibilidad con `symphony context raw` antiguos).
+    let project =
+        if req.params.get("project_id").is_some() || req.params.get("project_root").is_some() {
+            resolve_project(state, &req.params)
+                .ok()
+                .map(|p| p.id.to_string())
+        } else {
+            None
+        };
     let objects = symphony_object_store::ObjectStore::new(
         symphony_core::SymphonyHome::at(&state.home).objects_dir(),
     );
     let out = match state.reader.lock() {
-        Ok(c) => crate::context_views::raw(&c, &objects, uri),
+        Ok(c) => crate::context_views::raw(&c, &objects, project.as_deref(), uri),
         Err(_) => Err("lector de la base no disponible".to_string()),
     };
     match out {
@@ -935,6 +945,9 @@ async fn context_mcp(req: Request, state: &State) -> Response {
         let _ = state
             .writer
             .write(Box::new(move |t| {
+                if retrievals.iter().any(|r| r.found) {
+                    let _ = symphony_store::repo::mark_needed_retrieval(t, run);
+                }
                 for r in &retrievals {
                     let _ = symphony_store::context::record_retrieval(
                         t,
@@ -970,12 +983,14 @@ async fn shared_list(req: Request, state: &State) -> Response {
     let servers = shared::scan_mcp(&state.home, Some(&root), &mut warnings);
     let found_skills: Vec<_> = skills.iter().map(shared::SkillDef::found).collect();
     let found_servers: Vec<_> = servers.iter().map(shared::McpDef::found).collect();
+    // Con un `mcp.toml` roto no se borra nada: el interruptor del usuario no se pierde.
+    let prune = warnings.is_empty();
     let (p, now) = (pid.clone(), now_ms());
     let synced = state
         .writer
         .write(Box::new(move |t| {
-            index::sync_skills(t, &p, &found_skills, now)?;
-            index::sync_mcp(t, &p, &found_servers)?;
+            index::sync_skills(t, &p, &found_skills, now, prune)?;
+            index::sync_mcp(t, &p, &found_servers, prune)?;
             Ok(())
         }))
         .await;

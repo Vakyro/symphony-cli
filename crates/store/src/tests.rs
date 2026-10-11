@@ -580,3 +580,67 @@ fn json_columns_are_validated() {
     );
     assert!(bad.is_err());
 }
+
+#[test]
+fn a_retrieval_marks_the_handoff_and_a_normal_end_does_not_undo_it() {
+    let conn = seeded();
+    let (agent, run) = (
+        symphony_core::AgentId::new().to_string(),
+        symphony_core::RunId::new(),
+    );
+    insert_agent(&conn, &agent, "t1", 1, "RUNNING").unwrap();
+    insert_run(&conn, &run.to_string(), &agent, 1, None).unwrap();
+    conn.execute(
+        "INSERT INTO handoffs (id, agent_id, to_run_id, mode, created_at) VALUES ('h1', ?1, ?2, 'BALANCED', 0)",
+        params![agent, run.to_string()],
+    )
+    .unwrap();
+    let outcome = |c: &Connection| {
+        c.query_row("SELECT outcome FROM handoffs WHERE id = 'h1'", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(outcome(&conn), None);
+    crate::repo::mark_needed_retrieval(&conn, run).unwrap();
+    assert_eq!(outcome(&conn).as_deref(), Some("NEEDED_RETRIEVAL"));
+    // El cierre normal del run no lo pisa con CONTINUED…
+    crate::repo::set_handoff_outcome(&conn, run, "CONTINUED").unwrap();
+    assert_eq!(outcome(&conn).as_deref(), Some("NEEDED_RETRIEVAL"));
+    // …pero un fallo sí manda, y una recuperación posterior no lo cambia.
+    crate::repo::set_handoff_outcome(&conn, run, "FAILED_TO_CONTINUE").unwrap();
+    crate::repo::mark_needed_retrieval(&conn, run).unwrap();
+    assert_eq!(outcome(&conn).as_deref(), Some("FAILED_TO_CONTINUE"));
+}
+
+#[test]
+fn shared_sync_keeps_the_user_switch_and_only_prunes_when_the_scan_is_trusted() {
+    use crate::shared::{FoundMcp, list_mcp, set_mcp_enabled, sync_mcp};
+    let conn = seeded();
+    let server = |name: &str| FoundMcp {
+        name: name.into(),
+        scope: "PROJECT",
+        transport: "STDIO",
+        share_mode: "PER_CLIENT",
+        command: Some("npx".into()),
+        url: None,
+        enabled_default: true,
+    };
+    sync_mcp(&conn, "p1", &[server("a"), server("b")], true).unwrap();
+    set_mcp_enabled(&conn, "p1", "b", false).unwrap();
+    // Releer no devuelve el interruptor a su valor por omisión.
+    sync_mcp(&conn, "p1", &[server("a"), server("b")], true).unwrap();
+    let rows = list_mcp(&conn, "p1").unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.name.as_str(), r.enabled))
+            .collect::<Vec<_>>(),
+        [("a", true), ("b", false)]
+    );
+    // Un escaneo vacío por un archivo roto no borra nada…
+    sync_mcp(&conn, "p1", &[], false).unwrap();
+    assert_eq!(list_mcp(&conn, "p1").unwrap().len(), 2);
+    // …uno de fiar sí quita lo que ya no está.
+    sync_mcp(&conn, "p1", &[server("a")], true).unwrap();
+    assert_eq!(list_mcp(&conn, "p1").unwrap().len(), 1);
+}

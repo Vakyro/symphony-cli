@@ -102,9 +102,14 @@ pub fn stats(conn: &Connection) -> rusqlite::Result<Value> {
 }
 
 /// El original completo de un objeto de contexto (`ctx://…`), tal como se guardó.
-pub fn raw(conn: &Connection, objects: &ObjectStore, uri: &str) -> Result<Value, String> {
+pub fn raw(
+    conn: &Connection,
+    objects: &ObjectStore,
+    project: Option<&str>,
+    uri: &str,
+) -> Result<Value, String> {
     symphony_context::uri::CtxUri::parse(uri).map_err(|e| e.to_string())?;
-    let row = symphony_store::context::object_by_uri(conn, None, uri)
+    let row = symphony_store::context::object_by_uri(conn, project, uri)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no existe `{uri}`"))?;
     let bytes = objects.get(&row.blob_hash).map_err(|e| e.to_string())?;

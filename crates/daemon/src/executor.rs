@@ -181,11 +181,13 @@ impl Runtime {
         let found_skills: Vec<_> = skills.iter().map(shared::SkillDef::found).collect();
         let found_servers: Vec<_> = servers.iter().map(shared::McpDef::found).collect();
         let (p, now) = (pid.clone(), now_ms());
+        // Con un `mcp.toml` roto no se borra nada: el interruptor del usuario no se pierde.
+        let prune = warnings.is_empty();
         let _ = self
             .writer
             .write(Box::new(move |t| {
-                index::sync_skills(t, &p, &found_skills, now)?;
-                index::sync_mcp(t, &p, &found_servers)?;
+                index::sync_skills(t, &p, &found_skills, now, prune)?;
+                index::sync_mcp(t, &p, &found_servers, prune)?;
                 Ok(())
             }))
             .await;

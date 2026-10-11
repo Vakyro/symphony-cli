@@ -669,7 +669,11 @@ impl App {
             }
             Screen::ContextObject => {
                 if let Some(uri) = &self.ctx_uri {
-                    calls.push(call(Req::ContextRaw, "context.raw", json!({ "uri": uri })));
+                    calls.push(call(
+                        Req::ContextRaw,
+                        "context.raw",
+                        json!({ "uri": uri, "project_root": self.root() }),
+                    ));
                 }
             }
             Screen::SharedSkills => calls.push(call(

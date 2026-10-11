@@ -121,61 +121,112 @@ pub fn effective(all: &[SkillDef]) -> Vec<&SkillDef> {
         .collect()
 }
 
-/// Copia `src` en `dst` sin enlaces ni `skill.toml`; tope de profundidad y de archivos.
-fn copy_tree(src: &Path, dst: &Path, depth: u32, budget: &mut u32) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for e in fs::read_dir(src)? {
-        let e = e?;
-        let name = e.file_name();
-        let from = e.path();
-        let to = dst.join(&name);
-        let ft = e.file_type()?;
-        if ft.is_symlink() || name == "skill.toml" {
+/// Archivos de una skill que se copian: sin enlaces ni `skill.toml`; tope de profundidad y de
+/// cantidad. Ordenados, para que el sello sea estable.
+fn skill_files(dir: &Path, depth: u32, budget: &mut u32, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    let mut entries: Vec<_> = rd.flatten().collect();
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for e in entries {
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_symlink() || e.file_name() == "skill.toml" {
             continue;
         }
         if ft.is_dir() && depth > 0 {
-            copy_tree(&from, &to, depth - 1, budget)?;
+            skill_files(&e.path(), depth - 1, budget, out);
         } else if ft.is_file() && *budget > 0 {
             *budget -= 1;
-            fs::copy(&from, &to)?;
+            out.push(e.path());
         }
     }
-    Ok(())
 }
 
-/// El plugin de sesión de Claude con las skills dadas: `<dir>/.claude-plugin/plugin.json` y
-/// `<dir>/skills/<nombre>/…`. Se regenera solo si cambió algo. `None` si no hay skills.
-pub fn write_claude_plugin(dir: &Path, skills: &[&SkillDef]) -> std::io::Result<Option<PathBuf>> {
+/// El plugin de sesión de Claude con las skills dadas: `<base>-<sello>/.claude-plugin/plugin.json`
+/// y `<base>-<sello>/skills/<nombre>/…`. El sello sale del contenido de **todos** los archivos
+/// copiados, así que un cambio en un recurso genera un directorio nuevo. Los directorios no se
+/// reescriben nunca (un Claude en marcha puede estar leyendo el anterior); los viejos, de más de
+/// un día, se limpian. `None` si no hay skills.
+pub fn write_claude_plugin(base: &Path, skills: &[&SkillDef]) -> std::io::Result<Option<PathBuf>> {
     if skills.is_empty() {
         return Ok(None);
     }
     let mut hasher = blake3::Hasher::new();
+    let mut files: Vec<(&SkillDef, Vec<PathBuf>)> = Vec::new();
     for s in skills {
+        let mut found = Vec::new();
+        skill_files(&s.dir, 4, &mut 200, &mut found);
         hasher.update(s.name.as_bytes());
-        hasher.update(s.content_hash.as_bytes());
-        hasher.update(s.dir.to_string_lossy().as_bytes());
+        for f in &found {
+            let rel = f.strip_prefix(&s.dir).unwrap_or(f);
+            hasher.update(rel.to_string_lossy().as_bytes());
+            hasher.update(&fs::read(f)?);
+        }
+        files.push((s, found));
     }
     let stamp = hasher.finalize().to_hex().to_string();
-    let stamp_file = dir.join(".symphony-stamp");
-    if fs::read_to_string(&stamp_file).is_ok_and(|s| s == stamp) {
-        return Ok(Some(dir.to_path_buf()));
+    let name = base
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "claude-plugin".into());
+    let dir = base.with_file_name(format!("{name}-{}", &stamp[..16]));
+    if dir.join(".claude-plugin/plugin.json").is_file() {
+        return Ok(Some(dir));
     }
-    if dir.exists() {
-        fs::remove_dir_all(dir)?;
+    // Se arma aparte y se renombra: dos lanzamientos a la vez no se pisan.
+    let tmp = base.with_file_name(format!("{name}-tmp-{}", std::process::id()));
+    if tmp.exists() {
+        fs::remove_dir_all(&tmp)?;
     }
-    fs::create_dir_all(dir.join(".claude-plugin"))?;
+    fs::create_dir_all(tmp.join(".claude-plugin"))?;
     let manifest = json!({
         "name": "symphony",
         "version": "0.1.0",
         "description": "Skills compartidas de Symphony",
     });
-    fs::write(dir.join(".claude-plugin/plugin.json"), manifest.to_string())?;
-    for s in skills {
-        let mut budget = 200;
-        copy_tree(&s.dir, &dir.join("skills").join(&s.name), 4, &mut budget)?;
+    fs::write(tmp.join(".claude-plugin/plugin.json"), manifest.to_string())?;
+    for (s, found) in &files {
+        for f in found {
+            let rel = f.strip_prefix(&s.dir).unwrap_or(f);
+            let to = tmp.join("skills").join(&s.name).join(rel);
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(f, to)?;
+        }
     }
-    fs::write(stamp_file, stamp)?;
-    Ok(Some(dir.to_path_buf()))
+    if fs::rename(&tmp, &dir).is_err() {
+        // Otro lanzamiento ganó la carrera con el mismo contenido.
+        let _ = fs::remove_dir_all(&tmp);
+        if !dir.join(".claude-plugin/plugin.json").is_file() {
+            return Err(std::io::Error::other(
+                "no se pudo crear el plugin de skills",
+            ));
+        }
+    }
+    prune_old_plugins(base, &dir);
+    Ok(Some(dir))
+}
+
+/// Borra los `<base>-<sello>` con más de un día, salvo `keep`.
+fn prune_old_plugins(base: &Path, keep: &Path) {
+    let (Some(parent), Some(name)) = (base.parent(), base.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}-", name.to_string_lossy());
+    let day = std::time::Duration::from_secs(24 * 3600);
+    let Ok(rd) = fs::read_dir(parent) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|age| age > day);
+        if p != keep && old && e.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = fs::remove_dir_all(&p);
+        }
+    }
 }
 
 // --- MCP ---------------------------------------------------------------------------------
@@ -426,9 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn claude_plugin_is_written_once_and_rewritten_on_change() {
+    fn claude_plugin_is_content_addressed_and_never_rewritten() {
         let d = tempfile::tempdir().unwrap();
-        let (home, out) = (d.path().join("home"), d.path().join("plugin"));
+        let (home, base) = (d.path().join("home"), d.path().join("rt/claude-plugin"));
         write(
             &home.join("skills/uno/SKILL.md"),
             "---\ndescription: Uno\n---\ncuerpo",
@@ -436,8 +487,9 @@ mod tests {
         write(&home.join("skills/uno/resources/nota.txt"), "recurso");
         write(&home.join("skills/uno/skill.toml"), "description = \"x\"");
         let all = scan_skills(&home, None);
-        let eff = effective(&all);
-        let dir = write_claude_plugin(&out, &eff).unwrap().unwrap();
+        let dir = write_claude_plugin(&base, &effective(&all))
+            .unwrap()
+            .unwrap();
         assert!(dir.join(".claude-plugin/plugin.json").is_file());
         assert!(dir.join("skills/uno/SKILL.md").is_file());
         assert!(dir.join("skills/uno/resources/nota.txt").is_file());
@@ -448,18 +500,28 @@ mod tests {
         .unwrap();
         assert_eq!(manifest["name"], "symphony");
 
-        // Sin cambios no se reescribe; con cambios sí.
+        // Sin cambios, el mismo directorio y no se toca.
         fs::write(dir.join("marca"), "x").unwrap();
-        write_claude_plugin(&out, &eff).unwrap();
+        let again = write_claude_plugin(&base, &effective(&all))
+            .unwrap()
+            .unwrap();
+        assert_eq!(again, dir);
         assert!(dir.join("marca").exists());
-        write(
-            &home.join("skills/uno/SKILL.md"),
-            "---\ndescription: Dos\n---\n",
-        );
+
+        // Un cambio en un recurso (no en SKILL.md) genera un directorio nuevo; el anterior queda
+        // intacto por si un Claude en marcha lo está leyendo.
+        write(&home.join("skills/uno/resources/nota.txt"), "recurso nuevo");
         let all = scan_skills(&home, None);
-        write_claude_plugin(&out, &effective(&all)).unwrap();
-        assert!(!dir.join("marca").exists());
-        assert!(write_claude_plugin(&out, &[]).unwrap().is_none());
+        let next = write_claude_plugin(&base, &effective(&all))
+            .unwrap()
+            .unwrap();
+        assert_ne!(next, dir);
+        assert_eq!(
+            fs::read_to_string(next.join("skills/uno/resources/nota.txt")).unwrap(),
+            "recurso nuevo"
+        );
+        assert!(dir.join("marca").exists());
+        assert!(write_claude_plugin(&base, &[]).unwrap().is_none());
     }
 
     #[test]

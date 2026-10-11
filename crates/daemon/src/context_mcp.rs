@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use symphony_context::chunk;
 use symphony_context::handoff::estimate_tokens;
 use symphony_context::uri::CtxUri;
+use symphony_core::redact;
 use symphony_object_store::ObjectStore;
 use symphony_store::context as store;
 
@@ -66,7 +67,7 @@ pub fn search(
     let hits = store::search(conn, project, &fts, uri, limit).map_err(store_err)?;
     let mut retrievals: Vec<Retrieval> = Vec::new();
     for h in &hits {
-        let tokens = estimate_tokens(&h.snippet);
+        let tokens = estimate_tokens(&redact(&h.snippet));
         match retrievals.iter_mut().find(|r| r.object_id == h.object_id) {
             Some(r) => r.tokens += tokens,
             None => retrievals.push(Retrieval {
@@ -99,7 +100,8 @@ pub fn search(
                 "uri": h.uri,
                 "start_line": h.start_line,
                 "end_line": h.end_line,
-                "snippet": h.snippet,
+                // Lo que sale hacia un proveedor pasa por el redactor, como el handoff.
+                "snippet": redact(&h.snippet),
                 "score": h.score,
             })
         })
@@ -143,6 +145,7 @@ pub fn retrieve(
     } else {
         full.clone()
     };
+    let text = redact(&text).into_owned();
     let tokens = estimate_tokens(&text);
     Ok(Answer {
         value: json!({
@@ -181,7 +184,7 @@ pub fn lines(
     let to_u = usize::try_from(to)
         .unwrap_or(usize::MAX)
         .min(from_u.saturating_add(LINES_MAX - 1));
-    let text = chunk::lines(&full, from_u, to_u);
+    let text = redact(&chunk::lines(&full, from_u, to_u)).into_owned();
     let found = from_u <= total;
     let tokens = estimate_tokens(&text);
     Ok(Answer {

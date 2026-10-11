@@ -1437,15 +1437,16 @@ fn recovery(app: &App, f: &mut Frame, area: Rect) {
 
 // --- 20 Context Overview ----------------------------------------------------
 
-/// Nombre de cada nivel de fidelidad (`handoff_items.fidelity`, IDEA §5.6).
+/// Nombre de cada nivel de fidelidad (`handoff_items.fidelity`); los mismos que `symphony
+/// context inspect` y `symphony_context::handoff::fidelity`.
 fn fidelity_name(level: Option<i64>) -> &'static str {
     match level {
-        Some(0) => "L0 ruta",
-        Some(1) => "L1 firmas",
-        Some(2) => "L2 +docs",
-        Some(3) => "L3 esqueleto",
-        Some(4) => "L4 parcial",
-        Some(5) => "L5 completo",
+        Some(0) => "omitido",
+        Some(1) => "referencia",
+        Some(2) => "esqueleto",
+        Some(3) => "resumen",
+        Some(4) => "recortado",
+        Some(5) => "completo",
         _ => "—",
     }
 }

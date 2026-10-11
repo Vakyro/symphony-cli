@@ -155,7 +155,13 @@ fn body_of(node: Node<'_>) -> Option<Node<'_>> {
             .named_children(&mut cursor)
             .find(|c| c.kind() == "variable_declarator")?;
         let value = declarator.child_by_field_name("value")?;
-        return value.child_by_field_name("body").or(Some(value));
+        // Solo una función tiene cuerpo que ocultar; `const N = 5` va entero.
+        return match value.kind() {
+            "arrow_function" | "function_expression" | "function" | "generator_function" => {
+                value.child_by_field_name("body")
+            }
+            _ => None,
+        };
     }
     None
 }
@@ -475,6 +481,25 @@ export const hashPassword = (p: string): string => {
                 .unwrap()
                 .contains("const App")
         );
+    }
+
+    #[test]
+    fn scalar_constants_keep_their_value_and_only_functions_are_elided() {
+        let ts = "export const MAX_RETRIES = 5;
+export const API = \"https://x.test\";
+                  export const run = (a: number) => { return a + 1; };
+";
+        let out = reduce("src/c.ts", ts, &Level::Signatures).unwrap();
+        assert!(out.contains("export const MAX_RETRIES = 5;"), "{out}");
+        assert!(
+            out.contains("export const API = \"https://x.test\";"),
+            "{out}"
+        );
+        assert!(
+            out.contains("export const run = (a: number) => { … }"),
+            "{out}"
+        );
+        assert!(!out.contains("MAX_RETRIES = { … }"), "{out}");
     }
 
     #[test]

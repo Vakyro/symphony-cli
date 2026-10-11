@@ -3196,6 +3196,12 @@ text = \"ok\"
         })
         .collect();
     std::fs::write(e.repo.join("src/big.ts"), &body).unwrap();
+    std::fs::write(
+        e.repo.join("src/secret.ts"),
+        "const KEY = \"sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv\"; // claveindexada
+",
+    )
+    .unwrap();
     e.runtime
         .create_agent(req(&e, "mcp", Execution::Exact("fake/fast".into())))
         .await
@@ -3249,6 +3255,36 @@ linea 4 rotarmcp"
     // El rango pedido se recorta a LINES_MAX.
     let wide = mcp::lines(&conn, &objects, &project, uri, 1, 100_000).unwrap();
     assert_eq!(wide.value["to"], 30);
+
+    // Lo que sale hacia un proveedor pasa por el redactor: la clave no viaja ni en la búsqueda
+    // ni en el original.
+    let started = std::time::Instant::now();
+    let secret = loop {
+        let a = mcp::search(&conn, &project, "claveindexada", None, None).unwrap();
+        if !a.value["hits"].as_array().unwrap().is_empty() {
+            break a;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "sin indexar");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        !secret.value.to_string().contains("sk-ant-api03"),
+        "{}",
+        secret.value
+    );
+    let orig = mcp::retrieve(&conn, &objects, &project, "ctx://file/src/secret.ts").unwrap();
+    assert!(
+        !orig.value["text"]
+            .as_str()
+            .unwrap()
+            .contains("sk-ant-api03")
+    );
+    assert!(
+        orig.value["text"]
+            .as_str()
+            .unwrap()
+            .contains("claveindexada")
+    );
 
     for bad in ["ctx://file/../../etc/passwd", "no-es-una-uri"] {
         let err = mcp::retrieve(&conn, &objects, &project, bad).unwrap_err();

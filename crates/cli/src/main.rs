@@ -545,7 +545,16 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                     print_context_stats(&res);
                 }
                 ContextCmd::Raw { uri } => {
-                    let res = client::call(&mut conn, "context.raw", json!({ "uri": uri })).await?;
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .display()
+                        .to_string();
+                    let res = client::call(
+                        &mut conn,
+                        "context.raw",
+                        json!({ "uri": uri, "project_root": cwd }),
+                    )
+                    .await?;
                     print!("{}", res["text"].as_str().unwrap_or(""));
                 }
             }
