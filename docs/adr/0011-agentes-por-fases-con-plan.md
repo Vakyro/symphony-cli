@@ -8,6 +8,8 @@
 ## Contexto
 Una sesión larga de un agente acumula contexto: cada turno reenvía toda la conversación al modelo. Eso consume más tokens por turno, agota antes los límites diarios y semanales de cada proveedor y degrada la calidad cuando el contexto crece. La evidencia ya la tenemos: el arranque de un CLI de destino cuesta ~18k–27k tokens (ADR-0010), y en la evaluación de handoff (P09.S10) el prompt RAW llega a ~21k tokens solo por el checkpoint.
 
+Evidencia de uso real: en Signalia (3–5 oct 2026) cinco agentes largos en paralelo agotaron la cuota de Claude, Codex y Antigravity en ~22 minutos y murieron a la vez. Detalle en [`docs/research/uso-signalia.md`](../research/uso-signalia.md) § 3 y § 5.12. Esa evidencia respalda la decisión; no mide el ahorro por fase.
+
 Hoy un agente recibe la tarea completa y trabaja en una sola sesión larga, sin un plan explícito que divida el trabajo.
 
 Leo pide que el agente, al recibir una tarea (en un agente creado, no en el chat principal):
