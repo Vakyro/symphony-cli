@@ -1540,10 +1540,13 @@ async fn chat_switches_provider_mid_conversation_with_a_new_message() {
         "chat: turno 2 (beta/fast)\nchat: turno 1 (alpha/fast)\ninit"
     );
     // El mensaje nuevo llegó al modelo (va en su prompt) y quedó como `USER` aparte.
+    // Dos mensajes `USER` del run (el prompt con el handoff y el mensaje nuevo, aparte) pueden
+    // crearse en el mismo milisegundo: el orden por id no es estable (falló en macOS), así que
+    // se mira el conjunto.
     let sent: String = one(
         &e,
-        "SELECT content FROM messages WHERE role = 'USER' AND run_id =
-            (SELECT id FROM agent_runs WHERE provider_id = 'beta') ORDER BY id LIMIT 1",
+        "SELECT group_concat(content, char(10)) FROM messages WHERE role = 'USER' AND run_id =
+            (SELECT id FROM agent_runs WHERE provider_id = 'beta')",
     );
     assert!(sent.contains("ahora sigue tú"), "{sent}");
     assert!(sent.contains("Empieza el arreglo"), "{sent}");
