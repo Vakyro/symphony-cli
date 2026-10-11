@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p08-runtime-multiagente |
 | Inicio / cierre | 2026-10-11 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S6) |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S7) |
 | Tag | p08-done (pendiente) |
 | Docs usados | ADR-0011, ADR-0013, DB §3.B/§3.C/§3.H, PLAN §P08, CONSTRAINTS A12 |
 
@@ -79,11 +79,28 @@
 - **Cómo se verificó:** `cargo xtask check` → 536 passed. L2 con `symphonyd`+`fake-agent`: tier 1 pasa y tier 2 falla → el agente arregla en la sesión retomada → cuatro pasadas (PASS, FAIL, PASS, PASS) y la tarea `DONE`; un check que nunca pasa con `max_attempts = 2` → `BLOCKED` y `VALIDATION_FAILED`; sin `[validation]` todo completa como antes; la validación a pedido para tras el primer fallo; preparación OK (`prepared.txt` en el worktree) y preparación fallida sin agente ni worktree. Unitarios: nombres de check, resúmenes de Rust/Jest/pytest.
 - **Pendiente / notas:** (1) Los comandos se ejecutan con `cmd /C` (Windows) o `sh -c` sin escapado propio: comillas anidadas complejas van mejor en un script del proyecto (`npm run …`). (2) El review agent y el merge gate (tiers 3 y milestone) son S7. (3) No hay vista TUI de la validación todavía (S8; las vistas 15–19). (4) Que un CLI real arregle el fallo con el mensaje de validación no se probó en L3 (⛔ Leo).
 
+### P08.S7 · Merge, conflictos, review agent y modo delegado — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-11
+- **Qué se hizo:**
+  - **Commit al completar** (F7): un agente que pasa el gate deja su trabajo en un commit de su rama (`[merge] commit_on_complete`, por defecto sí); sin commit no hay nada que integrar.
+  - **Preflight** (`merge.prepare`, FLOW §14.2): destino (`symphony/chat`, nunca `main`), tarea completa, dependencias, validación del merge (tiers hasta el 3, trigger `MERGE_GATE`), conflictos (`git merge-tree`, con qué otro agente chocan) y política. La solicitud queda `READY` o `BLOCKED` con el resultado de cada check y los archivos en conflicto (`merge_conflicts` `PENDING`, recovery item `MERGE_CONFLICT`).
+  - **Cola de integración** (`merge.integrate`): una a la vez, solo `READY` y aprobada (`[merge] require_approval`, por defecto sí: «nunca merge sin política explícita»); se hace con `merge --no-ff` en el worktree del chat y, si hay un conflicto de último momento, se aborta sin ensuciar y vuelve a `BLOCKED`. El chat deja una nota («Integrado T-5 …»).
+  - **Conflicto**: `merge.abort` (ABORTED), `merge.resolve` (manual o revisor) y volver a correr `merge.prepare`; la solicitud se reaprovecha.
+  - **Review agent** (`review.start`, FLOW §15.3): crea una tarea `REVIEW` con la tarea, el diff, la validación y las restricciones; el veredicto sale de un bloque ```review (`APPROVE`/`REQUEST_CHANGES`/`REJECT` + findings) y se guarda en `reviews`. Solo recomienda: la tabla ni siquiera tiene un valor «merge».
+  - **Modo delegado del chat** (F1/F3/F4/F11/F13): `batch.create` convierte un plan (mismo formato que ADR-0011) en un agente por tarea con sus dependencias, bajo un milestone; el tope de simultáneos es el pedido recortado por la cuota conocida y se aplica con dependencias entre tareas de una ola; `batch.status` marca lo «pendiente de integrar»; `batch.integrate` integra lo terminado (con `approve` aprueba lo que el preflight deje en verde). El chat guarda lo que delegó y lo que integró.
+  - **git**: `merge_no_ff`, `is_clean`, `branch_exists`, `changed_paths`, `diff_range`.
+- **Archivos clave:** `crates/daemon/src/{merge,batch}.rs`, `crates/store/src/merge.rs`, `crates/git/src/lib.rs`, `crates/daemon/src/server.rs` (IPC `merge.*`, `review.start`, `batch.*`).
+- **Cómo se verificó:** `cargo xtask check` → 548 passed. L2 con `symphonyd`+`fake-agent`: integración con aprobación, sin tocar `main` y con nota en el chat; **Journey D**: dos agentes crean `shared.txt` distinto → el segundo queda `BLOCKED` con el conflicto atribuido al primero y su recovery item; abortar deja la rama intacta; resolver a mano y volver a preparar lo integra; review agent con veredicto y sin merge; lote con dependencias y tope 1 que termina solo y se integra completo. Git: `merge_no_ff` integra, no repite y aborta limpio. Store: reutilización de la solicitud abierta, conflictos, reviews.
+- **Desviación:** FLOW §14.3 dice «conflicto → Task BLOCKED». La tarea ya está `DONE` y su máquina de estados no permite `DONE → BLOCKED`; se bloquea la **solicitud de integración** (y queda el recovery item), no la tarea.
+- **Pendiente / notas:** (1) Que un CLI real devuelva el bloque ```review en el formato pedido no se probó en L3 (⛔ Leo); si no lo devuelve, la revisión queda `FAILED` con la razón. (2) El destino es siempre la rama del chat; el merge chat → `main` con review agent (ADR-0006) no está implementado todavía: sigue siendo una acción del usuario. (3) No hay vistas TUI de Changes, Merge Preflight, Conflict Review ni del lote (S8). (4) El tope de simultáneos de un lote se aplica al crear; no se reajusta si la cuota cae después.
+
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
 | PLAN P08.S1 | «Migración 002» | Es la **004** | 002 (salud) y 003 (contexto) se ejecutaron antes por ADR-0010 |
 | DB §3.C `agent_runs.end_reason` | 8 valores | 9: se agrega `PHASE_DONE` | ADR-0013 D2 |
+| DB §3.I `recovery_items.kind` | 10 tipos | 11: se agrega `VALIDATION_FAILED` (migración 005) | Un gate que falla `max_attempts` veces no encaja en los anteriores |
+| FLOW §14.3 | «Conflicto → Task BLOCKED» | Se bloquea la solicitud de integración, la tarea queda `DONE` | `DONE → BLOCKED` no existe en la máquina de estados |
 
 ## Dependencias agregadas
 | Crate | Versión | Para qué | ¿Estaba en STACK §58? |
@@ -93,7 +110,7 @@
 
 ## Notas para el siguiente agente
 - Reconstruir una tabla padre: patrón `defer_foreign_keys` + `_bak` + `DROP` + reinsertar con su nombre (002, 003, 004). No uses `RENAME`.
-- Siguiente: P08.S7 (merge, conflictos, review agent y modo delegado del chat).
+- Siguiente: P08.S8 (vistas TUI de Fase 2 y «pendiente de integrar»), luego S9 (benchmark: gate, con live autorizado) y S10 (cierre).
 - En los scripts de Python con cadenas que llevan barras invertidas (`\n` de Rust, TOML) no uses heredocs de la herramienta Bash: se pierden. Escribe el script con la herramienta Write y ejecútalo.
 - En un `r#"…"#` de Rust, `"#` termina la cadena: un guion TOML con `"# Plan…` necesita `r##"…"##`.
 - Un test que falla y deja un `symphonyd` huérfano cuelga nextest (queda esperando al proceso con fugas): `Get-Process symphonyd* | Stop-Process` antes de reintentar.

@@ -194,9 +194,20 @@ pub struct Task {
 }
 
 pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> Result<(), RepoError> {
+    insert_task_kind(conn, t, "WORK", now)
+}
+
+/// Como `insert_task`, con el tipo explícito: `WORK` o `REVIEW` (las tareas del review agent
+/// también son tasks, DB §3.B).
+pub fn insert_task_kind(
+    conn: &Connection,
+    t: &Task,
+    kind: &str,
+    now: i64,
+) -> Result<(), RepoError> {
     conn.execute(
         "INSERT INTO tasks (id, project_id, code, kind, title, description, status, status_reason, priority, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'WORK', ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+         VALUES (?1, ?2, ?3, ?10, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
         params![
             t.id.to_string(),
             t.project_id.to_string(),
@@ -206,10 +217,20 @@ pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> Result<(), RepoErro
             t.status.as_str(),
             t.status_reason,
             t.priority,
-            now
+            now,
+            kind
         ],
     )?;
     Ok(())
+}
+
+/// `WORK` o `REVIEW`.
+pub fn task_kind(conn: &Connection, id: TaskId) -> Result<String, RepoError> {
+    Ok(conn.query_row(
+        "SELECT kind FROM tasks WHERE id = ?1",
+        [id.to_string()],
+        |r| r.get(0),
+    )?)
 }
 
 /// Código de la task del chat general: identifica al agente sin migración (P07.5.S4).

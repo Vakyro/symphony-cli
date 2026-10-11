@@ -165,6 +165,46 @@ db_enum!(
 );
 
 db_enum!(
+    /// `merge_requests.status` (DB §3.H).
+    MergeStatus {
+        Preflight => "PREFLIGHT",
+        Ready => "READY",
+        Queued => "QUEUED",
+        Merged => "MERGED",
+        Blocked => "BLOCKED",
+        Aborted => "ABORTED",
+    }
+);
+
+db_enum!(
+    /// `merge_conflicts.resolution` (DB §3.H).
+    ConflictResolution {
+        Pending => "PENDING",
+        Manual => "MANUAL",
+        Reviewer => "REVIEWER",
+        Aborted => "ABORTED",
+    }
+);
+
+db_enum!(
+    /// `reviews.status` (DB §3.H).
+    ReviewStatus {
+        Running => "RUNNING",
+        Done => "DONE",
+        Failed => "FAILED",
+    }
+);
+
+db_enum!(
+    /// `reviews.recommendation` (DB §3.H). Un review nunca mergea solo: solo recomienda.
+    ReviewRecommendation {
+        Approve => "APPROVE",
+        RequestChanges => "REQUEST_CHANGES",
+        Reject => "REJECT",
+    }
+);
+
+db_enum!(
     /// `agents.execution_mode`.
     ExecutionMode {
         Exact => "EXACT",
@@ -333,6 +373,18 @@ mod tests {
             "ValidationTrigger",
         );
         assert_matches_db(CheckStatus::ALL, CheckStatus::as_str, "CheckStatus");
+        assert_matches_db(MergeStatus::ALL, MergeStatus::as_str, "MergeStatus");
+        assert_matches_db(
+            ConflictResolution::ALL,
+            ConflictResolution::as_str,
+            "ConflictResolution",
+        );
+        assert_matches_db(ReviewStatus::ALL, ReviewStatus::as_str, "ReviewStatus");
+        assert_matches_db(
+            ReviewRecommendation::ALL,
+            ReviewRecommendation::as_str,
+            "ReviewRecommendation",
+        );
         assert_matches_db(CheckName::ALL, CheckName::as_str, "CheckName");
         assert_matches_db(
             MilestoneStatus::ALL,

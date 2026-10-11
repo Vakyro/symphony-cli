@@ -68,6 +68,9 @@ pub fn spawn(runtime: Runtime, shutdown: CancellationToken) -> tokio::task::Join
 
 /// Reevalúa a quienes esperaban a la tarea de `agent` y arranca lo que quedó listo.
 async fn react(rt: &Runtime, agent: AgentId, outcome: Finished) {
+    // Si era un revisor, su veredicto se guarda (P08.S7).
+    rt.on_agent_finished_review(agent, outcome != Finished::Done)
+        .await;
     let task = rt
         .reader
         .lock()

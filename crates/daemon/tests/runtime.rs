@@ -154,6 +154,7 @@ fn req(e: &Env, title: &str, execution: Execution) -> CreateAgent {
         priority: 0,
         chat: false,
         depends_on: Vec::new(),
+        review: false,
     }
 }
 
@@ -892,6 +893,13 @@ kind = "run"
 command = ["git", "no-such-subcommand"]
 "#;
     let e = env(script, None).await;
+    // Este test mira los checkpoints del trabajo vivo: sin commit al completar.
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        "[project]\nname = \"demo\"\ndefault_branch = \"main\"\n\n[merge]\ncommit_on_complete = false\n",
+    )
+    .unwrap();
     let created = e
         .runtime
         .create_agent(req(
@@ -1181,6 +1189,13 @@ kind = "run"
 command = ["git", "no-such-subcommand"]
 "#;
     let e = env(script, None).await;
+    // Este test mira el estado vivo de git tras el trabajo del agente: sin commit al completar.
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        "[project]\nname = \"demo\"\ndefault_branch = \"main\"\n\n[merge]\ncommit_on_complete = false\n",
+    )
+    .unwrap();
     let objective = "Arreglar auth";
     let created = e
         .runtime
@@ -4185,5 +4200,444 @@ async fn the_worktree_is_prepared_before_the_agent_starts_and_a_failure_creates_
     assert!(text.contains("no se pudo instalar"), "{text}");
     assert_eq!((count(&e, "agents"), count(&e, "worktrees")), before);
     assert_eq!(git(&e.repo, &["worktree", "list"]).lines().count(), 2);
+    e.writer.shutdown();
+}
+
+// --- P08.S7: integración, conflictos, review agent y lotes ---------------------------
+
+/// Como `writes`, pero el agente tarda: dura más que la creación de los siguientes.
+fn slow_writes(path: &str, content: &str) -> String {
+    format!(
+        "[[step]]\nkind = \"say\"\ntext = \"Trabajando\"\n\n[[step]]\nkind = \"sleep\"\nms = 1500\n\n[[step]]\nkind = \"edit\"\npath = \"{path}\"\ncontent = \"{content}\\n\"\n"
+    )
+}
+
+fn writes(path: &str, content: &str) -> String {
+    format!(
+        "[[step]]\nkind = \"say\"\ntext = \"Trabajando\"\n\n[[step]]\nkind = \"edit\"\npath = \"{path}\"\ncontent = \"{content}\\n\"\n"
+    )
+}
+
+async fn make_chat(e: &Env) -> symphony_daemon::runtime::Created {
+    let mut chat = req(e, "chat", Execution::DecideLater);
+    chat.chat = true;
+    e.runtime.create_agent(chat).await.unwrap()
+}
+
+async fn complete(
+    e: &Env,
+    title: &str,
+    model: &str,
+) -> (symphony_daemon::runtime::Created, String) {
+    let created = e
+        .runtime
+        .create_agent(req(e, title, Execution::Exact(model.into())))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    (created, agent)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_agent_integrates_into_the_chat_branch_only_with_approval_and_never_into_main() {
+    let e = env_with(&[("alpha", &writes("a.txt", "desde A"))], None).await;
+    let chat = make_chat(&e).await;
+    let main_before = git(&e.repo, &["rev-parse", "main"]);
+    let (a, _) = complete(&e, "Agregar a.txt", "alpha/fast").await;
+
+    // El trabajo del agente quedó en un commit de su rama.
+    assert!(
+        git(&a.worktree, &["log", "--oneline", "-1"]).contains("T-"),
+        "commit por tarea"
+    );
+    assert_eq!(git(&a.worktree, &["status", "--porcelain"]), "");
+
+    let pre = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
+    assert!(pre.ready(), "{:?}", pre.checks);
+    assert!(pre.requires_approval && !pre.approved);
+    assert_eq!(pre.target_branch, "symphony/chat");
+    let names: Vec<_> = pre.checks.iter().map(|c| (c.name, c.status)).collect();
+    assert!(
+        names.contains(&("conflicts", "PASS")) && names.contains(&("policy", "WARN")),
+        "{names:?}"
+    );
+
+    // Sin aprobación no se integra.
+    let err = e
+        .runtime
+        .merge_integrate(&pre.merge_request)
+        .await
+        .unwrap_err();
+    assert!(err.contains("aprobación"), "{err}");
+    e.runtime.merge_approve(&pre.merge_request).await.unwrap();
+    let commit = e.runtime.merge_integrate(&pre.merge_request).await.unwrap();
+
+    // Entró a la rama del chat (su worktree la tiene), y `main` no se movió.
+    assert!(chat.worktree.join("a.txt").is_file());
+    assert_eq!(git(&chat.worktree, &["rev-parse", "HEAD"]), commit);
+    assert_eq!(git(&e.repo, &["rev-parse", "main"]), main_before);
+    assert!(!git(&e.repo, &["ls-tree", "-r", "--name-only", "main"]).contains("a.txt"));
+    let status: String = one(
+        &e,
+        &format!(
+            "SELECT status FROM merge_requests WHERE id = '{}'",
+            pre.merge_request
+        ),
+    );
+    assert_eq!(status, "MERGED");
+    // El chat sabe lo que se integró.
+    let note: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM messages WHERE agent_id = '{}' AND role = 'SYSTEM' AND content LIKE 'Integrado T-%'",
+            chat.agent_id
+        ),
+    );
+    assert_eq!(note, 1);
+    // Una segunda vez no repite nada: ya está integrada.
+    let again = e
+        .runtime
+        .merge_integrate(&pre.merge_request)
+        .await
+        .unwrap_err();
+    assert!(again.contains("MERGED"), "{again}");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_agents_on_the_same_file_conflict_and_the_user_can_abort_or_resolve() {
+    // Journey D: A y B crean `shared.txt` con contenido distinto.
+    let e = env_with(
+        &[
+            ("alpha", &writes("shared.txt", "version de A")),
+            ("beta", &writes("shared.txt", "version de B")),
+        ],
+        None,
+    )
+    .await;
+    let chat = make_chat(&e).await;
+    let (a, _) = complete(&e, "A toca shared", "alpha/fast").await;
+    let (b, b_id) = complete(&e, "B toca shared", "beta/fast").await;
+
+    let pre_a = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
+    e.runtime.merge_approve(&pre_a.merge_request).await.unwrap();
+    e.runtime
+        .merge_integrate(&pre_a.merge_request)
+        .await
+        .unwrap();
+
+    // B choca con lo que A ya integró: preflight bloqueado, conflicto y decisión pendiente.
+    let pre_b = e.runtime.merge_prepare(b.agent_id, false).await.unwrap();
+    assert!(!pre_b.ready());
+    assert_eq!(pre_b.conflicts, vec!["shared.txt".to_string()]);
+    let blocked: String = one(
+        &e,
+        &format!(
+            "SELECT status FROM merge_requests WHERE id = '{}'",
+            pre_b.merge_request
+        ),
+    );
+    assert_eq!(blocked, "BLOCKED");
+    let (path, other, resolution): (String, Option<String>, String) = {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        conn.query_row(
+            "SELECT path, other_agent_id, resolution FROM merge_conflicts WHERE merge_request_id = ?1",
+            [&pre_b.merge_request],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        (path.as_str(), resolution.as_str()),
+        ("shared.txt", "PENDING")
+    );
+    assert_eq!(
+        other.as_deref(),
+        Some(a.agent_id.to_string().as_str()),
+        "choca con A"
+    );
+    let kind: String = one(
+        &e,
+        "SELECT kind FROM recovery_items WHERE kind = 'MERGE_CONFLICT'",
+    );
+    assert_eq!(kind, "MERGE_CONFLICT");
+    let err = e
+        .runtime
+        .merge_integrate(&pre_b.merge_request)
+        .await
+        .unwrap_err();
+    assert!(err.contains("BLOCKED"), "{err}");
+
+    // Resolver a mano: el usuario integra la rama del chat en la de B y arregla el archivo.
+    let _ = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&b.worktree)
+        .args(["merge", "--no-edit", "symphony/chat"])
+        .output()
+        .unwrap();
+    std::fs::write(b.worktree.join("shared.txt"), "version de A y de B\n").unwrap();
+    git(&b.worktree, &["add", "."]);
+    git(&b.worktree, &["commit", "-q", "-m", "resuelto a mano"]);
+    let n = e
+        .runtime
+        .merge_mark_resolved(
+            &pre_b.merge_request,
+            symphony_core::ConflictResolution::Manual,
+        )
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let again = e.runtime.merge_prepare(b.agent_id, false).await.unwrap();
+    assert!(again.ready(), "{:?}", again.checks);
+    assert_eq!(again.merge_request, pre_b.merge_request, "misma solicitud");
+    e.runtime.merge_approve(&again.merge_request).await.unwrap();
+    e.runtime
+        .merge_integrate(&again.merge_request)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(chat.worktree.join("shared.txt"))
+            .unwrap()
+            .trim(),
+        "version de A y de B"
+    );
+    let _ = b_id;
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn aborting_leaves_the_branch_untouched_and_closes_the_conflicts() {
+    let e = env_with(
+        &[
+            ("alpha", &writes("shared.txt", "uno")),
+            ("beta", &writes("shared.txt", "dos")),
+        ],
+        None,
+    )
+    .await;
+    let chat = make_chat(&e).await;
+    let (a, _) = complete(&e, "A", "alpha/fast").await;
+    let (b, _) = complete(&e, "B", "beta/fast").await;
+    let pre_a = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
+    e.runtime.merge_approve(&pre_a.merge_request).await.unwrap();
+    e.runtime
+        .merge_integrate(&pre_a.merge_request)
+        .await
+        .unwrap();
+    let head = git(&chat.worktree, &["rev-parse", "HEAD"]);
+
+    let pre_b = e.runtime.merge_prepare(b.agent_id, false).await.unwrap();
+    assert!(!pre_b.ready());
+    e.runtime.merge_abort(&pre_b.merge_request).await.unwrap();
+    let (status, pending): (String, i64) = {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        let s = conn
+            .query_row(
+                "SELECT status FROM merge_requests WHERE id = ?1",
+                [&pre_b.merge_request],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let p = conn
+            .query_row(
+                "SELECT COUNT(*) FROM merge_conflicts WHERE merge_request_id = ?1 AND resolution = 'PENDING'",
+                [&pre_b.merge_request],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (s, p)
+    };
+    assert_eq!((status.as_str(), pending), ("ABORTED", 0));
+    assert_eq!(git(&chat.worktree, &["rev-parse", "HEAD"]), head);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_agent_recommends_and_never_merges() {
+    let reviewer_script = r#"
+[[step]]
+kind = "say"
+text = '''Revisé el diff.
+```review
+{"recommendation":"REQUEST_CHANGES","findings":[{"severity":"high","file":"a.txt","text":"falta el caso de error"}]}
+```'''
+"#;
+    let e = env_with(
+        &[
+            ("alpha", &writes("a.txt", "desde A")),
+            ("rev", reviewer_script),
+        ],
+        None,
+    )
+    .await;
+    let chat = make_chat(&e).await;
+    let main_before = git(&e.repo, &["rev-parse", "main"]);
+    let chat_before = git(&chat.worktree, &["rev-parse", "HEAD"]);
+    let (a, _) = complete(&e, "Para revisar", "alpha/fast").await;
+    // En el daemon real el reactor ve terminar al revisor y guarda su veredicto.
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+
+    let reviewer = e
+        .runtime
+        .review_start(a.agent_id, Some("rev/fast".into()), None)
+        .await
+        .unwrap();
+    wait_state(&e, &reviewer.to_string(), "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    // El veredicto se guarda al terminar el revisor.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let (status, rec, findings) = loop {
+        let row: Option<(String, Option<String>, Option<String>)> = {
+            let conn = symphony_store::open_reader(&e.db).unwrap();
+            conn.query_row(
+                "SELECT status, recommendation, findings_json FROM reviews WHERE reviewer_agent_id = ?1",
+                [reviewer.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok()
+        };
+        if let Some(r) = row.filter(|r| r.0 != "RUNNING") {
+            break r;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el veredicto no llegó"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(status, "DONE");
+    assert_eq!(rec.as_deref(), Some("REQUEST_CHANGES"));
+    assert!(findings.unwrap().contains("falta el caso de error"));
+
+    // Es una tarea de review, no de trabajo, y no integró nada.
+    let kind: String = one(
+        &e,
+        &format!(
+            "SELECT t.kind FROM tasks t JOIN agents a ON a.task_id = t.id WHERE a.id = '{reviewer}'"
+        ),
+    );
+    assert_eq!(kind, "REVIEW");
+    assert_eq!(git(&e.repo, &["rev-parse", "main"]), main_before);
+    assert_eq!(git(&chat.worktree, &["rev-parse", "HEAD"]), chat_before);
+    assert_eq!(count(&e, "merge_requests"), 0);
+    reactor.abort();
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_creates_agents_with_dependencies_and_integrates_what_finished() {
+    let e = env_with(&[("alpha", &slow_writes("fix.txt", "hecho"))], None).await;
+    let chat = make_chat(&e).await;
+    let plan = "# Plan: lote\n## Fase 1: base\n- [ ] [A] Primera\n- [ ] [B] Segunda (needs: A)\n- [ ] [C] Tercera\n";
+    let batch = e
+        .runtime
+        .batch_create(symphony_daemon::batch::BatchRequest {
+            project_root: e.repo.clone(),
+            title: "Lote de prueba".into(),
+            plan: plan.into(),
+            execution: Execution::Exact("alpha/fast".into()),
+            max_parallel: Some(1),
+            failover: FailoverPolicy::Any,
+            context_mode: ContextMode::Balanced,
+        })
+        .await
+        .unwrap();
+    assert_eq!(batch.parallel, 1);
+    let by_id: std::collections::HashMap<_, _> =
+        batch.agents.iter().map(|a| (a.id.as_str(), a)).collect();
+    // B espera a A; con tope 1, C (misma ola que A) espera a A también.
+    assert_eq!(by_id["B"].depends_on, vec![by_id["A"].task_code.clone()]);
+    assert_eq!(by_id["C"].depends_on, vec![by_id["A"].task_code.clone()]);
+    assert_eq!(by_id["B"].state, AgentState::WaitingDependency);
+    assert_ne!(by_id["A"].state, AgentState::WaitingDependency);
+
+    // El chat sabe lo que delegó.
+    let note: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM messages WHERE agent_id = '{}' AND content LIKE 'Delegado «Lote de prueba»%'",
+            chat.agent_id
+        ),
+    );
+    assert_eq!(note, 1);
+
+    // Con la dependencia en marcha, el lote termina solo (el reactor arranca a B y a C).
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    for a in &batch.agents {
+        wait_state(&e, &a.agent_id.to_string(), "COMPLETED").await;
+    }
+    e.runtime.wait_executors().await;
+    reactor.abort();
+
+    let status = e.runtime.batch_status(batch.milestone).unwrap();
+    assert_eq!(status["done"], 3);
+    assert_eq!(
+        status["pending_integration"], 3,
+        "terminó y no entró a la rama del chat"
+    );
+    let milestone: String = one(
+        &e,
+        &format!(
+            "SELECT status FROM milestones WHERE id = '{}'",
+            batch.milestone
+        ),
+    );
+    assert_eq!(
+        milestone, "APPROVED",
+        "sin aprobación manual, el gate se cierra solo"
+    );
+
+    // Los tres escriben `fix.txt` con el mismo contenido: entran sin conflicto.
+    let r = e
+        .runtime
+        .batch_integrate(batch.milestone, true)
+        .await
+        .unwrap();
+    let results: Vec<&str> = r["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["result"].as_str().unwrap())
+        .collect();
+    assert_eq!(results, ["integrada", "integrada", "integrada"], "{r}");
+    assert!(chat.worktree.join("fix.txt").is_file());
+    let status = e.runtime.batch_status(batch.milestone).unwrap();
+    assert_eq!(status["merged"], 3);
+    assert_eq!(status["pending_integration"], 0);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_with_an_unknown_need_or_a_cycle_is_rejected_before_creating_anything() {
+    let e = env(WORK, None).await;
+    for plan in [
+        "# Plan: x\n## Fase 1: a\n- [ ] [A] uno (needs: Z)\n",
+        "# Plan: x\n## Fase 1: a\n- [ ] [A] uno (needs: B)\n- [ ] [B] dos (needs: A)\n",
+        "# Plan: x\n",
+    ] {
+        let err = e
+            .runtime
+            .batch_create(symphony_daemon::batch::BatchRequest {
+                project_root: e.repo.clone(),
+                title: "malo".into(),
+                plan: plan.into(),
+                execution: Execution::Exact("fake/fast".into()),
+                max_parallel: None,
+                failover: FailoverPolicy::Any,
+                context_mode: ContextMode::Balanced,
+            })
+            .await
+            .unwrap_err();
+        assert!(!err.is_empty());
+    }
+    assert_eq!(count(&e, "agents"), 0);
     e.writer.shutdown();
 }

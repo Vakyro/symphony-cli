@@ -1,6 +1,7 @@
 //! Daemon de Symphony (`symphonyd`): dueño del estado del proyecto.
 
 pub mod attach;
+pub mod batch;
 pub mod bus;
 pub mod checkpoint;
 pub mod context_index;
@@ -12,6 +13,7 @@ pub mod export;
 pub mod handoff;
 pub mod health;
 pub mod logging;
+pub mod merge;
 pub mod plan;
 pub mod providers;
 pub mod recorder;

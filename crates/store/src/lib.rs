@@ -9,6 +9,7 @@ use rusqlite_migration::{M, Migrations};
 pub mod context;
 pub mod deps;
 pub mod health;
+pub mod merge;
 pub mod processes;
 pub mod repo;
 pub mod resources;

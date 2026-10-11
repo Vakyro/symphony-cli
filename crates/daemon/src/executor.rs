@@ -657,6 +657,10 @@ impl Runtime {
             if !self.task_is_chat(l.task_id) && self.run_gate(l).await {
                 return;
             }
+            // Pasó (o no hay gate): el trabajo queda en un commit de la rama del agente (F7).
+            if !self.task_is_chat(l.task_id) {
+                self.commit_agent_work(l).await;
+            }
             self.commit_chat_turn(l).await;
             let (agent, task, run) = (l.agent_id, l.task_id, l.run_id);
             let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
@@ -711,6 +715,47 @@ impl Runtime {
         };
         self.finish_failed(l, RunStatus::Failed, code, &reason)
             .await;
+    }
+
+    /// Deja el trabajo del agente en un commit de su rama al completarse la tarea
+    /// (`[merge] commit_on_complete`, por defecto sí). Sin cambios no hace nada.
+    async fn commit_agent_work(&self, l: &Launch) {
+        let on = self
+            .reader
+            .lock()
+            .ok()
+            .and_then(|c| repo::get_project(&c, l.project_id).ok())
+            .and_then(|p| {
+                symphony_core::load_project(Path::new(&p.root_path))
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|p| p.merge)
+            .unwrap_or_default()
+            .commit_on_complete;
+        if !on {
+            return;
+        }
+        let message = self
+            .reader
+            .lock()
+            .ok()
+            .and_then(|c| repo::get_task(&c, l.task_id).ok())
+            .map_or_else(
+                || "symphony: tarea completada".to_string(),
+                |t| format!("{}: {}", t.code, t.title),
+            );
+        let worktree = l.worktree.clone();
+        let agent = l.agent_id;
+        match tokio::task::spawn_blocking(move || Repo::at(worktree).commit_all(&message)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(agent = %agent, error = %e, "no se pudo commitear el trabajo del agente")
+            }
+            Err(e) => {
+                tracing::warn!(agent = %agent, error = %e, "no se pudo commitear el trabajo del agente")
+            }
+        }
     }
 
     /// Turno terminado del chat: commit automático de lo que dejó en su worktree (P07.5.S5).
@@ -1102,8 +1147,12 @@ impl Runtime {
                     .map(|c| c.objective)
                     .ok_or_else(|| AgentOpError("el agente no tiene checkpoint".into()))?;
                 let tokens = symphony_context::handoff::estimate_tokens(&objective);
+                // El chat y los review agents no planifican por fases.
                 let is_chat = self.read_op(|c| {
-                    Ok(repo::get_task(c, agent.task_id)?.code == repo::CHAT_TASK_CODE)
+                    Ok(
+                        repo::get_task(c, agent.task_id)?.code == repo::CHAT_TASK_CODE
+                            || repo::task_kind(c, agent.task_id)? == "REVIEW",
+                    )
                 })?;
                 let prompt = prompt_override
                     .unwrap_or_else(|| self.planned_prompt(agent.task_id, is_chat, &objective));

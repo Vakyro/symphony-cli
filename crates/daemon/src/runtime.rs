@@ -48,6 +48,8 @@ pub struct CreateAgent {
     /// Tareas de las que depende (códigos `T-12` o ids). Mientras alguna no esté `DONE`, el
     /// agente queda en `WAITING_DEPENDENCY` y no arranca (FLOW §9.3).
     pub depends_on: Vec<String>,
+    /// Es la tarea de un review agent (`kind = REVIEW`): no planifica por fases.
+    pub review: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -161,6 +163,8 @@ pub struct Inner {
     pub(crate) stale_after: Duration,
     /// Última actividad (línea de salida) de cada run vivo, en memoria.
     pub(crate) activity: Mutex<HashMap<RunId, Instant>>,
+    /// Una integración a la rama del chat a la vez (P08.S7).
+    pub(crate) integration: tokio::sync::Mutex<()>,
     /// Cola de operaciones pesadas (la pone `serve`; los tests sin daemon no la tienen).
     pub(crate) scheduling: std::sync::OnceLock<Arc<crate::scheduling::Scheduling>>,
     /// Umbral de tokens para rotar el proveedor del chat (P07.5.S6). 0 = apagado.
@@ -240,6 +244,7 @@ impl Runtime {
                 default_profile: Mutex::new("@code".into()),
                 watchers: crate::watcher::Watchers::default(),
                 scheduling: std::sync::OnceLock::new(),
+                integration: tokio::sync::Mutex::new(()),
             }),
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -845,6 +850,7 @@ impl Runtime {
             }),
             decision: if launch_now { pending } else { None },
             deps: dep_ids,
+            review: req.review,
             now,
         };
         if let Err(e) = self.writer.write(Box::new(move |t| tx_data.apply(t))).await {
@@ -879,7 +885,7 @@ impl Runtime {
                 model_id: model.model_id.clone(),
                 worktree: wt_path,
                 cli_model: model.cli_model_id,
-                prompt: self.planned_prompt(task_id, req.chat, &objective),
+                prompt: self.planned_prompt(task_id, req.chat || req.review, &objective),
                 resume_session: None,
             };
             if let Err(reason) = self.launch(launch).await {
@@ -951,6 +957,8 @@ struct TxData {
     decision: Option<crate::routing::Pending>,
     /// Tareas de las que depende (P08.S5).
     deps: Vec<TaskId>,
+    /// `kind = REVIEW` (P08.S7).
+    review: bool,
     now: i64,
 }
 
@@ -963,7 +971,12 @@ impl TxData {
         if let Some((id, pid)) = self.new_session {
             repo::start_session(t, id, self.task.project_id, pid, now)?;
         }
-        repo::insert_task(t, &self.task, now)?;
+        repo::insert_task_kind(
+            t,
+            &self.task,
+            if self.review { "REVIEW" } else { "WORK" },
+            now,
+        )?;
         repo::insert_worktree(t, &self.worktree, now)?;
         repo::insert_agent(t, &self.agent, now)?;
         if let Some((run_id, (provider, model))) = &self.run {

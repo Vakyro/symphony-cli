@@ -389,6 +389,30 @@ pub struct ProjectConfig {
     /// Preparación del worktree de cada agente (P08.S6, F8).
     #[serde(default)]
     pub worktree: Option<WorktreeConfig>,
+    /// Política de integración (P08.S7).
+    #[serde(default)]
+    pub merge: Option<MergeConfig>,
+}
+
+/// `[merge]` de `project.toml`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MergeConfig {
+    /// Integrar a la rama del chat exige aprobación del usuario (por defecto sí:
+    /// «nunca merge sin política explícita», PLAN P08.S7).
+    pub require_approval: bool,
+    /// Al completarse, el agente deja su trabajo en un commit de su rama (F7): sin commit no
+    /// hay nada que integrar. Por defecto sí.
+    pub commit_on_complete: bool,
+}
+
+impl Default for MergeConfig {
+    fn default() -> Self {
+        Self {
+            require_approval: true,
+            commit_on_complete: true,
+        }
+    }
 }
 
 /// `[validation]` de `project.toml`.

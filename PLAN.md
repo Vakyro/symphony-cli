@@ -947,7 +947,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** tiers 1–3 desde `project.toml` (STACK §23); corren a través del scheduler; guardan resultados; resumen de tests (colapso básico); feedback al agente (FLOW §15.2).
 - **Verifica:** repo de prueba con un test que falla → resumen correcto + agente recibe el fallo.
 
-### P08.S7 · Merge, conflictos y review agent
+### P08.S7 · Merge, conflictos y review agent ✅
 - **Qué:** preflight (FLOW §14.2), cola de integración, conflicto → `BLOCKED` + `merge_conflicts`, review agent como task `REVIEW` (FLOW §15.3). **Nunca merge a main sin política explícita.**
 - **Verifica:** Journey D con dos fake-agents que tocan el mismo archivo.
 

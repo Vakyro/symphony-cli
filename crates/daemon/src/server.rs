@@ -413,6 +413,15 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
+        "merge.prepare" => merge_prepare(req, state).await,
+        "merge.approve" | "merge.abort" | "merge.integrate" | "merge.resolve" => {
+            merge_action(req, state).await
+        }
+        "merge.get" => merge_get(req, state),
+        "review.start" => review_start(req, state).await,
+        "batch.create" => batch_create(req, state).await,
+        "batch.status" => batch_status(req, state),
+        "batch.integrate" => batch_integrate(req, state).await,
         "validation.run" => validation_run(req, state).await,
         "validation.get" => validation_get(req, state),
         "task.depend" | "task.undepend" => task_depend(req, state).await,
@@ -485,6 +494,7 @@ async fn agent_create(req: Request, state: &State) -> Response {
         priority,
         chat: p.get("chat").and_then(Value::as_bool).unwrap_or(false),
         depends_on,
+        review: false,
     };
 
     // En su propia tarea: si el request vence (REQUEST_TIMEOUT), la creación
@@ -2138,4 +2148,251 @@ fn validation_get(req: Request, state: &State) -> Response {
             })).collect::<Vec<_>>(),
         }))
     })
+}
+
+// --- integración, revisión y lotes (P08.S7) ---------------------------------------------
+
+/// La solicitud de integración del request: por `merge_request` o la última del `agent`.
+fn mr_of(state: &State, p: &Value) -> Result<String, String> {
+    if let Some(id) = p.get("merge_request").and_then(Value::as_str) {
+        return Ok(id.to_string());
+    }
+    let agent = resolve_agent_id(state, p)?;
+    let conn = state
+        .reader
+        .lock()
+        .map_err(|_| "lector de la base no disponible".to_string())?;
+    symphony_store::merge::latest_mr(&conn, agent)
+        .map_err(|e| e.to_string())?
+        .map(|m| m.id)
+        .ok_or_else(|| {
+            "el agente no tiene una solicitud de integración: corre `merge.prepare`".into()
+        })
+}
+
+async fn merge_prepare(req: Request, state: &State) -> Response {
+    let agent = match resolve_agent_id(state, &req.params) {
+        Ok(a) => a,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let validate = req
+        .params
+        .get("validate")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    match state.runtime.merge_prepare(agent, validate).await {
+        Ok(p) => Response::ok(req.id, p.to_json()),
+        Err(e) => Response::error(req.id, "merge_error", e),
+    }
+}
+
+async fn merge_action(req: Request, state: &State) -> Response {
+    let id = match mr_of(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let result = match req.method.as_str() {
+        "merge.approve" => state
+            .runtime
+            .merge_approve(&id)
+            .await
+            .map(|()| json!({ "merge_request": id, "approved": true })),
+        "merge.abort" => state
+            .runtime
+            .merge_abort(&id)
+            .await
+            .map(|()| json!({ "merge_request": id, "status": "ABORTED" })),
+        "merge.integrate" => state
+            .runtime
+            .merge_integrate(&id)
+            .await
+            .map(|commit| json!({ "merge_request": id, "status": "MERGED", "commit": commit })),
+        _ => {
+            let resolution = match req.params.get("resolution").and_then(Value::as_str) {
+                Some("manual") => symphony_core::ConflictResolution::Manual,
+                Some("reviewer") => symphony_core::ConflictResolution::Reviewer,
+                _ => {
+                    return Response::error(
+                        req.id,
+                        "invalid_params",
+                        "`resolution` tiene que ser manual o reviewer",
+                    );
+                }
+            };
+            state
+                .runtime
+                .merge_mark_resolved(&id, resolution)
+                .await
+                .map(|n| json!({ "merge_request": id, "resolved": n }))
+        }
+    };
+    match result {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "merge_error", e),
+    }
+}
+
+fn merge_get(req: Request, state: &State) -> Response {
+    agent_view(req, state, |c, agent| {
+        let id: symphony_core::AgentId =
+            agent.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let mr = symphony_store::merge::latest_mr(c, id).map_err(rusqlite::Error::from)?;
+        let (conflicts, preflight) = match &mr {
+            Some(m) => (
+                symphony_store::merge::conflicts_of(c, &m.id).map_err(rusqlite::Error::from)?,
+                m.preflight_json
+                    .as_deref()
+                    .and_then(|j| serde_json::from_str::<Value>(j).ok()),
+            ),
+            None => (Vec::new(), None),
+        };
+        let reviews =
+            symphony_store::merge::reviews_of_target(c, id).map_err(rusqlite::Error::from)?;
+        Ok(json!({
+            "agent_id": agent,
+            "merge_request": mr.as_ref().map(|m| json!({
+                "id": m.id,
+                "status": m.status.as_str(),
+                "target_branch": m.target_branch,
+                "requires_approval": m.requires_approval,
+                "approved_at": m.approved_at,
+                "merge_commit": m.merge_commit,
+                "merged_at": m.merged_at,
+                "preflight": preflight,
+            })),
+            "conflicts": conflicts.iter().map(|k| json!({
+                "path": k.path,
+                "other_agent_id": k.other_agent_id.map(|a| a.to_string()),
+                "resolution": k.resolution.as_str(),
+            })).collect::<Vec<_>>(),
+            "reviews": reviews.iter().map(|r| json!({
+                "id": r.id,
+                "reviewer_agent_id": r.reviewer_agent_id.to_string(),
+                "status": r.status.as_str(),
+                "recommendation": r.recommendation.map(|x| x.as_str()),
+                "findings": r.findings_json.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()),
+            })).collect::<Vec<_>>(),
+        }))
+    })
+}
+
+async fn review_start(req: Request, state: &State) -> Response {
+    let agent = match resolve_agent_id(state, &req.params) {
+        Ok(a) => a,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let model = req
+        .params
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let profile = req
+        .params
+        .get("profile")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let runtime = state.runtime.clone();
+    let started =
+        tokio::spawn(async move { runtime.review_start(agent, model, profile).await }).await;
+    match started {
+        Ok(Ok(reviewer)) => {
+            Response::ok(req.id, json!({ "reviewer_agent_id": reviewer.to_string() }))
+        }
+        Ok(Err(e)) => Response::error(req.id, "review_error", e),
+        Err(e) => Response::error(req.id, "review_error", e.to_string()),
+    }
+}
+
+async fn batch_create(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let Some(plan) = p
+        .get("plan")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+    else {
+        return Response::error(
+            req.id,
+            "invalid_params",
+            "falta `plan` (el plan en Markdown)",
+        );
+    };
+    let title = p
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .map_or_else(|| "Lote".to_string(), |t| t.trim().to_string());
+    let project_root = match p.get("project_root").and_then(Value::as_str) {
+        Some(r) => PathBuf::from(r),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    let execution = if let Some(m) = p.get("model").and_then(Value::as_str) {
+        crate::runtime::Execution::Exact(m.to_string())
+    } else if let Some(pr) = p.get("profile").and_then(Value::as_str) {
+        crate::runtime::Execution::Profile(pr.to_string())
+    } else {
+        crate::runtime::Execution::DecideLater
+    };
+    let max_parallel = p
+        .get("max_parallel")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok());
+    let request = crate::batch::BatchRequest {
+        project_root,
+        title,
+        plan: plan.to_string(),
+        execution,
+        max_parallel,
+        failover: symphony_core::FailoverPolicy::Any,
+        context_mode: symphony_core::ContextMode::Balanced,
+    };
+    let runtime = state.runtime.clone();
+    let created = tokio::spawn(async move { runtime.batch_create(request).await }).await;
+    match created {
+        Ok(Ok(b)) => Response::ok(
+            req.id,
+            json!({
+                "milestone": b.milestone.to_string(),
+                "parallel": b.parallel,
+                "agents": b.agents.iter().map(|a| json!({
+                    "id": a.id,
+                    "agent_id": a.agent_id.to_string(),
+                    "task_code": a.task_code,
+                    "state": a.state.as_str(),
+                    "depends_on": a.depends_on,
+                })).collect::<Vec<_>>(),
+            }),
+        ),
+        Ok(Err(e)) => Response::error(req.id, "batch_error", e),
+        Err(e) => Response::error(req.id, "batch_error", e.to_string()),
+    }
+}
+
+fn batch_milestone(p: &Value) -> Result<symphony_core::MilestoneId, String> {
+    p.get("milestone")
+        .and_then(Value::as_str)
+        .and_then(|m| m.parse().ok())
+        .ok_or_else(|| "falta `milestone` (el id del lote)".to_string())
+}
+
+fn batch_status(req: Request, state: &State) -> Response {
+    match batch_milestone(&req.params).and_then(|m| state.runtime.batch_status(m)) {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "batch_error", e),
+    }
+}
+
+async fn batch_integrate(req: Request, state: &State) -> Response {
+    let milestone = match batch_milestone(&req.params) {
+        Ok(m) => m,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let approve = req
+        .params
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match state.runtime.batch_integrate(milestone, approve).await {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "batch_error", e),
+    }
 }

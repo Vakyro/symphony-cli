@@ -197,12 +197,12 @@ impl Runtime {
         planning_prompt(objective, task, cfg.min_tasks_per_phase)
     }
 
+    /// El chat y los review agents no llevan plan por fases ni gate de validación.
     pub(crate) fn task_is_chat(&self, task: TaskId) -> bool {
-        self.reader
-            .lock()
-            .ok()
-            .and_then(|c| repo::get_task(&c, task).ok())
-            .is_some_and(|t| t.code == repo::CHAT_TASK_CODE)
+        self.reader.lock().ok().is_some_and(|c| {
+            repo::get_task(&c, task).is_ok_and(|t| t.code == repo::CHAT_TASK_CODE)
+                || repo::task_kind(&c, task).is_ok_and(|k| k == "REVIEW")
+        })
     }
 
     /// El CLI salió bien: ¿el plan pide otra fase, se detuvo o terminó? Devuelve `true` si
