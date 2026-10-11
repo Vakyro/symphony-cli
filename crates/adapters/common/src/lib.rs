@@ -260,6 +260,32 @@ pub struct HookCommand {
     pub args: Vec<String>,
 }
 
+/// Nombre con que cada CLI conoce al broker MCP del contexto (P09.S8).
+pub const MCP_SERVER_NAME: &str = "symphony-context";
+/// Herramientas del broker: los CLIs que piden permiso por herramienta las permiten por nombre.
+pub const MCP_TOOLS: [&str; 3] = ["context_search", "context_retrieve", "context_lines"];
+
+/// El broker (`symphony mcp serve`) en el mismo ejecutable que el hook, con las variables del
+/// agente que tiene que ver (`SYMPHONY_*`: ningún CLI se las pasa solo a un servidor MCP).
+/// `None` si el spawn no lleva hook o si `SYMPHONY_NO_MCP` está definida (apagado de emergencia).
+pub fn broker(req: &SpawnRequest) -> Option<(HookCommand, Vec<(String, String)>)> {
+    if std::env::var_os("SYMPHONY_NO_MCP").is_some() {
+        return None;
+    }
+    let hook = req.hook.as_ref()?;
+    let command = HookCommand {
+        program: hook.program.clone(),
+        args: vec!["mcp".into(), "serve".into()],
+    };
+    let env = req
+        .env
+        .iter()
+        .filter(|(k, _)| k.starts_with("SYMPHONY_"))
+        .cloned()
+        .collect();
+    Some((command, env))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpawnRequest {
     pub worktree: PathBuf,

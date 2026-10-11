@@ -133,6 +133,25 @@ impl ClaudeAdapter {
         if let Some(hook) = &req.hook {
             spec = spec.arg("--settings").arg(hook_settings(hook).to_string());
         }
+        // Broker MCP del contexto (P09.S8). Sin verificar en vivo: necesita cuota (STATUS).
+        if let Some((cmd, env)) = symphony_adapter_common::broker(req) {
+            let name = symphony_adapter_common::MCP_SERVER_NAME;
+            let config = json!({ "mcpServers": { name: {
+                "command": cmd.program.to_string_lossy(),
+                "args": cmd.args,
+                "env": env.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+            }}});
+            let allowed = symphony_adapter_common::MCP_TOOLS
+                .iter()
+                .map(|t| format!("mcp__{name}__{t}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            spec = spec
+                .arg("--mcp-config")
+                .arg(config.to_string())
+                .arg("--allowedTools")
+                .arg(allowed);
+        }
         for (k, v) in &req.env {
             spec = spec.env(k, v);
         }

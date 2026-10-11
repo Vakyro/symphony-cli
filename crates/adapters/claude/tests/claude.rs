@@ -191,6 +191,19 @@ fn spawn_uses_headless_stream_json_and_injects_hooks_per_invocation() {
         "acceptEdits"
     );
 
+    // El broker MCP del contexto va por invocación y sus herramientas se permiten por nombre.
+    let mcp: Value =
+        serde_json::from_str(&args[args.iter().position(|a| a == "--mcp-config").unwrap() + 1])
+            .unwrap();
+    let server = &mcp["mcpServers"]["symphony-context"];
+    assert_eq!(server["command"], r"C:\Program Files\Symphony\symphony.exe");
+    assert_eq!(server["args"], serde_json::json!(["mcp", "serve"]));
+    assert_eq!(server["env"]["SYMPHONY_AGENT_ID"], "a1");
+    assert_eq!(
+        args[args.iter().position(|a| a == "--allowedTools").unwrap() + 1],
+        "mcp__symphony-context__context_search,mcp__symphony-context__context_retrieve,mcp__symphony-context__context_lines"
+    );
+
     // Los 8 hooks llaman a `symphony hook emit`, con comillas por el espacio en la ruta.
     let settings: Value =
         serde_json::from_str(&args[args.iter().position(|a| a == "--settings").unwrap() + 1])

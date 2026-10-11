@@ -160,7 +160,21 @@ fn spawn_reads_prompt_from_stdin_and_injects_hooks_with_c() {
         .filter(|(k, _)| *k == "-c")
         .map(|(_, v)| v)
         .collect();
-    assert_eq!(overrides.len(), 6);
+    // 6 hooks + el broker MCP del contexto (command, args, env).
+    assert_eq!(overrides.len(), 9);
+    assert!(overrides.iter().any(|o| o.starts_with(
+        r#"mcp_servers.symphony-context.command="C:\\Program Files\\Symphony\\symphony.exe""#
+    )));
+    assert!(
+        overrides
+            .iter()
+            .any(|o| *o == "mcp_servers.symphony-context.args=[\"mcp\",\"serve\"]")
+    );
+    assert!(
+        overrides
+            .iter()
+            .any(|o| *o == "mcp_servers.symphony-context.env={SYMPHONY_AGENT_ID=\"a1\"}")
+    );
     assert!(
         overrides
             .iter()

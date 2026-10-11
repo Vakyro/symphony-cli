@@ -41,7 +41,9 @@ fn invalid(msg: impl Into<String>) -> Failure {
 }
 
 fn parse_uri(uri: &str) -> Result<(), Failure> {
-    CtxUri::parse(uri).map(|_| ()).map_err(|e| invalid(e.to_string()))
+    CtxUri::parse(uri)
+        .map(|_| ())
+        .map_err(|e| invalid(e.to_string()))
 }
 
 fn store_err(e: impl std::fmt::Display) -> Failure {

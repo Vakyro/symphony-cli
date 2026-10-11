@@ -96,6 +96,29 @@ pub fn hook_overrides(hook: &HookCommand) -> Vec<String> {
         .collect()
 }
 
+/// Cadena TOML básica: escapa `\` y `"`.
+fn toml_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Un override `-c` por campo del servidor MCP del contexto.
+pub fn mcp_overrides(cmd: &HookCommand, env: &[(String, String)]) -> Vec<String> {
+    let name = symphony_adapter_common::MCP_SERVER_NAME;
+    let args: Vec<String> = cmd.args.iter().map(|a| toml_quote(a)).collect();
+    let env: Vec<String> = env
+        .iter()
+        .map(|(k, v)| format!("{k}={}", toml_quote(v)))
+        .collect();
+    vec![
+        format!(
+            "mcp_servers.{name}.command={}",
+            toml_quote(&cmd.program.to_string_lossy())
+        ),
+        format!("mcp_servers.{name}.args=[{}]", args.join(",")),
+        format!("mcp_servers.{name}.env={{{}}}", env.join(",")),
+    ]
+}
+
 fn s(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
 }
@@ -117,6 +140,12 @@ impl CodexAdapter {
         if let Some(hook) = &req.hook {
             spec = spec.arg("--dangerously-bypass-hook-trust");
             for o in hook_overrides(hook) {
+                spec = spec.arg("-c").arg(o);
+            }
+        }
+        // Broker MCP del contexto (P09.S8). Sin verificar en vivo: necesita cuota (STATUS).
+        if let Some((cmd, env)) = symphony_adapter_common::broker(req) {
+            for o in mcp_overrides(&cmd, &env) {
                 spec = spec.arg("-c").arg(o);
             }
         }

@@ -1,5 +1,6 @@
 mod client;
 mod hook;
+mod mcp;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -150,6 +151,11 @@ enum Cmd {
         /// ID o número del agente.
         agent: String,
     },
+    /// Broker MCP del contexto del proyecto (lo lanzan los CLIs de los agentes).
+    Mcp {
+        #[command(subcommand)]
+        action: McpCmd,
+    },
     /// Uso interno: lo ejecutan los hooks de los CLIs.
     #[command(hide = true)]
     Hook {
@@ -198,6 +204,12 @@ enum ContextCmd {
         /// Dirección `ctx://`.
         uri: String,
     },
+}
+
+#[derive(Subcommand)]
+enum McpCmd {
+    /// Sirve MCP por stdio: `context_search`, `context_retrieve` y `context_lines`.
+    Serve,
 }
 
 #[derive(Subcommand)]
@@ -259,6 +271,9 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
         Some(Cmd::Hook {
             action: HookCmd::Emit,
         }) => hook::emit(),
+        Some(Cmd::Mcp {
+            action: McpCmd::Serve,
+        }) => mcp::serve(home.to_path_buf()).await?,
         Some(Cmd::Providers { action }) => {
             let method = if matches!(action, Some(ProvidersCmd::Refresh)) {
                 "providers.refresh"

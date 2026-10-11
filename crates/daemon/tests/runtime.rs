@@ -3178,13 +3178,23 @@ async fn project_files_stay_searchable_as_they_change() {
 #[tokio::test(flavor = "multi_thread")]
 async fn context_mcp_search_retrieve_and_lines() {
     use symphony_daemon::context_mcp as mcp;
-    let e = env("[[step]]
+    let e = env(
+        "[[step]]
 kind = \"say\"
 text = \"ok\"
-", None).await;
+",
+        None,
+    )
+    .await;
     std::fs::create_dir_all(e.repo.join("src")).unwrap();
-    let body: String = (1..=30).map(|i| format!("linea {i} rotarmcp
-")).collect();
+    let body: String = (1..=30)
+        .map(|i| {
+            format!(
+                "linea {i} rotarmcp
+"
+            )
+        })
+        .collect();
     std::fs::write(e.repo.join("src/big.ts"), &body).unwrap();
     e.runtime
         .create_agent(req(&e, "mcp", Execution::Exact("fake/fast".into())))
@@ -3206,7 +3216,12 @@ text = \"ok\"
         std::thread::sleep(Duration::from_millis(100));
     };
     assert_eq!(found.value["hits"][0]["uri"], "ctx://file/src/big.ts");
-    assert!(found.retrievals.iter().all(|r| r.found && r.operation == "SEARCH"));
+    assert!(
+        found
+            .retrievals
+            .iter()
+            .all(|r| r.found && r.operation == "SEARCH")
+    );
 
     let uri = "ctx://file/src/big.ts";
     let all = mcp::retrieve(&conn, &objects, &project, uri).unwrap();
@@ -3215,8 +3230,11 @@ text = \"ok\"
     assert_eq!(all.value["total_lines"], 30);
 
     let some = mcp::lines(&conn, &objects, &project, uri, 3, 4).unwrap();
-    assert_eq!(some.value["text"], "linea 3 rotarmcp
-linea 4 rotarmcp");
+    assert_eq!(
+        some.value["text"],
+        "linea 3 rotarmcp
+linea 4 rotarmcp"
+    );
     assert!(some.retrievals[0].found);
 
     // Más allá del final: miss registrable, no error.

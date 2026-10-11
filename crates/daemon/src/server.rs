@@ -916,9 +916,7 @@ async fn context_mcp(req: Request, state: &State) -> Response {
                 None => Err(("invalid_params", "falta `uri`".to_string())),
             },
             _ => match (s("uri"), n("from"), n("to")) {
-                (Some(u), Some(from), Some(to)) => {
-                    mcp::lines(&c, &objects, &project, u, from, to)
-                }
+                (Some(u), Some(from), Some(to)) => mcp::lines(&c, &objects, &project, u, from, to),
                 _ => Err(("invalid_params", "faltan `uri`, `from` y `to`".to_string())),
             },
         },

@@ -42,6 +42,7 @@ ulid = "3"
 toml_edit = { version = "0.25.15", features = ["serde"] }
 tempfile = "3.27"
 regex = "1.13"
+rmcp = { version = "3.4", default-features = false, features = ["server", "macros", "transport-io"] }
 tree-sitter = "0.27"
 notify = "8.2"
 ignore = "0.4.33"
