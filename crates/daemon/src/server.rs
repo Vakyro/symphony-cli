@@ -384,6 +384,8 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "context.stats" => read_view(req, state, crate::context_views::stats),
         "context.raw" => context_raw(req, state),
         "context.search" | "context.retrieve" | "context.lines" => context_mcp(req, state).await,
+        "skills.shared" | "mcp.list" => shared_list(req, state).await,
+        "skills.set_enabled" | "mcp.set_enabled" => shared_toggle(req, state).await,
         "fact.set" => fact_set(req, state).await,
         "fact.list" => fact_list(req, state),
         "provider.set_enabled" => provider_set_enabled(req, state).await,
@@ -950,6 +952,126 @@ async fn context_mcp(req: Request, state: &State) -> Response {
             .await;
     }
     Response::ok(req.id, answer.value)
+}
+
+/// `skills.shared` y `mcp.list` (P09.S9): escanea los archivos, deja al día el índice y lista
+/// con el interruptor de cada uno. Lo inválido de `mcp.toml` va en `warnings`.
+async fn shared_list(req: Request, state: &State) -> Response {
+    use crate::shared;
+    use symphony_store::shared as index;
+    let project = match resolve_project(state, &req.params) {
+        Ok(pr) => pr,
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let root = PathBuf::from(&project.root_path);
+    let pid = project.id.to_string();
+    let skills = shared::scan_skills(&state.home, Some(&root));
+    let mut warnings = Vec::new();
+    let servers = shared::scan_mcp(&state.home, Some(&root), &mut warnings);
+    let found_skills: Vec<_> = skills.iter().map(shared::SkillDef::found).collect();
+    let found_servers: Vec<_> = servers.iter().map(shared::McpDef::found).collect();
+    let (p, now) = (pid.clone(), now_ms());
+    let synced = state
+        .writer
+        .write(Box::new(move |t| {
+            index::sync_skills(t, &p, &found_skills, now)?;
+            index::sync_mcp(t, &p, &found_servers)?;
+            Ok(())
+        }))
+        .await;
+    if let Err(e) = synced {
+        return Response::error(req.id, "store_error", e.to_string());
+    }
+    let conn = match state.reader.lock() {
+        Ok(c) => c,
+        Err(_) => return Response::error(req.id, "store_error", "lector no disponible"),
+    };
+    if req.method == "mcp.list" {
+        let rows = match index::list_mcp(&conn, &pid) {
+            Ok(r) => r,
+            Err(e) => return Response::error(req.id, "store_error", e.to_string()),
+        };
+        let list: Vec<Value> = rows
+            .iter()
+            .map(|r| {
+                // El archivo es la fuente: lo que no se registra por invocación se avisa.
+                let note = if r.share_mode == "SHARED" {
+                    Some("instancia compartida sin soporte: no se registra")
+                } else {
+                    None
+                };
+                json!({
+                    "name": r.name, "scope": r.scope, "transport": r.transport,
+                    "share_mode": r.share_mode, "command": r.command, "url": r.url,
+                    "enabled": r.enabled, "note": note,
+                })
+            })
+            .collect();
+        return Response::ok(req.id, json!({ "servers": list, "warnings": warnings }));
+    }
+    let rows = match index::list_skills(&conn, &pid) {
+        Ok(r) => r,
+        Err(e) => return Response::error(req.id, "store_error", e.to_string()),
+    };
+    let list: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let def = skills
+                .iter()
+                .find(|s| s.name == r.name && s.scope == r.scope);
+            let shadowed = r.scope == "USER"
+                && skills
+                    .iter()
+                    .any(|s| s.scope == "PROJECT" && s.name == r.name);
+            json!({
+                "name": r.name, "scope": r.scope, "path": r.path, "enabled": r.enabled,
+                "description": def.map(|d| d.description.clone()),
+                "providers": def.map(|d| d.providers.clone()).unwrap_or_default(),
+                "shadowed": shadowed,
+            })
+        })
+        .collect();
+    Response::ok(req.id, json!({ "skills": list }))
+}
+
+/// `skills.set_enabled` y `mcp.set_enabled`: `{name, enabled}` sobre el proyecto.
+async fn shared_toggle(req: Request, state: &State) -> Response {
+    use symphony_store::shared as index;
+    let p = &req.params;
+    let (Some(name), Some(enabled)) = (
+        p.get("name").and_then(Value::as_str).map(str::to_string),
+        p.get("enabled").and_then(Value::as_bool),
+    ) else {
+        return Response::error(req.id, "invalid_params", "faltan `name` y `enabled`");
+    };
+    let project = match resolve_project(state, p) {
+        Ok(pr) => pr.id.to_string(),
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let is_skill = req.method == "skills.set_enabled";
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let n = if is_skill {
+                index::set_skill_enabled(t, &project, &name, enabled)?
+            } else {
+                index::set_mcp_enabled(t, &project, &name, enabled)?
+            };
+            let _ = tx.send(n);
+            Ok(())
+        }))
+        .await;
+    match (written, rx.await) {
+        (Ok(()), Ok(0)) => Response::error(
+            req.id,
+            "not_found",
+            "no hay una skill o un servidor con ese nombre (revisa `symphony skills` o `symphony mcp list`)",
+        ),
+        (Ok(()), Ok(n)) => Response::ok(req.id, json!({ "updated": n, "enabled": enabled })),
+        (Err(e), _) => Response::error(req.id, "store_error", e.to_string()),
+        (_, Err(_)) => Response::error(req.id, "internal", "no se pudo actualizar"),
+    }
 }
 
 fn agent_view(

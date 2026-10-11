@@ -280,10 +280,79 @@ pub fn broker(req: &SpawnRequest) -> Option<(HookCommand, Vec<(String, String)>)
     let env = req
         .env
         .iter()
-        .filter(|(k, _)| k.starts_with("SYMPHONY_"))
+        .filter(|(k, _)| k.starts_with("SYMPHONY_") && k != ENV_MCP_EXTRA && k != ENV_PLUGIN_DIR)
         .cloned()
         .collect();
     Some((command, env))
+}
+
+/// Variable con los servidores MCP extra del usuario (`mcp.toml`), en JSON (P09.S9).
+pub const ENV_MCP_EXTRA: &str = "SYMPHONY_MCP_EXTRA";
+/// Variable con el plugin de sesión que lleva las skills compartidas (P09.S9).
+pub const ENV_PLUGIN_DIR: &str = "SYMPHONY_PLUGIN_DIR";
+
+/// Un servidor MCP del usuario que se registra por invocación.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtraMcp {
+    pub name: String,
+    pub http: bool,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub url: Option<String>,
+}
+
+/// Los servidores de `mcp.toml` habilitados que el daemon dejó en `SYMPHONY_MCP_EXTRA`.
+/// Vacío si no hay, si el JSON no se entiende o si `SYMPHONY_NO_MCP` está definida.
+pub fn extra_mcp(req: &SpawnRequest) -> Vec<ExtraMcp> {
+    if std::env::var_os("SYMPHONY_NO_MCP").is_some() {
+        return Vec::new();
+    }
+    let Some(raw) = req.env.iter().find(|(k, _)| k == ENV_MCP_EXTRA) else {
+        return Vec::new();
+    };
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&raw.1) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|v| {
+            let name = json_str(v, "name").filter(|n| !n.is_empty() && n != MCP_SERVER_NAME)?;
+            let http = v["transport"] == "http";
+            let env = v["env"]
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(ExtraMcp {
+                name,
+                http,
+                command: json_str(v, "command"),
+                args: v["args"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                env,
+                url: json_str(v, "url"),
+            })
+        })
+        .collect()
+}
+
+/// El plugin de sesión con las skills compartidas, si el daemon preparó uno.
+pub fn plugin_dir(req: &SpawnRequest) -> Option<PathBuf> {
+    req.env
+        .iter()
+        .find(|(k, _)| k == ENV_PLUGIN_DIR)
+        .map(|(_, v)| PathBuf::from(v))
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 #[derive(Debug, Clone, PartialEq)]

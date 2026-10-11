@@ -151,7 +151,12 @@ enum Cmd {
         /// ID o número del agente.
         agent: String,
     },
-    /// Broker MCP del contexto del proyecto (lo lanzan los CLIs de los agentes).
+    /// Skills compartidas entre proveedores (`~/.symphony/skills`, `.symphony/skills`).
+    Skills {
+        #[command(subcommand)]
+        action: Option<ToggleCmd>,
+    },
+    /// Servidores MCP compartidos (`mcp.toml`) y el broker de contexto.
     Mcp {
         #[command(subcommand)]
         action: McpCmd,
@@ -210,6 +215,34 @@ enum ContextCmd {
 enum McpCmd {
     /// Sirve MCP por stdio: `context_search`, `context_retrieve` y `context_lines`.
     Serve,
+    /// Lista los servidores de `mcp.toml` (usuario y proyecto) con su estado.
+    List,
+    /// Enciende un servidor para los agentes nuevos.
+    Enable {
+        /// Nombre en `mcp.toml`.
+        name: String,
+    },
+    /// Apaga un servidor para los agentes nuevos.
+    Disable {
+        /// Nombre en `mcp.toml`.
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ToggleCmd {
+    /// Lista las skills encontradas.
+    List,
+    /// Enciende una skill para los agentes nuevos.
+    Enable {
+        /// Nombre de la carpeta de la skill.
+        name: String,
+    },
+    /// Apaga una skill para los agentes nuevos.
+    Disable {
+        /// Nombre de la carpeta de la skill.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -226,6 +259,94 @@ enum DaemonCmd {
     Stop,
     /// Dice si el daemon está corriendo, sin arrancarlo.
     Status,
+}
+
+/// `symphony skills|mcp list|enable|disable`: llama al daemon con el proyecto del directorio actual.
+async fn shared_command(
+    home: &std::path::Path,
+    method: &str,
+    toggle: Option<(String, bool)>,
+    what: &str,
+) -> miette::Result<()> {
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .display()
+        .to_string();
+    let mut conn = client::connect_or_start(home).await?;
+    if let Some((name, enabled)) = toggle {
+        client::call(
+            &mut conn,
+            method,
+            json!({ "project_root": cwd, "name": name, "enabled": enabled }),
+        )
+        .await?;
+        println!(
+            "{what} `{name}` {} (vale para los agentes que se creen o continúen desde ahora)",
+            if enabled { "encendido" } else { "apagado" }
+        );
+        return Ok(());
+    }
+    let res = client::call(&mut conn, method, json!({ "project_root": cwd })).await?;
+    print_shared(&res);
+    Ok(())
+}
+
+fn print_shared(res: &Value) {
+    let on = |v: &Value| {
+        if v["enabled"].as_bool() == Some(true) {
+            "on "
+        } else {
+            "off"
+        }
+    };
+    if let Some(skills) = res["skills"].as_array() {
+        if skills.is_empty() {
+            println!(
+                "no hay skills compartidas: crea `~/.symphony/skills/<nombre>/SKILL.md` o `.symphony/skills/<nombre>/SKILL.md`"
+            );
+        }
+        for s in skills {
+            let extra = if s["shadowed"].as_bool() == Some(true) {
+                " (tapada por la del proyecto)"
+            } else {
+                ""
+            };
+            println!(
+                "{} {:<24} {:<8} {}{extra}",
+                on(s),
+                s["name"].as_str().unwrap_or(""),
+                s["scope"].as_str().unwrap_or(""),
+                s["description"].as_str().unwrap_or("")
+            );
+        }
+    }
+    if let Some(servers) = res["servers"].as_array() {
+        if servers.is_empty() {
+            println!(
+                "no hay servidores MCP: define `[servers.<nombre>]` en `~/.symphony/mcp.toml` o `.symphony/mcp.toml`"
+            );
+        }
+        for s in servers {
+            let target = s["command"]
+                .as_str()
+                .or_else(|| s["url"].as_str())
+                .unwrap_or("");
+            let note = s["note"]
+                .as_str()
+                .map(|n| format!(" — {n}"))
+                .unwrap_or_default();
+            println!(
+                "{} {:<24} {:<8} {:<6} {target}{note}",
+                on(s),
+                s["name"].as_str().unwrap_or(""),
+                s["scope"].as_str().unwrap_or(""),
+                s["transport"].as_str().unwrap_or("")
+            );
+        }
+        for w in res["warnings"].as_array().into_iter().flatten() {
+            eprintln!("aviso: {}", w.as_str().unwrap_or(""));
+        }
+    }
 }
 
 fn main() -> miette::Result<()> {
@@ -274,6 +395,22 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
         Some(Cmd::Mcp {
             action: McpCmd::Serve,
         }) => mcp::serve(home.to_path_buf()).await?,
+        Some(Cmd::Mcp { action }) => {
+            let (method, toggle) = match action {
+                McpCmd::List | McpCmd::Serve => ("mcp.list", None),
+                McpCmd::Enable { name } => ("mcp.set_enabled", Some((name, true))),
+                McpCmd::Disable { name } => ("mcp.set_enabled", Some((name, false))),
+            };
+            shared_command(home, method, toggle, "servidor").await?;
+        }
+        Some(Cmd::Skills { action }) => {
+            let (method, toggle) = match action {
+                None | Some(ToggleCmd::List) => ("skills.shared", None),
+                Some(ToggleCmd::Enable { name }) => ("skills.set_enabled", Some((name, true))),
+                Some(ToggleCmd::Disable { name }) => ("skills.set_enabled", Some((name, false))),
+            };
+            shared_command(home, method, toggle, "skill").await?;
+        }
         Some(Cmd::Providers { action }) => {
             let method = if matches!(action, Some(ProvidersCmd::Refresh)) {
                 "providers.refresh"

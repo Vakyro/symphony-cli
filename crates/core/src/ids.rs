@@ -79,6 +79,8 @@ ulid_id!(
     UsageRecordId,
     RoutingDecisionId,
     FactId,
+    SkillId,
+    McpServerId,
 );
 
 #[cfg(test)]

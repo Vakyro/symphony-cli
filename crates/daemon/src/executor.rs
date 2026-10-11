@@ -161,13 +161,70 @@ impl Runtime {
         Box::pin(self.launch_inner(l))
     }
 
+    /// Skills y servidores MCP compartidos para este run (P09.S9): deja al día su índice y
+    /// devuelve las variables que cada adapter traduce a su CLI. Nunca falla el lanzamiento:
+    /// sin proyecto legible o con un archivo roto, el agente arranca sin lo compartido.
+    async fn shared_env(&self, l: &Launch) -> Vec<(String, String)> {
+        use crate::shared;
+        use symphony_store::shared as index;
+        let Ok(project) = self.read_op(|c| repo::get_project(c, l.project_id)) else {
+            return Vec::new();
+        };
+        let root = PathBuf::from(&project.root_path);
+        let skills = shared::scan_skills(&self.home, Some(&root));
+        let mut warnings = Vec::new();
+        let servers = shared::scan_mcp(&self.home, Some(&root), &mut warnings);
+        for w in &warnings {
+            tracing::warn!("{w}");
+        }
+        let pid = l.project_id.to_string();
+        let found_skills: Vec<_> = skills.iter().map(shared::SkillDef::found).collect();
+        let found_servers: Vec<_> = servers.iter().map(shared::McpDef::found).collect();
+        let (p, now) = (pid.clone(), now_ms());
+        let _ = self
+            .writer
+            .write(Box::new(move |t| {
+                index::sync_skills(t, &p, &found_skills, now)?;
+                index::sync_mcp(t, &p, &found_servers)?;
+                Ok(())
+            }))
+            .await;
+        let skill_rows = self
+            .read_op(|c| index::list_skills(c, &pid))
+            .unwrap_or_default();
+        let mcp_rows = self
+            .read_op(|c| index::list_mcp(c, &pid))
+            .unwrap_or_default();
+
+        let dir = self.home.join("runtime").join(&pid).join("claude-plugin");
+        shared::launch_env(
+            &l.provider_id,
+            &dir,
+            &skills,
+            &servers,
+            &|s| {
+                skill_rows
+                    .iter()
+                    .find(|r| r.name == s.name && r.scope == s.scope)
+                    .is_none_or(|r| r.enabled)
+            },
+            &|d| {
+                mcp_rows
+                    .iter()
+                    .find(|r| r.name == d.name && r.scope == d.scope)
+                    .map_or(d.enabled_default, |r| r.enabled)
+            },
+        )
+    }
+
     async fn launch_inner(&self, l: Launch) -> Result<(), String> {
-        let env = vec![
+        let mut env = vec![
             ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
             ("SYMPHONY_PROJECT_ID".into(), l.project_id.to_string()),
             ("SYMPHONY_RUN_ID".into(), l.run_id.to_string()),
             ("SYMPHONY_HOME".into(), self.home.display().to_string()),
         ];
+        env.extend(self.shared_env(&l).await);
         let spawn_req = SpawnRequest {
             worktree: l.worktree.clone(),
             model: l.cli_model.clone(),

@@ -25,7 +25,8 @@ Commands:
   logs           Muestra el historial de mensajes/conversación del agente
   attach         Abre la sesión del agente en el CLI oficial (Claude Code, Codex) en una terminal nueva
   inspect        Inspecciona en detalle el estado, tarea, worktree, checkpoints y runs del agente
-  mcp            Broker MCP del contexto del proyecto (lo lanzan los CLIs de los agentes)
+  skills         Skills compartidas entre proveedores (`~/.symphony/skills`, `.symphony/skills`)
+  mcp            Servidores MCP compartidos (`mcp.toml`) y el broker de contexto
   help           Print this message or the help of the given subcommand(s)
 
 Options:

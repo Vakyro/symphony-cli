@@ -27,8 +27,9 @@ pub use health::{
 };
 pub use ids::{
     AgentId, CheckpointId, ContextObjectId, ExecutorChangeId, FactId, HandoffId, HandoffItemId,
-    InvalidId, MessageId, ProjectId, ProviderFailureId, ProviderHealthId, RecoveryItemId,
-    RoutingDecisionId, RunId, SessionId, TaskId, ToolCallId, UsageRecordId, WorktreeId,
+    InvalidId, McpServerId, MessageId, ProjectId, ProviderFailureId, ProviderHealthId,
+    RecoveryItemId, RoutingDecisionId, RunId, SessionId, SkillId, TaskId, ToolCallId,
+    UsageRecordId, WorktreeId,
 };
 pub use redact::{REDACTED, redact};
 pub use transitions::InvalidTransition;

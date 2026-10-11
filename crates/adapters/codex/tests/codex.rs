@@ -267,3 +267,37 @@ fn turn_completed_reports_turn_usage() {
         }]
     );
 }
+
+#[test]
+fn extra_mcp_servers_become_c_overrides() {
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "gpt-5.6-luna".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        hook: None,
+        env: vec![(
+            "SYMPHONY_MCP_EXTRA".into(),
+            serde_json::json!([
+                { "name": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "server-fs"], "env": { "RAIZ": "." } },
+                { "name": "remoto", "transport": "http", "url": "https://example.test/mcp" }
+            ])
+            .to_string(),
+        )],
+    };
+    let args: Vec<String> = adapter()
+        .spawn_spec(&req)
+        .unwrap()
+        .args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    for want in [
+        "mcp_servers.fs.command=\"npx\"",
+        "mcp_servers.fs.args=[\"-y\",\"server-fs\"]",
+        "mcp_servers.fs.env={\"RAIZ\"=\".\"}",
+        "mcp_servers.remoto.url=\"https://example.test/mcp\"",
+    ] {
+        assert!(args.iter().any(|a| a == want), "falta {want}: {args:?}");
+    }
+}

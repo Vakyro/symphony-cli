@@ -2886,11 +2886,13 @@ dependencies = [
 name = "symphony-daemon"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "ignore",
  "miette",
  "notify",
  "proptest",
  "rusqlite",
+ "serde",
  "serde_json",
  "symphony-adapter-antigravity",
  "symphony-adapter-claude",
@@ -2911,6 +2913,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "toml_edit",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

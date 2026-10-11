@@ -119,6 +119,33 @@ pub fn mcp_overrides(cmd: &HookCommand, env: &[(String, String)]) -> Vec<String>
     ]
 }
 
+/// Los overrides `-c` de un servidor MCP del usuario (`mcp.toml`).
+pub fn extra_mcp_overrides(m: &symphony_adapter_common::ExtraMcp) -> Vec<String> {
+    let name = &m.name;
+    if m.http {
+        return m
+            .url
+            .iter()
+            .map(|u| format!("mcp_servers.{name}.url={}", toml_quote(u)))
+            .collect();
+    }
+    let mut out = Vec::new();
+    if let Some(c) = &m.command {
+        out.push(format!("mcp_servers.{name}.command={}", toml_quote(c)));
+        let args: Vec<String> = m.args.iter().map(|a| toml_quote(a)).collect();
+        out.push(format!("mcp_servers.{name}.args=[{}]", args.join(",")));
+        if !m.env.is_empty() {
+            let env: Vec<String> = m
+                .env
+                .iter()
+                .map(|(k, v)| format!("{}={}", toml_quote(k), toml_quote(v)))
+                .collect();
+            out.push(format!("mcp_servers.{name}.env={{{}}}", env.join(",")));
+        }
+    }
+    out
+}
+
 fn s(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
 }
@@ -146,6 +173,11 @@ impl CodexAdapter {
         // Broker MCP del contexto (P09.S8). Sin verificar en vivo: necesita cuota (STATUS).
         if let Some((cmd, env)) = symphony_adapter_common::broker(req) {
             for o in mcp_overrides(&cmd, &env) {
+                spec = spec.arg("-c").arg(o);
+            }
+        }
+        for m in symphony_adapter_common::extra_mcp(req) {
+            for o in extra_mcp_overrides(&m) {
                 spec = spec.arg("-c").arg(o);
             }
         }

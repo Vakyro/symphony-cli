@@ -25,7 +25,7 @@ impl Skill {
 
 /// Nombre y descripción del encabezado YAML (`---` … `---`) de un `SKILL.md` o comando.
 /// La descripción puede ser de una línea o plegada (`>` / `|`) en varias.
-fn front_matter(text: &str) -> (Option<String>, Option<String>) {
+pub(crate) fn front_matter(text: &str) -> (Option<String>, Option<String>) {
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
         return (None, None);
