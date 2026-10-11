@@ -412,6 +412,12 @@ pub trait ProviderAdapter: Send + Sync {
         model: &str,
         worktree: &std::path::Path,
     ) -> Result<ProcessSpec, AdapterError>;
+    /// El prompt tal como se le entrega al CLI. Por omisión, el mismo; un CLI que no sabe que su
+    /// directorio de trabajo es un worktree aislado (OpenCode toma como raíz el repo principal)
+    /// lo enmarca aquí. Lo que se registra como mensaje del usuario sigue siendo el original.
+    fn frame_prompt(&self, prompt: &str, _worktree: &std::path::Path) -> String {
+        prompt.to_string()
+    }
     /// Bytes a escribir en stdin para el prompt inicial.
     fn encode_prompt(&self, prompt: &str) -> Vec<u8>;
     /// `true` si el CLI lee el prompt hasta EOF (Codex `exec -`): el runtime cierra stdin

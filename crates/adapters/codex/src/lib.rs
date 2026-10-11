@@ -48,16 +48,37 @@ impl Default for CodexAdapter {
     }
 }
 
+/// El `codex.exe` nativo detrás de un `codex.cmd` de npm, en `dir` (la carpeta del shim).
+///
+/// Dos disposiciones del paquete (la segunda desde 0.160 en esta máquina):
+/// - `@openai/codex/node_modules/@openai/codex-win32-x64/vendor/<triple>/bin/codex.exe`;
+/// - `@openai/codex/vendor/<triple>/bin/codex.exe` (un enlace a `~/.codex/packages/…`).
+pub fn native_codex_in(dir: &Path) -> Option<PathBuf> {
+    let pkg = dir.join("node_modules/@openai/codex");
+    let nested = pkg
+        .join("node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe");
+    if nested.is_file() {
+        return Some(nested);
+    }
+    let mut vendors: Vec<PathBuf> = std::fs::read_dir(pkg.join("vendor"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join("bin/codex.exe"))
+        .collect();
+    vendors.sort();
+    vendors.into_iter().find(|p| p.is_file())
+}
+
 /// El `codex.exe` nativo del paquete npm (evita el shim `.cmd`) o lo que haya en el PATH.
 fn find_codex() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
-        if cfg!(windows) && dir.join("codex.cmd").is_file() {
-            let native = dir
-                .join("node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe");
-            if native.is_file() {
-                return Some(native);
-            }
+        if cfg!(windows)
+            && dir.join("codex.cmd").is_file()
+            && let Some(native) = native_codex_in(&dir)
+        {
+            return Some(native);
         }
         let exe = dir.join(format!("codex{}", std::env::consts::EXE_SUFFIX));
         if exe.is_file() {

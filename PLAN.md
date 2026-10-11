@@ -1068,6 +1068,10 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 ### P11.S6 · Cierre
 - Protocolo §4.6. Tag `p11-done`.
 
+### P11.S7 · OpenCode (añadido por ADR-0012, después del cierre de P11)
+- **Qué:** crate `symphony-adapter-opencode` (id `opencode`, CLI `opencode`): `run --format json`, `resume` con `-s`, ids de modelo `opencode/<modelo>` y `opencode/<proveedor>:<modelo>`, servidores MCP y permiso del worktree por invocación, failover automático. Sin cambios en el core.
+- **Verifica:** fixtures L1 + contrato; live con modelos **gratuitos** de OpenCode (permiso de Leo, 2026-10-10): escribe en su worktree, `resume` recuerda, handoff entre dos modelos de OpenCode y broker MCP.
+
 ---
 
 ## P12 · Plugins

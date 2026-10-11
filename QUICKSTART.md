@@ -3,7 +3,7 @@
 ## 0. Requisitos previos
 
 - **Rust 1.95+** y Git instalados
-- Al menos uno de estos CLIs instalado y autenticado: **Claude Code**, **Codex**, **Kimi Code**, **Antigravity** (`agy`) o **GitHub Copilot CLI**
+- Al menos uno de estos CLIs instalado y autenticado: **Claude Code**, **Codex**, **Kimi Code**, **Antigravity** (`agy`), **GitHub Copilot CLI** u **OpenCode**
 - Windows, macOS o Linux
 
 Verifica:
@@ -238,11 +238,13 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 | Kimi Code | `moonshot/default` (el modelo que tengas configurado en Kimi) | **todo, sin pedir permiso**: `--print` aprueba las herramientas y Kimi no tiene sandbox | no |
 | Antigravity | `google/gemini-3.8-flash-low`, `…-medium`, `…-high`, `gemini-3.1-pro-high/low` | editar archivos; **no ejecuta comandos** (en headless deniega lo que pide permiso) | no |
 | Copilot | `github/auto` (el único que aceptó `--model` en la cuenta de prueba) | editar archivos; comandos solo de lectura | no |
+| OpenCode | `opencode/default` y lo que liste `opencode models`: `opencode/big-pickle`, `opencode/<proveedor>:<modelo>` | **todo, sin pedir permiso** en `run`, sin sandbox; Symphony le permite escribir solo en su worktree | no |
 
 - Un modelo que tu cuenta no tenga habilitado falla al instante con «not available» y Symphony pasa al siguiente según la política de failover.
 - Copilot con `auto` puede usar modelos distintos entre turnos, y no informa de tokens: el cambio por umbral de uso no le aplica.
 - Antigravity y Copilot pueden ejecutarlo todo si lo permites (`skip_permissions` / `allow_all_tools` en sus adapters), pero todavía no hay opción en `config.toml`.
 - Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.
+- **OpenCode** toma como raíz del proyecto el repo principal, no el worktree del agente: Symphony le avisa en el prompt cuál es su directorio, pero un modelo puede escribir en el repo con una ruta absoluta (`docs/research/cli-opencode.md`). La lista de modelos de OpenCode se pide en segundo plano la primera vez (tarda ~7 s): al principio solo aparece `opencode/default`; haz `symphony providers refresh` unos segundos después. Sus modelos gratuitos son inestables; Claude y Codex siguen siendo los que mejor funcionan (`docs/research/opencode-y-calidad-de-proveedores.md`).
 
 ### Skills en el chat
 Las skills que ya tienes instaladas en cada CLI funcionan en el chat (las de usuario y las de plugins; las de proyecto solo si están commiteadas en la rama base del chat):

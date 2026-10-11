@@ -18,6 +18,7 @@ members = [
     "crates/adapters/kimi",
     "crates/adapters/antigravity",
     "crates/adapters/copilot",
+    "crates/adapters/opencode",
     "crates/testkit",
     "xtask",
 ]

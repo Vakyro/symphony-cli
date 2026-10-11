@@ -2827,6 +2827,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "symphony-adapter-opencode"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "symphony-adapter-common",
+ "symphony-adapter-kimi",
+ "symphony-core",
+ "tempfile",
+]
+
+[[package]]
 name = "symphony-cli"
 version = "0.1.0"
 dependencies = [
@@ -2900,6 +2911,7 @@ dependencies = [
  "symphony-adapter-common",
  "symphony-adapter-copilot",
  "symphony-adapter-kimi",
+ "symphony-adapter-opencode",
  "symphony-context",
  "symphony-core",
  "symphony-git",

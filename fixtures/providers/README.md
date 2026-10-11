@@ -17,6 +17,8 @@ de evento o de hook.
 | `antigravity/stream.jsonl`, `resume.jsonl`, `error-modelo.jsonl` | `agy -p --output-format stream-json` (1.2.11); `cwd` reemplazado por `<cwd>` |
 | `antigravity/tools.jsonl`, `tools-denied.jsonl` | `agy --print= --input-format stream-json` (1.2.14) con herramientas; con `--dangerously-skip-permissions` y con `--mode accept-edits` (shell denegado). Rutas y usuario reemplazados |
 | `kimi/tools.jsonl`, `tools-error.jsonl` | `kimi --print` con herramientas, sin y con fallos (1.44.0) |
+| `opencode/stream.jsonl`, `tools.jsonl`, `tools-error.jsonl`, `error-modelo.jsonl` | `opencode run --format json` (1.18.34, modelo gratuito `opencode/big-pickle`): turno simple, `write` + `bash`, `glob`/`read`/`edit`/`bash` con salida 3/`read` fallido, y modelo inexistente. Rutas y usuario reemplazados |
+| `opencode/error-upstream.jsonl` | El `error` de un 429 de upstream (`APIError`, `statusCode`, `responseBody`) tal como lo guardó Symphony en `events`; el JSON se **reconstruyó** de ese registro (el crudo no se conservó) |
 
 Los errores de rate limit y cuota que no aparecieron en vivo se prueban con las
 formas documentadas (`docs/research/cli-*.md`), marcadas como sintéticas en los tests.

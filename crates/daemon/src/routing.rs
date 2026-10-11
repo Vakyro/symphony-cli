@@ -442,6 +442,15 @@ fn traits(model_id: &str) -> Traits {
                 Some(SpeedClass::Medium),
                 [0.7, 0.7, 0.6, 0.7, 0.7, 0.65, 0.8],
             )
+        } else if has("opencode") {
+            // Varias familias detrás de un mismo CLI, muchas gratuitas: sin evidencia de calidad
+            // todavía (ADR-0012), puntajes neutros por debajo de Claude y Codex y barato para
+            // `@conserve`.
+            (
+                None,
+                Some(SpeedClass::Medium),
+                [0.55, 0.55, 0.7, 0.55, 0.6, 0.55, 0.9],
+            )
         } else if has("github") {
             (
                 None,
