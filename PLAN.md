@@ -943,7 +943,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** dependencias con detección de ciclos; transiciones automáticas `WAITING_DEPENDENCY` ↔ `READY`; dependencia fallida → `BLOCKED` con decisión (FLOW §9.3); milestones con gate (FLOW §9.4).
 - **Verifica:** proptest "un DAG nunca acepta ciclos".
 
-### P08.S6 · Validation engine
+### P08.S6 · Validation engine ✅
 - **Qué:** tiers 1–3 desde `project.toml` (STACK §23); corren a través del scheduler; guardan resultados; resumen de tests (colapso básico); feedback al agente (FLOW §15.2).
 - **Verifica:** repo de prueba con un test que falla → resumen correcto + agente recibe el fallo.
 

@@ -5,7 +5,7 @@
 | Estado | EN CURSO |
 | Rama | phase/p08-runtime-multiagente |
 | Inicio / cierre | 2026-10-11 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S5) |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S6) |
 | Tag | p08-done (pendiente) |
 | Docs usados | ADR-0011, ADR-0013, DB §3.B/§3.C/§3.H, PLAN §P08, CONSTRAINTS A12 |
 
@@ -66,6 +66,19 @@
   - La primera sesión planifica **y** ejecuta la fase 1 (una sesión de solo planificación pagaría dos veces el arranque del CLI, ADR-0010).
 - **Pendiente / notas:** (1) Que un CLI real escriba un plan en este formato y se detenga al final de la fase es una instrucción en el prompt: no se probó en L3 (gasta cuota; ⛔ Leo). Si no lo hace, el agente termina como siempre. (2) Un agente `FAILED` cuenta como dependencia fallida aunque se pueda recuperar; al completarse después, quien estaba bloqueado por eso se libera. (3) No hay vista TUI de dependencias ni de milestones todavía (S8).
 
+### P08.S6 · Validation engine y preparación del worktree — ✅
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-11
+- **Qué se hizo:**
+  - **Config** en `project.toml`: `[validation] tier1/tier2/tier3, gate (por defecto 2), max_attempts (3), timeout_secs (900)` y `[worktree] prepare = [...]` (F7, F8).
+  - **Motor** (`daemon::validation`): cada comando corre en el worktree del agente por el scheduler (si es pesado espera su turno), con los límites del SO; su salida (redactada) se guarda como objeto de contexto `TEST_OUTPUT` y el resultado en `validation_runs`/`validation_checks` (nombre del check por comando o por tier, conteos de pasadas y falladas, resumen con las líneas que importan). Cada comando queda también en `tool_calls` (`validation:tierN`). Un tier corre solo si el anterior pasó.
+  - **Gate**: al salir el CLI bien, el agente pasa a `TESTING` y se valida hasta el tier del gate; si pasa, completa; si falla, el fallo vuelve **al mismo agente** por su sesión (`continue_session`; sin sesión, un run nuevo con el mismo modelo) y la tarea sigue; a los `max_attempts` fallos la tarea queda `BLOCKED` con la decisión pendiente y un recovery item `VALIDATION_FAILED` (migración 005).
+  - **Preparación**: los comandos de `[worktree] prepare` corren por el scheduler antes de lanzar al agente; si uno falla no se crea nada (workspace_failed con la cola de la salida).
+  - **IPC**: `validation.run {agent, tier}` (a pedido, disparador `USER`) y `validation.get {agent}`.
+  - **Core**: enums `ValidationStatus`, `ValidationTrigger`, `CheckStatus`, `CheckName` contra el spec.
+- **Archivos clave:** `crates/daemon/src/validation.rs`, `crates/scheduler/src/validation.rs`, `crates/store/src/validation.rs`, `migrations/005_validation.sql`, `crates/core/src/config.rs`.
+- **Cómo se verificó:** `cargo xtask check` → 536 passed. L2 con `symphonyd`+`fake-agent`: tier 1 pasa y tier 2 falla → el agente arregla en la sesión retomada → cuatro pasadas (PASS, FAIL, PASS, PASS) y la tarea `DONE`; un check que nunca pasa con `max_attempts = 2` → `BLOCKED` y `VALIDATION_FAILED`; sin `[validation]` todo completa como antes; la validación a pedido para tras el primer fallo; preparación OK (`prepared.txt` en el worktree) y preparación fallida sin agente ni worktree. Unitarios: nombres de check, resúmenes de Rust/Jest/pytest.
+- **Pendiente / notas:** (1) Los comandos se ejecutan con `cmd /C` (Windows) o `sh -c` sin escapado propio: comillas anidadas complejas van mejor en un script del proyecto (`npm run …`). (2) El review agent y el merge gate (tiers 3 y milestone) son S7. (3) No hay vista TUI de la validación todavía (S8; las vistas 15–19). (4) Que un CLI real arregle el fallo con el mensaje de validación no se probó en L3 (⛔ Leo).
+
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
 |---|---|---|---|
@@ -80,7 +93,7 @@
 
 ## Notas para el siguiente agente
 - Reconstruir una tabla padre: patrón `defer_foreign_keys` + `_bak` + `DROP` + reinsertar con su nombre (002, 003, 004). No uses `RENAME`.
-- Siguiente: P08.S6 (validación con gate configurable y preparación del worktree, F7 y F8).
+- Siguiente: P08.S7 (merge, conflictos, review agent y modo delegado del chat).
 - En los scripts de Python con cadenas que llevan barras invertidas (`\n` de Rust, TOML) no uses heredocs de la herramienta Bash: se pierden. Escribe el script con la herramienta Write y ejecútalo.
 - En un `r#"…"#` de Rust, `"#` termina la cadena: un guion TOML con `"# Plan…` necesita `r##"…"##`.
 - Un test que falla y deja un `symphonyd` huérfano cuelga nextest (queda esperando al proceso con fugas): `Get-Process symphonyd* | Stop-Process` antes de reintentar.

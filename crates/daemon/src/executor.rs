@@ -31,7 +31,7 @@ use crate::runtime::{Runtime, now_ms};
 const PROCESS_SAMPLE_EVERY: Duration = Duration::from_secs(5);
 
 /// Límites del SO según `[performance]` del `config.toml` (se relee en cada lanzamiento).
-fn os_limits(home: &Path) -> symphony_process::Limits {
+pub(crate) fn os_limits(home: &Path) -> symphony_process::Limits {
     let limits = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home))
         .map(|c| symphony_scheduler::OsLimits::from_config(&c.performance))
         .unwrap_or_default();
@@ -651,6 +651,10 @@ impl Runtime {
             // Con plan por fases, el CLI que salió bien puede dejar fases pendientes (sesión
             // nueva), una tarea fallida (el agente se detiene) o el plan completo.
             if self.advance_plan(l).await {
+                return;
+            }
+            // Gate de la tarea (P08.S6): validar antes de completar; un fallo vuelve al agente.
+            if !self.task_is_chat(l.task_id) && self.run_gate(l).await {
                 return;
             }
             self.commit_chat_turn(l).await;

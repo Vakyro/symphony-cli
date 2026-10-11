@@ -8,6 +8,7 @@ mod concurrency;
 mod dag;
 mod plan;
 mod queue;
+mod validation;
 
 pub use classify::{OpClass, classify};
 pub use concurrency::agent_concurrency;
@@ -16,3 +17,4 @@ pub use plan::{Phase, Plan, PlanError, PlanTask, Progress, TaskMark};
 pub use queue::{
     Admission, Grant, Holder, Limits, OsLimits, Request, Scheduler, Snapshot, WaitReason, explain,
 };
+pub use validation::{OutputSummary, check_name, summarize};

@@ -120,6 +120,51 @@ db_enum!(
 );
 
 db_enum!(
+    /// `validation_runs.status` (DB §3.H).
+    ValidationStatus {
+        Queued => "QUEUED",
+        Running => "RUNNING",
+        Pass => "PASS",
+        Fail => "FAIL",
+        Skipped => "SKIPPED",
+    }
+);
+
+db_enum!(
+    /// `validation_runs.trigger` (DB §3.H).
+    ValidationTrigger {
+        Auto => "AUTO",
+        User => "USER",
+        MergeGate => "MERGE_GATE",
+        MilestoneGate => "MILESTONE_GATE",
+    }
+);
+
+db_enum!(
+    /// `validation_checks.status` (DB §3.H).
+    CheckStatus {
+        Pass => "PASS",
+        Fail => "FAIL",
+        Warn => "WARN",
+        Skipped => "SKIPPED",
+    }
+);
+
+db_enum!(
+    /// `validation_checks.name` (DB §3.H).
+    CheckName {
+        Syntax => "syntax",
+        Format => "format",
+        Lint => "lint",
+        Typecheck => "typecheck",
+        TargetedTests => "targeted_tests",
+        FullTests => "full_tests",
+        Build => "build",
+        Security => "security",
+    }
+);
+
+db_enum!(
     /// `agents.execution_mode`.
     ExecutionMode {
         Exact => "EXACT",
@@ -277,6 +322,18 @@ mod tests {
         assert_matches_db(RunStatus::ALL, RunStatus::as_str, "RunStatus");
         assert_matches_db(RunEndReason::ALL, RunEndReason::as_str, "RunEndReason");
         assert_matches_db(ExecutionMode::ALL, ExecutionMode::as_str, "ExecutionMode");
+        assert_matches_db(
+            ValidationStatus::ALL,
+            ValidationStatus::as_str,
+            "ValidationStatus",
+        );
+        assert_matches_db(
+            ValidationTrigger::ALL,
+            ValidationTrigger::as_str,
+            "ValidationTrigger",
+        );
+        assert_matches_db(CheckStatus::ALL, CheckStatus::as_str, "CheckStatus");
+        assert_matches_db(CheckName::ALL, CheckName::as_str, "CheckName");
         assert_matches_db(
             MilestoneStatus::ALL,
             MilestoneStatus::as_str,

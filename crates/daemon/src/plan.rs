@@ -197,7 +197,7 @@ impl Runtime {
         planning_prompt(objective, task, cfg.min_tasks_per_phase)
     }
 
-    fn task_is_chat(&self, task: TaskId) -> bool {
+    pub(crate) fn task_is_chat(&self, task: TaskId) -> bool {
         self.reader
             .lock()
             .ok()

@@ -22,5 +22,6 @@ pub mod scheduling;
 pub mod server;
 pub mod shared;
 pub mod skills;
+pub mod validation;
 pub mod views;
 pub mod watcher;

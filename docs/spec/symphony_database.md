@@ -730,7 +730,7 @@ Todo lo que requiere intervención humana, en un solo lugar. Vista *Recovery Cen
 | project_id | TEXT NOT NULL FK → projects | |
 | agent_id | TEXT FK → agents | |
 | run_id | TEXT FK → agent_runs | |
-| kind | TEXT NOT NULL | `EXECUTOR_EXITED` · `NO_HEARTBEAT` · `RATE_LIMITED` · `AUTH_ERROR` · `CHECKPOINT_INVALID` · `WORKSPACE_DAMAGED` · `MERGE_CONFLICT` · `DEPENDENCY_FAILED` · `SESSION_INTERRUPTED` · `MACHINE_PRESSURE` |
+| kind | TEXT NOT NULL | `EXECUTOR_EXITED` · `NO_HEARTBEAT` · `RATE_LIMITED` · `AUTH_ERROR` · `CHECKPOINT_INVALID` · `WORKSPACE_DAMAGED` · `MERGE_CONFLICT` · `DEPENDENCY_FAILED` · `SESSION_INTERRUPTED` · `MACHINE_PRESSURE` · `VALIDATION_FAILED` |
 | detail | TEXT NOT NULL | Frase humana |
 | checkpoint_valid | INTEGER | Snapshot al detectarse |
 | workspace_intact | INTEGER | |

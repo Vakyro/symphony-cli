@@ -161,6 +161,8 @@ pub struct Inner {
     pub(crate) stale_after: Duration,
     /// Última actividad (línea de salida) de cada run vivo, en memoria.
     pub(crate) activity: Mutex<HashMap<RunId, Instant>>,
+    /// Cola de operaciones pesadas (la pone `serve`; los tests sin daemon no la tienen).
+    pub(crate) scheduling: std::sync::OnceLock<Arc<crate::scheduling::Scheduling>>,
     /// Umbral de tokens para rotar el proveedor del chat (P07.5.S6). 0 = apagado.
     pub(crate) chat_switch_tokens: AtomicU64,
     /// Profile con el que se evalúa un failover cuando el agente no tiene uno (`routing.default_profile`).
@@ -237,12 +239,68 @@ impl Runtime {
                 chat_switch_tokens: AtomicU64::new(0),
                 default_profile: Mutex::new("@code".into()),
                 watchers: crate::watcher::Watchers::default(),
+                scheduling: std::sync::OnceLock::new(),
             }),
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(rt.clone().watchdog());
         }
         rt
+    }
+
+    /// El scheduler compartido con el daemon (validaciones y preparación de worktrees).
+    pub fn set_scheduling(&self, scheduling: Arc<crate::scheduling::Scheduling>) {
+        let _ = self.scheduling.set(scheduling);
+    }
+
+    /// Comandos de `[worktree] prepare` de `project.toml` (F8): corren en el worktree nuevo,
+    /// uno tras otro y por el scheduler, antes de lanzar al agente.
+    async fn prepare_worktree_commands(
+        &self,
+        project_root: &str,
+        wt_path: &Path,
+        number: i64,
+    ) -> Result<(), String> {
+        let Some(cfg) = symphony_core::load_project(Path::new(project_root))
+            .ok()
+            .flatten()
+            .and_then(|p| p.worktree)
+            .filter(|w| !w.prepare.is_empty())
+        else {
+            return Ok(());
+        };
+        let timeout = Duration::from_secs(cfg.prepare_timeout_secs.unwrap_or(1_800).max(1));
+        for (i, command) in cfg.prepare.iter().enumerate() {
+            let key = format!("prep:{}:{i}", wt_path.display());
+            let (exec, _) = self
+                .run_scheduled(
+                    key,
+                    format!("Agent #{number}"),
+                    command,
+                    wt_path,
+                    timeout,
+                    symphony_core::ToolCallId::new(),
+                )
+                .await
+                .map_err(|e| format!("`{command}` no pudo correr: {e}"))?;
+            if !exec.success {
+                let tail: Vec<&str> = exec.output.lines().rev().take(5).collect();
+                let tail: Vec<&str> = tail.into_iter().rev().collect();
+                return Err(format!(
+                    "la preparación del worktree falló en `{command}` ({}): {}",
+                    if exec.timed_out {
+                        "tiempo agotado".to_string()
+                    } else {
+                        format!(
+                            "código {}",
+                            exec.exit_code.map_or("?".into(), |c| c.to_string())
+                        )
+                    },
+                    tail.join(" | ")
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Vigila los archivos del proyecto (idempotente; ver `watcher.rs`).
@@ -662,6 +720,18 @@ impl Runtime {
                 });
             }
         };
+
+        // 4b. Preparación del worktree (`[worktree] prepare`): si falla, no se creó el agente.
+        if let Err(detail) = self
+            .prepare_worktree_commands(&root_text, &wt_path, number)
+            .await
+        {
+            self.undo_worktree(&repo_root, &wt_path, &branch).await;
+            return Err(CreateError::Workspace {
+                detail,
+                task: task_text,
+            });
+        }
 
         // 5. Una transacción con todo.
         // Con dependencias sin cumplir el agente espera y no arranca; el modelo exacto o el

@@ -184,6 +184,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     let scheduling = Arc::new(crate::scheduling::Scheduling::new(
         symphony_scheduler::Limits::default(),
     ));
+    runtime.set_scheduling(scheduling.clone());
     scheduling.spawn(writer.handle(), shutdown.clone());
 
     match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
@@ -412,6 +413,8 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
+        "validation.run" => validation_run(req, state).await,
+        "validation.get" => validation_get(req, state),
         "task.depend" | "task.undepend" => task_depend(req, state).await,
         "task.deps" => task_deps(req, state),
         "task.resolve_dependency" => task_resolve(req, state).await,
@@ -2061,4 +2064,78 @@ async fn milestone_decide(req: Request, state: &State) -> Response {
         Ok(()) => Response::ok(req.id, json!({ "status": to.as_str() })),
         Err(e) => Response::error(req.id, "decision_rejected", e),
     }
+}
+
+// --- validación (P08.S6) ----------------------------------------------------------------
+
+fn check_json(c: &crate::validation::CheckResult) -> Value {
+    json!({
+        "command": c.command,
+        "name": c.name.as_str(),
+        "status": c.status.as_str(),
+        "passed": c.passed,
+        "failed": c.failed,
+        "summary": c.summary,
+        "exit_code": c.exit_code,
+        "duration_ms": c.duration_ms,
+    })
+}
+
+/// Valida a pedido del usuario (`USER`): hasta `tier` (por defecto, el gate del proyecto).
+async fn validation_run(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let tier = req
+        .params
+        .get("tier")
+        .and_then(Value::as_u64)
+        .and_then(|t| u8::try_from(t).ok())
+        .unwrap_or(2);
+    match state
+        .runtime
+        .validate(agent_id, tier, symphony_core::ValidationTrigger::User)
+        .await
+    {
+        Ok(v) => Response::ok(
+            req.id,
+            json!({
+                "passed": v.passed(),
+                "tiers": v.tiers.iter().map(|t| json!({
+                    "tier": t.tier,
+                    "status": t.status.as_str(),
+                    "checks": t.checks.iter().map(check_json).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            }),
+        ),
+        Err(e) => Response::error(req.id, "validation_error", e),
+    }
+}
+
+fn validation_get(req: Request, state: &State) -> Response {
+    agent_view(req, state, |c, agent| {
+        let id: symphony_core::AgentId =
+            agent.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let runs = symphony_store::validation::runs_of(c, id, 20).map_err(rusqlite::Error::from)?;
+        Ok(json!({
+            "agent_id": agent,
+            "runs": runs.iter().map(|r| json!({
+                "id": r.id,
+                "tier": r.tier,
+                "trigger": r.trigger,
+                "status": r.status,
+                "started_at": r.started_at,
+                "finished_at": r.finished_at,
+                "checks": r.checks.iter().map(|k| json!({
+                    "name": k.name,
+                    "status": k.status,
+                    "passed": k.passed,
+                    "failed": k.failed,
+                    "summary": k.summary,
+                    "output_object_id": k.output_object_id,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        }))
+    })
 }

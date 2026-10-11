@@ -3900,3 +3900,290 @@ async fn the_plan_file_never_reaches_git() {
     assert!(!status.contains(".symphony"), "{status}");
     e.writer.shutdown();
 }
+
+// --- P08.S6: validación y preparación del worktree -----------------------------------
+
+/// Archivos de validación en el repo base (los worktrees nacen de este commit).
+fn seed_validation(e: &Env, project_toml: &str) {
+    let dir = e.repo.join("scripts");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ok.js"), "process.exit(0)\n").unwrap();
+    std::fs::write(
+        dir.join("check.js"),
+        "const fs = require('fs');\n\
+         if (!fs.existsSync('fixed.txt')) {\n  \
+           console.error('FAIL auth.refresh.test.ts expected 200, received 401');\n  \
+           console.log('Tests: 1 failed, 3 passed, 4 total');\n  \
+           process.exit(1);\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("fail.js"),
+        "console.error('error: nunca pasa');\nprocess.exit(1);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("prepare.js"),
+        "require('fs').writeFileSync('prepared.txt', 'listo');\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("prepare_fails.js"),
+        "console.error('pnpm: no se pudo instalar');\nprocess.exit(3);\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(e.repo.join(".symphony/project.toml"), project_toml).unwrap();
+    git(&e.repo, &["add", "."]);
+    git(&e.repo, &["commit", "-q", "-m", "validación"]);
+}
+
+const PROJECT_HEAD: &str = "[project]\nname = \"demo\"\ndefault_branch = \"main\"\n\n";
+
+/// Primer run: deja una marca y no arregla nada; los siguientes (la sesión retomada) sí.
+const FIX_ON_RETRY: &str = r##"
+[[step]]
+kind = "say"
+text = "Intento"
+
+[[step]]
+kind = "run"
+command = ["node", "-e", 'const fs=require("fs"); fs.writeFileSync(fs.existsSync(".attempt") ? "fixed.txt" : ".attempt", "x")']
+"##;
+
+fn validation_rows(e: &Env, agent: &str) -> Vec<(i64, String)> {
+    let conn =
+        rusqlite::Connection::open_with_flags(&e.db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT tier, status FROM validation_runs WHERE agent_id = ?1 ORDER BY started_at, rowid",
+        )
+        .unwrap();
+    stmt.query_map([agent], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_gate_returns_to_the_same_agent_and_the_task_completes_when_it_passes() {
+    let e = env(FIX_ON_RETRY, None).await;
+    seed_validation(
+        &e,
+        &format!(
+            "{PROJECT_HEAD}[validation]\ntier1 = [\"node scripts/ok.js\"]\ntier2 = [\"node scripts/check.js\"]\ngate = 2\n"
+        ),
+    );
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Arreglar el 401",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    // Tier 1 pasa, tier 2 falla; el agente arregla en la misma sesión; vuelven a pasar.
+    assert_eq!(
+        validation_rows(&e, &agent),
+        vec![
+            (1, "PASS".to_string()),
+            (2, "FAIL".to_string()),
+            (1, "PASS".to_string()),
+            (2, "PASS".to_string()),
+        ]
+    );
+    // El fallo se le devolvió al agente con lo que importa, no con toda la salida.
+    let feedback: String = one(
+        &e,
+        &format!(
+            "SELECT content FROM messages WHERE agent_id = '{agent}' AND role = 'SYSTEM' AND content LIKE 'Symphony ejecutó la validación%'"
+        ),
+    );
+    assert!(
+        feedback.contains("FAIL auth.refresh.test.ts expected 200, received 401"),
+        "{feedback}"
+    );
+    assert!(feedback.contains("1 fallaron, 3 pasaron"), "{feedback}");
+    // El resultado quedó guardado con su salida completa como objeto de contexto.
+    let (name, summary, object): (String, String, Option<String>) = {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        conn.query_row(
+            "SELECT name, summary, output_object_id FROM validation_checks
+             WHERE status = 'FAIL' AND validation_run_id IN (SELECT id FROM validation_runs WHERE agent_id = ?1)",
+            [&agent],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(name, "targeted_tests");
+    assert!(summary.contains("expected 200, received 401"));
+    assert!(object.is_some());
+    // Dos runs del mismo agente (la sesión retomada), una sola tarea; nada que recuperar.
+    assert_eq!(run_rows(&e, &agent).len(), 2);
+    assert_eq!(count(&e, "agents"), 1);
+    assert_eq!(count(&e, "recovery_items"), 0);
+    let task: String = one(
+        &e,
+        &format!("SELECT status FROM tasks WHERE id = '{}'", created.task_id),
+    );
+    assert_eq!(task, "DONE");
+    // Cada comando quedó en `tool_calls` (pasan por el scheduler como cualquier otro).
+    let calls: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM tool_calls WHERE agent_id = '{agent}' AND tool_name LIKE 'validation:%'"
+        ),
+    );
+    assert_eq!(calls, 4);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_validation_failures_block_the_task_with_a_decision() {
+    let e = env(WORK, None).await;
+    seed_validation(
+        &e,
+        &format!(
+            "{PROJECT_HEAD}[validation]\ntier1 = [\"node scripts/fail.js\"]\ngate = 1\nmax_attempts = 2\n"
+        ),
+    );
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Nunca pasa", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "BLOCKED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(
+        validation_rows(&e, &agent),
+        vec![(1, "FAIL".to_string()), (1, "FAIL".to_string())]
+    );
+    let why: String = one(
+        &e,
+        &format!("SELECT state_reason FROM agents WHERE id = '{agent}'"),
+    );
+    assert!(
+        why.contains("falló 2 veces") && why.contains("nunca pasa"),
+        "{why}"
+    );
+    let kind: String = one(&e, "SELECT kind FROM recovery_items");
+    assert_eq!(kind, "VALIDATION_FAILED");
+    let task: String = one(
+        &e,
+        &format!("SELECT status FROM tasks WHERE id = '{}'", created.task_id),
+    );
+    assert_eq!(task, "BLOCKED");
+    assert_eq!(run_rows(&e, &agent).len(), 2, "se le devolvió una vez");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_without_validation_completes_as_before_and_a_user_run_reports_it() {
+    let e = env(WORK, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Sin validar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    assert!(validation_rows(&e, &agent).is_empty());
+    let err = e
+        .runtime
+        .validate(created.agent_id, 2, symphony_core::ValidationTrigger::User)
+        .await
+        .unwrap_err();
+    assert!(err.contains("no define comandos de validación"), "{err}");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_user_validation_runs_tiers_in_order_and_stops_after_a_failure() {
+    let e = env(WORK, None).await;
+    seed_validation(
+        &e,
+        &format!(
+            "{PROJECT_HEAD}[validation]\ngate = 0\ntier1 = [\"node scripts/ok.js\"]\ntier2 = [\"node scripts/fail.js\"]\ntier3 = [\"node scripts/ok.js\"]\n"
+        ),
+    );
+    let created = e
+        .runtime
+        .create_agent(req(&e, "A mano", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    wait_state(&e, &created.agent_id.to_string(), "COMPLETED").await;
+    // Con `gate = 0` la tarea no se validó sola; a pedido corre hasta el tier 3 y para en el 2.
+    let v = e
+        .runtime
+        .validate(created.agent_id, 3, symphony_core::ValidationTrigger::User)
+        .await
+        .unwrap();
+    assert!(!v.passed());
+    let tiers: Vec<(u8, &str)> = v
+        .tiers
+        .iter()
+        .map(|t| (t.tier, t.status.as_str()))
+        .collect();
+    assert_eq!(
+        tiers,
+        [(1, "PASS"), (2, "FAIL")],
+        "el tier 3 no se pidió todavía"
+    );
+    assert!(v.headline().contains("nunca pasa"), "{}", v.headline());
+    let trigger: String = one(&e, "SELECT DISTINCT trigger FROM validation_runs");
+    assert_eq!(trigger, "USER");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_worktree_is_prepared_before_the_agent_starts_and_a_failure_creates_nothing() {
+    let e = env(WORK, None).await;
+    seed_validation(
+        &e,
+        &format!("{PROJECT_HEAD}[worktree]\nprepare = [\"node scripts/prepare.js\"]\n"),
+    );
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Preparar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(created.worktree.join("prepared.txt")).unwrap(),
+        "listo"
+    );
+    wait_state(&e, &created.agent_id.to_string(), "COMPLETED").await;
+    e.runtime.wait_executors().await;
+
+    // Una preparación que falla no deja un agente a medias.
+    let before = (count(&e, "agents"), count(&e, "worktrees"));
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        format!("{PROJECT_HEAD}[worktree]\nprepare = [\"node scripts/prepare_fails.js\"]\n"),
+    )
+    .unwrap();
+    let err = e
+        .runtime
+        .create_agent(req(&e, "Falla", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "workspace_failed");
+    let text = err.to_string();
+    assert!(
+        text.contains("node scripts/prepare_fails.js") && text.contains("código 3"),
+        "{text}"
+    );
+    assert!(text.contains("no se pudo instalar"), "{text}");
+    assert_eq!((count(&e, "agents"), count(&e, "worktrees")), before);
+    assert_eq!(git(&e.repo, &["worktree", "list"]).lines().count(), 2);
+    e.writer.shutdown();
+}

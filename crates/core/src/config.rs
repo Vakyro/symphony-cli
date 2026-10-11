@@ -383,6 +383,70 @@ pub struct ProjectConfig {
     pub context: Option<ContextConfig>,
     #[serde(default)]
     pub performance: Option<PerformanceConfig>,
+    /// Comandos de validación por tier (STACK §23) y gate de la tarea (P08.S6).
+    #[serde(default)]
+    pub validation: Option<ValidationConfig>,
+    /// Preparación del worktree de cada agente (P08.S6, F8).
+    #[serde(default)]
+    pub worktree: Option<WorktreeConfig>,
+}
+
+/// `[validation]` de `project.toml`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ValidationConfig {
+    /// Barato y rápido: lint, formato, sintaxis.
+    pub tier1: Vec<String>,
+    /// Typecheck y pruebas dirigidas.
+    pub tier2: Vec<String>,
+    /// Suite completa y build.
+    pub tier3: Vec<String>,
+    /// Hasta qué tier tiene que pasar una tarea para completarse (0 = sin gate). Los tiers
+    /// por encima del gate corren en el merge y en el gate del milestone.
+    pub gate: u8,
+    /// Cuántas validaciones fallidas se le devuelven al agente antes de bloquear la tarea.
+    pub max_attempts: u32,
+    /// Segundos máximos de cada comando.
+    pub timeout_secs: u64,
+}
+
+impl Default for ValidationConfig {
+    fn default() -> Self {
+        Self {
+            tier1: Vec::new(),
+            tier2: Vec::new(),
+            tier3: Vec::new(),
+            gate: 2,
+            max_attempts: 3,
+            timeout_secs: 900,
+        }
+    }
+}
+
+impl ValidationConfig {
+    /// Los comandos del tier 1–3 (vacío para cualquier otro).
+    pub fn tier(&self, n: u8) -> &[String] {
+        match n {
+            1 => &self.tier1,
+            2 => &self.tier2,
+            3 => &self.tier3,
+            _ => &[],
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tier1.is_empty() && self.tier2.is_empty() && self.tier3.is_empty()
+    }
+}
+
+/// `[worktree]` de `project.toml`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorktreeConfig {
+    /// Comandos que corren en el worktree nuevo antes de lanzar al agente (`pnpm install`).
+    pub prepare: Vec<String>,
+    /// Segundos máximos de cada comando.
+    pub prepare_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

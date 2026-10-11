@@ -16,10 +16,12 @@ pub use config::{
     ProviderLimits, ProvidersConfig, RoutingConfig, SymphonyHome, init_project, load_or_create,
     load_project, project_config_path, set_value,
 };
+pub use config::{ValidationConfig, WorktreeConfig};
 pub use enums::{
-    AccountAuthStatus, AgentState, ContextMode, ExecutionMode, FailoverPolicy, FailureType,
-    InvalidValue, MilestoneStatus, PerformanceProfile, ProviderState, QuotaCertainty, RejectReason,
-    RoutingTrigger, RunEndReason, RunStatus, SpeedClass, TaskStatus, UsageSource,
+    AccountAuthStatus, AgentState, CheckName, CheckStatus, ContextMode, ExecutionMode,
+    FailoverPolicy, FailureType, InvalidValue, MilestoneStatus, PerformanceProfile, ProviderState,
+    QuotaCertainty, RejectReason, RoutingTrigger, RunEndReason, RunStatus, SpeedClass, TaskStatus,
+    UsageSource, ValidationStatus, ValidationTrigger,
 };
 pub use health::{
     DEGRADED_COOLDOWN_MS, EXHAUSTED_PROBE_MS, Health, HealthEvent, NETWORK_COOLDOWN_MS,
