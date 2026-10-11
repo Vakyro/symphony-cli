@@ -59,6 +59,21 @@ Consolidación de hechos del proyecto (`project_facts`) con estados `CURRENT`, `
 - Verificado: tests de repositorio en `store::context` (transiciones de estado y unicidad lógica de `CURRENT`), L2 en `daemon::runtime` (`handoff_includes_current_project_facts` y llamadas IPC), snapshot actualizado de help en CLI. Total 427 tests verdes.
 
 
+### P09.S9 · Skills y MCP compartidos
+Los archivos son la fuente de verdad; SQLite (`skills`, `mcp_servers`) solo los indexa y guarda el interruptor `enabled` del usuario, que sobrevive a cada relectura (`crates/store/src/shared.rs`, `crates/daemon/src/shared.rs`).
+- **Skills canónicas** (STACK §16): `~/.symphony/skills/<nombre>/SKILL.md` y `<proyecto>/.symphony/skills/<nombre>/`, con `skill.toml` opcional (`description`, `providers`). Ante un nombre repetido gana el del proyecto. Nombres inseguros (`..`, separadores, espacios) se descartan.
+- **`mcp.toml`** (`~/.symphony/` y `<proyecto>/.symphony/`): `[servers.<nombre>]` con `command`/`args`/`env` (stdio) o `url` (http), `share_mode` y `enabled`. Lo inválido se descarta y sale como `warnings`. El nombre `symphony-context` está reservado al broker y los nombres no pueden llevar `.` (son claves TOML en Codex).
+- **Traducción por adapter, por invocación y sin tocar el repo ni la config del usuario:**
+  - Claude: las skills habilitadas se materializan como un plugin de sesión (`<home>/runtime/<proyecto>/claude-plugin`, `--plugin-dir`); el manifiesto pasa `claude plugin validate`. Los servidores de `mcp.toml` van en `--mcp-config` y se permiten por servidor (`--allowedTools mcp__<nombre>`), porque en headless nadie puede contestar el permiso.
+  - Codex: los servidores van como `-c mcp_servers.<nombre>.{command,args,env|url}`. **Codex no tiene un directorio de skills por invocación** (`CODEX_HOME` arrastraría su login): sus skills compartidas no se traducen todavía.
+  - Kimi, Antigravity, Copilot: sin traducción (no investigados; re-validación pendiente).
+- **Cómo llega al adapter:** el daemon deja `SYMPHONY_PLUGIN_DIR` y `SYMPHONY_MCP_EXTRA` en el `env` del spawn (`Runtime::shared_env` + `shared::launch_env`, que es pura y está probada); así `SpawnRequest` no cambió. `SYMPHONY_NO_MCP` apaga el broker y los extras.
+- **IPC y CLI:** `skills.shared`, `skills.set_enabled`, `mcp.list`, `mcp.set_enabled`; `symphony skills [list|enable|disable]` y `symphony mcp list|enable|disable|serve`.
+- **TUI:** 20 Context Overview (`c` en un agente, o `:context`), 21 Context Object (Enter sobre una parte), 32 Shared Skills (`:skills`), 33 Shared MCP (`:mcp`), 35 Usage / Context Stats (`:stats`). 32 y 33 encienden y apagan con Espacio o Enter. Snapshots nuevos y los de la vista de agente actualizados (el pie ahora anuncia `c contexto`).
+- **Sin hacer:** `share_mode = "shared"` (una sola instancia detrás del daemon exige un proxy MCP): se indexa y la vista lo avisa, pero no se registra. Las vistas 20/21/35 no tienen búsqueda interactiva (usa `symphony context` o el broker). No hay skills «BUILTIN».
+- **Verificado:** unit tests de escaneo, plugin y `launch_env`; adapters de Claude y Codex (argv exacto); e2e con daemon real de `symphony skills` y `symphony mcp` (listar, apagar, persistir el interruptor, aviso por entrada inválida); snapshots de las cinco vistas. **No verificado en vivo:** que Claude cargue el plugin y llame a un servidor del usuario (necesita cuota; pendiente del live gratuito con OpenCode o permiso de Leo).
+- 443 tests verdes (`cargo xtask check`).
+
 ### P09.S10 · Evaluación del handoff (hecho en L2; el live queda pendiente)
 Test `handoff_evaluation_forced_kill_by_context_mode` (`crates/daemon/tests/runtime.rs`; la tabla sale con `--nocapture`): el forced kill de P06.S8 (A se cuelga, el watchdog lo mata sin cleanup y B continúa solo con el handoff) con un checkpoint pesado: `package-lock.json` tocado (3.000 líneas), dos mensajes largos, un cambio real en el README, un archivo nuevo y el «Next:» del último mensaje. Un agente por modo.
 

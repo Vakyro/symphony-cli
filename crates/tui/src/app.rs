@@ -31,6 +31,16 @@ pub enum Screen {
     Providers,
     /// 30 Recovery Center.
     Recovery,
+    /// 20 Context Overview: qué entró al último handoff del agente.
+    ContextOverview,
+    /// 21 Context Object: el original de un `ctx://`.
+    ContextObject,
+    /// 32 Shared Skills.
+    SharedSkills,
+    /// 33 Shared MCP / Tools.
+    SharedMcp,
+    /// 35 Usage / Context Stats.
+    Stats,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +104,13 @@ pub enum Req {
     ChatCreate,
     Profiles,
     Explain,
+    ContextInspect,
+    ContextRaw,
+    SharedSkills,
+    SharedMcp,
+    SharedToggle,
+    ContextStats,
+    Usage,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -311,6 +328,20 @@ pub struct App {
     /// Lo escrito cuando se cerró el desplegable con Esc: mientras no cambie, no se reabre.
     pub skill_dismissed: Option<String>,
     pub recovery: Vec<Value>,
+    /// 20: `context.inspect` del agente abierto (o del chat).
+    pub ctx_overview: Option<Value>,
+    /// 21: `context.raw` de `ctx_uri`.
+    pub ctx_object: Option<Value>,
+    pub ctx_uri: Option<String>,
+    /// Líneas que se bajaron en el objeto de contexto.
+    pub ctx_scroll: u16,
+    /// 32 y 33: lo que devuelven `skills.shared` y `mcp.list`.
+    pub shared_skills: Vec<Value>,
+    pub shared_mcp: Vec<Value>,
+    pub shared_warnings: Vec<String>,
+    /// 35: `context.stats` y `usage.get`.
+    pub ctx_stats: Option<Value>,
+    pub usage: Option<Value>,
     pub selected: usize,
     pub first_run: FirstRun,
     pub new_agent: NewAgent,
@@ -377,6 +408,15 @@ impl App {
             skill_sel: 0,
             skill_dismissed: None,
             recovery: Vec::new(),
+            ctx_overview: None,
+            ctx_object: None,
+            ctx_uri: None,
+            ctx_scroll: 0,
+            shared_skills: Vec::new(),
+            shared_mcp: Vec::new(),
+            shared_warnings: Vec::new(),
+            ctx_stats: None,
+            usage: None,
             selected: 0,
             first_run: FirstRun {
                 performance: 1,
@@ -477,6 +517,9 @@ impl App {
             Screen::ProviderSetup | Screen::Providers => self.providers.len(),
             Screen::ModelPicker => self.profiles.len() + self.models.len(),
             Screen::Recovery => self.recovery.len(),
+            Screen::ContextOverview => self.overview_items().len(),
+            Screen::SharedSkills => self.shared_skills.len(),
+            Screen::SharedMcp => self.shared_mcp.len(),
             _ => 0,
         }
     }
@@ -615,6 +658,34 @@ impl App {
                 calls.push(call(Req::Profiles, "profiles.list", json!({})));
             }
             Screen::ExplainRoute => calls.extend(self.agent_call(Req::Explain, "route.explain")),
+            Screen::ContextOverview => {
+                if let Some(id) = self.context_agent() {
+                    calls.push(call(
+                        Req::ContextInspect,
+                        "context.inspect",
+                        json!({ "agent_id": id }),
+                    ));
+                }
+            }
+            Screen::ContextObject => {
+                if let Some(uri) = &self.ctx_uri {
+                    calls.push(call(Req::ContextRaw, "context.raw", json!({ "uri": uri })));
+                }
+            }
+            Screen::SharedSkills => calls.push(call(
+                Req::SharedSkills,
+                "skills.shared",
+                json!({ "project_root": self.root() }),
+            )),
+            Screen::SharedMcp => calls.push(call(
+                Req::SharedMcp,
+                "mcp.list",
+                json!({ "project_root": self.root() }),
+            )),
+            Screen::Stats => {
+                calls.push(call(Req::ContextStats, "context.stats", json!({})));
+                calls.push(call(Req::Usage, "usage.get", json!({ "days": 7 })));
+            }
             Screen::Chat => {
                 if self.chat.is_none() {
                     calls.push(call(
@@ -818,6 +889,24 @@ impl App {
                 return self.chat_calls();
             }
             Req::Recovery => self.recovery = list("items"),
+            Req::ContextInspect => self.ctx_overview = Some(v.clone()),
+            Req::ContextRaw => self.ctx_object = Some(v.clone()),
+            Req::SharedSkills => self.shared_skills = list("skills"),
+            Req::SharedMcp => {
+                self.shared_mcp = list("servers");
+                self.shared_warnings = v["warnings"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|w| w.as_str().map(str::to_string))
+                    .collect();
+            }
+            Req::SharedToggle => {
+                self.info("Listo: vale para los agentes que se creen o continúen desde ahora.");
+                return self.refresh();
+            }
+            Req::ContextStats => self.ctx_stats = Some(v.clone()),
+            Req::Usage => self.usage = Some(v.clone()),
             Req::RecoveryAct => {
                 self.info("Hecho.");
                 return self.refresh();
@@ -953,6 +1042,10 @@ impl App {
             Screen::ExplainRoute => self.explain_key(key),
             Screen::Agent => self.agent_key(key),
             Screen::Recovery => self.recovery_key(key),
+            Screen::ContextOverview => self.overview_key(key),
+            Screen::ContextObject => self.object_key(key),
+            Screen::SharedSkills | Screen::SharedMcp => self.shared_key(key),
+            Screen::Stats => self.stats_key(key),
         }
     }
 
@@ -1355,6 +1448,10 @@ impl App {
             "new" | "spawn" => self.new_agent(),
             "providers" => self.go(Screen::Providers),
             "recovery" => self.go(Screen::Recovery),
+            "context" | "ctx" => self.open_context(),
+            "skills" => self.go(Screen::SharedSkills),
+            "mcp" => self.go(Screen::SharedMcp),
+            "stats" | "usage" => self.go(Screen::Stats),
             "quit" | "q" => {
                 self.quit = true;
                 Vec::new()
@@ -1362,7 +1459,7 @@ impl App {
             "" => Vec::new(),
             other => {
                 self.error(format!(
-                    "Comando desconocido `{other}`. Usa: spawn [modelo] <tarea> · agent <n> · new · providers · recovery · quit"
+                    "Comando desconocido `{other}`. Usa: spawn [modelo] <tarea> · agent <n> · new · providers · recovery · context · skills · mcp · stats · quit"
                 ));
                 Vec::new()
             }
@@ -1599,6 +1696,7 @@ impl App {
                 return Vec::new();
             }
             KeyCode::Char('?') => return self.open_explain(),
+            KeyCode::Char('c') => return self.open_context(),
             KeyCode::Char('e') => {
                 return vec![call(Req::Export, "agent.export", json!({ "agent": a.id }))];
             }
@@ -1634,6 +1732,149 @@ impl App {
             _ => return Vec::new(),
         }
         self.tab_call().into_iter().collect()
+    }
+
+    /// El agente del que se muestra el contexto: el abierto o, si no hay, el chat.
+    fn context_agent(&self) -> Option<String> {
+        self.agent
+            .as_ref()
+            .or(self.chat.as_ref())
+            .map(|a| a.id.clone())
+    }
+
+    /// Las partes del último handoff, con la dirección que se abre en la vista 21.
+    pub fn overview_items(&self) -> Vec<Value> {
+        self.ctx_overview
+            .as_ref()
+            .and_then(|o| o["items"].as_array().cloned())
+            .unwrap_or_default()
+    }
+
+    /// `/context`: qué entró al último handoff del agente abierto (o del chat).
+    fn open_context(&mut self) -> Vec<Call> {
+        if self.context_agent().is_none() {
+            self.error("Abre un agente o inicia el chat para ver su contexto.");
+            return Vec::new();
+        }
+        self.ctx_overview = None;
+        self.go(Screen::ContextOverview)
+    }
+
+    /// 20 Context Overview: Enter abre el original de la parte elegida.
+    fn overview_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if self.move_selection(key.code) {
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Enter => {
+                let uri = self
+                    .overview_items()
+                    .get(self.selected)
+                    .and_then(|i| i["path"].as_str().map(str::to_string))
+                    .map(|p| {
+                        if p.starts_with("ctx://") {
+                            p
+                        } else {
+                            format!("ctx://file/{p}")
+                        }
+                    });
+                match uri {
+                    Some(u) => {
+                        self.ctx_uri = Some(u);
+                        self.ctx_object = None;
+                        self.ctx_scroll = 0;
+                        self.go(Screen::ContextObject)
+                    }
+                    None => {
+                        self.info("Esa parte no tiene un objeto de contexto que abrir.");
+                        Vec::new()
+                    }
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                if self.agent.is_some() {
+                    self.screen = Screen::Agent;
+                    self.refresh()
+                } else {
+                    self.go(Screen::Chat)
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// 21 Context Object: solo lectura; ↑↓ baja y sube; Esc vuelve al resumen.
+    fn object_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.ctx_scroll = self.ctx_scroll.saturating_sub(1);
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.ctx_scroll = self.ctx_scroll.saturating_add(1);
+                Vec::new()
+            }
+            KeyCode::PageUp => {
+                self.ctx_scroll = self.ctx_scroll.saturating_sub(10);
+                Vec::new()
+            }
+            KeyCode::PageDown => {
+                self.ctx_scroll = self.ctx_scroll.saturating_add(10);
+                Vec::new()
+            }
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                self.screen = Screen::ContextOverview;
+                self.selected = 0;
+                self.refresh()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// 32 y 33: ↑↓ elige; Espacio o Enter enciende/apaga; r relee; Esc vuelve.
+    fn shared_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if self.move_selection(key.code) {
+            return Vec::new();
+        }
+        let skills = self.screen == Screen::SharedSkills;
+        match key.code {
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                let list = if skills {
+                    &self.shared_skills
+                } else {
+                    &self.shared_mcp
+                };
+                let Some(item) = list.get(self.selected) else {
+                    return Vec::new();
+                };
+                let enabled = item["enabled"].as_bool() != Some(true);
+                vec![call(
+                    Req::SharedToggle,
+                    if skills {
+                        "skills.set_enabled"
+                    } else {
+                        "mcp.set_enabled"
+                    },
+                    json!({
+                        "project_root": self.root(),
+                        "name": item["name"],
+                        "enabled": enabled,
+                    }),
+                )]
+            }
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 35: solo lectura.
+    fn stats_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
     }
 
     fn recovery_key(&mut self, key: KeyEvent) -> Vec<Call> {
