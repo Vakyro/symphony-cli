@@ -383,6 +383,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "context.inspect" => agent_view(req, state, crate::context_views::inspect),
         "context.stats" => read_view(req, state, crate::context_views::stats),
         "context.raw" => context_raw(req, state),
+        "context.search" | "context.retrieve" | "context.lines" => context_mcp(req, state).await,
         "fact.set" => fact_set(req, state).await,
         "fact.list" => fact_list(req, state),
         "provider.set_enabled" => provider_set_enabled(req, state).await,
@@ -888,6 +889,69 @@ fn context_raw(req: Request, state: &State) -> Response {
         Ok(v) => Response::ok(req.id, v),
         Err(e) => Response::error(req.id, "context_not_found", e),
     }
+}
+
+/// `context.search|retrieve|lines` del broker MCP (P09.S8): lee el contexto del proyecto y deja
+/// constancia en `context_retrievals` del run que preguntó (`run_id`, si viene y existe).
+async fn context_mcp(req: Request, state: &State) -> Response {
+    use crate::context_mcp as mcp;
+    let p = &req.params;
+    let project = match resolve_project(state, p) {
+        Ok(pr) => pr.id.to_string(),
+        Err(e) => return Response::error(req.id, "project_not_found", e),
+    };
+    let s = |k: &str| p.get(k).and_then(Value::as_str);
+    let n = |k: &str| p.get(k).and_then(Value::as_i64);
+    let objects = symphony_object_store::ObjectStore::new(
+        symphony_core::SymphonyHome::at(&state.home).objects_dir(),
+    );
+    let answer = match state.reader.lock() {
+        Ok(c) => match req.method.as_str() {
+            "context.search" => match s("query") {
+                Some(q) => mcp::search(&c, &project, q, s("uri"), n("limit")),
+                None => Err(("invalid_params", "falta `query`".to_string())),
+            },
+            "context.retrieve" => match s("uri") {
+                Some(u) => mcp::retrieve(&c, &objects, &project, u),
+                None => Err(("invalid_params", "falta `uri`".to_string())),
+            },
+            _ => match (s("uri"), n("from"), n("to")) {
+                (Some(u), Some(from), Some(to)) => {
+                    mcp::lines(&c, &objects, &project, u, from, to)
+                }
+                _ => Err(("invalid_params", "faltan `uri`, `from` y `to`".to_string())),
+            },
+        },
+        Err(_) => Err(("store_error", "lector de la base no disponible".to_string())),
+    };
+    let answer = match answer {
+        Ok(a) => a,
+        Err((code, msg)) => return Response::error(req.id, code, msg),
+    };
+    if let Some(run) = s("run_id").and_then(|r| r.parse::<symphony_core::RunId>().ok()) {
+        let now = now_ms();
+        let retrievals = answer.retrievals;
+        // Un run que ya no existe (FK) no tiene que estropear la respuesta: se descarta.
+        let _ = state
+            .writer
+            .write(Box::new(move |t| {
+                for r in &retrievals {
+                    let _ = symphony_store::context::record_retrieval(
+                        t,
+                        run,
+                        &r.object_id,
+                        r.operation,
+                        r.query.as_deref(),
+                        Some(r.tokens),
+                        r.found,
+                        now,
+                    );
+                }
+                Ok(())
+            }))
+            .await;
+    }
+    Response::ok(req.id, answer.value)
 }
 
 fn agent_view(

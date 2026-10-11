@@ -3173,6 +3173,76 @@ async fn project_files_stay_searchable_as_they_change() {
     e.writer.shutdown();
 }
 
+/// P09.S8: lo que el broker MCP pide al daemon (`search`, `retrieve`, `lines`) sobre archivos
+/// indexados: aciertos con su recuperación, recorte, misses y direcciones inválidas.
+#[tokio::test(flavor = "multi_thread")]
+async fn context_mcp_search_retrieve_and_lines() {
+    use symphony_daemon::context_mcp as mcp;
+    let e = env("[[step]]
+kind = \"say\"
+text = \"ok\"
+", None).await;
+    std::fs::create_dir_all(e.repo.join("src")).unwrap();
+    let body: String = (1..=30).map(|i| format!("linea {i} rotarmcp
+")).collect();
+    std::fs::write(e.repo.join("src/big.ts"), &body).unwrap();
+    e.runtime
+        .create_agent(req(&e, "mcp", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    let project: String = one(&e, "SELECT id FROM projects");
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let objects = symphony_object_store::ObjectStore::new(
+        symphony_core::SymphonyHome::at(&e.home).objects_dir(),
+    );
+    let started = std::time::Instant::now();
+    let found = loop {
+        let a = mcp::search(&conn, &project, "rotarmcp", None, None).unwrap();
+        if !a.value["hits"].as_array().unwrap().is_empty() {
+            break a;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "sin indexar");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(found.value["hits"][0]["uri"], "ctx://file/src/big.ts");
+    assert!(found.retrievals.iter().all(|r| r.found && r.operation == "SEARCH"));
+
+    let uri = "ctx://file/src/big.ts";
+    let all = mcp::retrieve(&conn, &objects, &project, uri).unwrap();
+    assert_eq!(all.value["text"], body);
+    assert_eq!(all.value["truncated"], false);
+    assert_eq!(all.value["total_lines"], 30);
+
+    let some = mcp::lines(&conn, &objects, &project, uri, 3, 4).unwrap();
+    assert_eq!(some.value["text"], "linea 3 rotarmcp
+linea 4 rotarmcp");
+    assert!(some.retrievals[0].found);
+
+    // Más allá del final: miss registrable, no error.
+    let past = mcp::lines(&conn, &objects, &project, uri, 99, 120).unwrap();
+    assert_eq!(past.value["text"], "");
+    assert!(!past.retrievals[0].found);
+    // Búsqueda sin resultados dentro de un objeto conocido: miss atado a ese objeto.
+    let none = mcp::search(&conn, &project, "inexistentexyz", Some(uri), None).unwrap();
+    assert!(none.value["hits"].as_array().unwrap().is_empty());
+    assert_eq!(none.retrievals.len(), 1);
+    assert!(!none.retrievals[0].found);
+    // El rango pedido se recorta a LINES_MAX.
+    let wide = mcp::lines(&conn, &objects, &project, uri, 1, 100_000).unwrap();
+    assert_eq!(wide.value["to"], 30);
+
+    for bad in ["ctx://file/../../etc/passwd", "no-es-una-uri"] {
+        let err = mcp::retrieve(&conn, &objects, &project, bad).unwrap_err();
+        assert_eq!(err.0, "invalid_params", "{bad}");
+    }
+    let err = mcp::retrieve(&conn, &objects, &project, "ctx://file/nada.ts").unwrap_err();
+    assert_eq!(err.0, "context_not_found");
+    let err = mcp::search(&conn, &project, "!!! ???", None, None).unwrap_err();
+    assert_eq!(err.0, "invalid_params");
+    e.writer.shutdown();
+}
+
 /// P09.S7: `project_facts` se incluyen en el handoff y registran su item en Decisions.
 #[tokio::test(flavor = "multi_thread")]
 async fn project_facts_ipc_and_handoff_integration() {
