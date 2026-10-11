@@ -149,7 +149,7 @@ If a test leaves an orphaned `symphonyd.exe`, the next build fails with "Acceso 
 
 - ✅ P00–P07 (v0.1.0), P07.5 (general chat), P11 (Kimi, Antigravity, Copilot), P10 (health, router, profiles, failover — v0.5.0).
 - 🟡 **P09 Context Engine** in progress on `phase/p09-context-engine` (order set by ADR-0010: P10 → P09 → P08).
-- ⏳ P08 multi-agent runtime after P09; it must account for ADR-0011 (agents plan by phases/tasks; fresh session per phase, `/compact` between tasks, both automatic by default and configurable). P12–P16 remain provisional.
+- 🟡 **P08 multi-agent runtime** done in code on `phase/p08-runtime-multiagente` (S1–S10, ADR-0013); pending Leo's benchmark approval, then merge + tag `p08-done`. It accounts for ADR-0011 (agents plan by phases/tasks; fresh session per phase, `/compact` between tasks, both automatic by default and configurable). P12–P16 remain provisional.
 
 ---
 

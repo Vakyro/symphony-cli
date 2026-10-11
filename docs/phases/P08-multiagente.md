@@ -2,10 +2,10 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA CON PENDIENTES (falta la opinión de Leo sobre el benchmark, el merge y el tag) |
 | Rama | phase/p08-runtime-multiagente |
 | Inicio / cierre | 2026-10-11 / — |
-| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S9) |
+| Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S10) |
 | Tag | p08-done (pendiente) |
 | Docs usados | ADR-0011, ADR-0013, DB §3.B/§3.C/§3.H, PLAN §P08, CONSTRAINTS A12 |
 
@@ -132,6 +132,15 @@
 - **Cómo se verificó:** `cargo nextest run -p symphony-daemon --test benchmark --no-capture` (L2, ~18 s) y `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_benchmark --no-capture` (L3, ~4 min, gasta unos pocos tokens por proveedor). `cargo xtask check` → 559 passed.
 - **Pendiente (⛔ Leo):** la opinión sobre la fluidez de la máquina mientras corre el lote («UI del sistema responde»). El criterio de salida de P08 pide que Leo apruebe el benchmark; por eso no se etiqueta `p08-done`. Para dársela: ejecutar el L3 mientras usa la máquina con normalidad.
 - **Hallazgos para decidir:** (1) Seis CLIs simultáneos llevan la CPU al 87 % (p95) en esta máquina de 4 núcleos aunque el perfil sea `balanced` (objetivo 70 %): el scheduler solo retiene operaciones pesadas, no cuenta CLIs. Con 3 agentes el pico fue menor. Si Leo quiere un tope de agentes simultáneos por perfil (no solo de procesos pesados), es una decisión nueva (ADR), no un ajuste. (2) El p99 de eventos bajo carga supera el objetivo de 50 ms; habría que medirlo con el hook real (`symphony hook emit`) antes de ajustar nada.
+
+### P08.S10 · Cierre — 🟡 hecho salvo el merge y el tag
+- **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-11
+- **Cobertura** (`cargo llvm-cov nextest -p symphony-scheduler -p symphony-core -p symphony-store --summary-only`, líneas): scheduler `concurrency` 100 %, `validation` 99 %, `dag` 99 %, `plan` 96 %, `classify` 92 %, `queue` 89 %; core `transitions` 100 % y `enums` 100 %; store `processes` 89 %, `resources` 81 %, `validation` 79 %, `merge` 78 %, `deps` 74 %. El 42 % de `store/src/repo.rs` es de repositorios que ejercitan los tests del daemon, no estos paquetes. Lo que pedía el PLAN (scheduler, estados y DAG) queda ≥ 89 %.
+- **`ponytail-review`:** 9 hallazgos, ~170 líneas posibles. Hecho: se borraron `Plan::ready_tasks` y `Plan::waves` (sin llamadores fuera de sus tests). **Anotado como deuda, sin tocar:** `scheduler::creates_cycle` (duplica al CTE del almacén; lo conserva el proptest que exige el PLAN), `Resolution::Replan` (alias de `Ignore`), `store::merge::queue` (nadie la lee), el conteo que devuelve `merge_mark_resolved`, `restart_with_feedback` sin test propio, `Validation::headline` derivable de `feedback`, y `os_max_memory_mb`/`os_max_processes` que nadie fija.
+- **Revisión de código:** sobre la rama completa (S1–S9) a mano, con los tests de cada paso. Riesgos que quedan documentados arriba y en cada paso: (1) retención por hook y plan por fases dependen de que el CLI real siga instrucciones (no probado en L3 más allá del benchmark mínimo); (2) `commit_on_complete` está activo por defecto: un agente que completa deja un commit en su rama; (3) la validación y la preparación del worktree ejecutan los comandos del `project.toml` con el shell de la plataforma, sin sandbox.
+- **Gate:** `cargo xtask check` → 559 passed, 0 fallos; CI en ubuntu/windows/macos/msrv/deny **no corrió** (la rama no está pusheada: pide permiso de Leo).
+- **Criterios de salida de P08:** «Journeys B y D pasan» ✅ (D en L2: `two_agents_on_the_same_file_conflict_and_the_user_can_abort_or_resolve`; B —varios agentes sin conflicto y lote— en `a_batch_creates_agents_with_dependencies_and_integrates_what_finished`). «Benchmark principal aprobado por Leo» ⛔ **pendiente**: está medido (S9), falta su opinión. Por eso la rama `phase/p08-runtime-multiagente` **no se fusionó a `main` ni se etiquetó `p08-done`**.
+- **Para cerrar la fase:** Leo corre `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_benchmark --no-capture` usando la máquina con normalidad y responde si la fluidez fue aceptable; luego `git merge --no-ff phase/p08-runtime-multiagente` en `main` (con CI verde) y el tag `p08-done`.
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |

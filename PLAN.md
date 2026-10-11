@@ -960,7 +960,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Salida:** tabla de RAM total, CPU p50/p95, número de procesos, latencia de cola y latencia de eventos, más la opinión de Leo sobre la fluidez de la máquina.
 - **Si falla la métrica principal:** `the-council` + ADR con el ajuste (perfiles, límites, slots). **No avanzar sin resolverlo.**
 
-### P08.S10 · Cierre
+### P08.S10 · Cierre 🟡 hecho salvo merge y tag (esperan la aprobación de Leo del benchmark)
 - Cobertura (`cargo-llvm-cov`) de scheduler, estados y DAG anotada. `ponytail-review`. Protocolo §4.6. Tag `p08-done`.
 
 **Criterios de salida P08:** Journeys B y D pasan; benchmark principal aprobado por Leo.

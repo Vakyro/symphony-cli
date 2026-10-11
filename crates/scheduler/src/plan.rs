@@ -256,40 +256,6 @@ impl Plan {
         let total = all.clone().count();
         (all.filter(|t| t.mark == TaskMark::Done).count(), total)
     }
-
-    /// Las tareas de la fase `index` que están listas: pendientes y con sus `needs` hechas.
-    pub fn ready_tasks(&self, index: usize) -> Vec<&PlanTask> {
-        let done: HashSet<&str> = self
-            .phases
-            .iter()
-            .flat_map(|p| p.tasks.iter())
-            .filter(|t| t.mark == TaskMark::Done)
-            .filter_map(|t| t.id.as_deref())
-            .collect();
-        self.phases.get(index).map_or_else(Vec::new, |p| {
-            p.tasks
-                .iter()
-                .filter(|t| t.mark == TaskMark::Pending)
-                .filter(|t| t.needs.iter().all(|n| done.contains(n.as_str())))
-                .collect()
-        })
-    }
-
-    /// Las olas del plan por dependencias: lo que puede correr en paralelo (F3).
-    pub fn waves(&self) -> Result<Vec<Vec<String>>, PlanError> {
-        self.validate()?;
-        let mut ids: Vec<String> = Vec::new();
-        let mut edges: Vec<(String, String)> = Vec::new();
-        for p in &self.phases {
-            for t in &p.tasks {
-                if let Some(id) = &t.id {
-                    ids.push(id.clone());
-                    edges.extend(t.needs.iter().map(|n| (id.clone(), n.clone())));
-                }
-            }
-        }
-        dag::topo_layers(ids, &edges).map_err(|c| PlanError::Cycle(c.0.join(" → ")))
-    }
 }
 
 /// Sin `Fase N:` al inicio, para que `render` no lo duplique.
@@ -454,27 +420,6 @@ Verifica: cargo test -p auth
         assert_eq!(Plan::parse("nada").validate(), Err(PlanError::NoPhases));
         let empty = Plan::parse("# Plan: x\n## Fase 1: a\n");
         assert_eq!(empty.validate(), Err(PlanError::EmptyPhase("a".into())));
-    }
-
-    #[test]
-    fn ready_tasks_respect_needs_and_waves_group_by_depth() {
-        let p = Plan::parse(
-            "# Plan: x\n## Fase 1: a\n- [ ] [A] uno\n- [ ] [B] dos (needs: A)\n- [ ] [C] tres (needs: A)\n- [ ] [D] cuatro (needs: B, C)\n",
-        );
-        let ready: Vec<_> = p
-            .ready_tasks(0)
-            .iter()
-            .map(|t| t.id.clone().unwrap())
-            .collect();
-        assert_eq!(ready, ["A"]);
-        assert_eq!(
-            p.waves().unwrap(),
-            vec![
-                vec!["A".to_string()],
-                vec!["B".into(), "C".into()],
-                vec!["D".into()]
-            ]
-        );
     }
 
     #[test]
