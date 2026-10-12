@@ -29,7 +29,13 @@ fn check() -> ExitCode {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     for args in CHECK {
         eprintln!("xtask: cargo {}", args.join(" "));
-        match Command::new(&cargo).args(*args).status() {
+        // El gate nunca gasta cuota (PLAN §6): los `live_*` se omiten aunque la terminal herede
+        // `SYMPHONY_LIVE=1`. Para correr un live, llama a `cargo nextest` directamente.
+        match Command::new(&cargo)
+            .args(*args)
+            .env_remove("SYMPHONY_LIVE")
+            .status()
+        {
             Ok(s) if s.success() => {}
             Ok(s) => {
                 eprintln!("xtask: falló `cargo {}` ({s})", args.join(" "));

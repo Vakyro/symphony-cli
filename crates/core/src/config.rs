@@ -174,6 +174,35 @@ pub struct ProvidersConfig {
     /// Ajustes por proveedor (`[providers.limits.anthropic]`): reserva propia y, opcional, un
     /// presupuesto de tokens por ventana para estimar la cuota de CLIs que no la informan.
     pub limits: std::collections::BTreeMap<String, ProviderLimits>,
+    /// `[providers.permissions]`: qué puede hacer cada CLI sin preguntar.
+    pub permissions: ProviderPermissions,
+}
+
+/// `[providers.permissions]` (P11.5.S2). Los valores por defecto son los que Symphony usaba
+/// antes de que fueran configurables: editar sí, ejecutar comandos solo dentro del sandbox o
+/// con aprobación. Kimi y OpenCode no tienen modo restringido en `--print`/`run`: no hay opción.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderPermissions {
+    /// `--permission-mode` de Claude Code (`acceptEdits`, `default`, `plan`, `bypassPermissions`…).
+    pub claude_permission_mode: String,
+    /// `-s` de Codex: `read-only` · `workspace-write` · `danger-full-access`.
+    pub codex_sandbox: String,
+    /// `--dangerously-skip-permissions` de Antigravity: puede ejecutar cualquier comando.
+    pub antigravity_skip_permissions: bool,
+    /// `--allow-all-tools` de Copilot: puede ejecutar cualquier comando.
+    pub copilot_allow_all_tools: bool,
+}
+
+impl Default for ProviderPermissions {
+    fn default() -> Self {
+        Self {
+            claude_permission_mode: "acceptEdits".into(),
+            codex_sandbox: "workspace-write".into(),
+            antigravity_skip_permissions: false,
+            copilot_allow_all_tools: false,
+        }
+    }
 }
 
 /// `[providers.limits.<proveedor>]`.
@@ -232,6 +261,7 @@ impl Default for ProvidersConfig {
         Self {
             quota_reserve: 0.20,
             limits: std::collections::BTreeMap::new(),
+            permissions: ProviderPermissions::default(),
         }
     }
 }
@@ -287,6 +317,15 @@ quota_reserve = 0.20
 # window_hours = 720
 # window_tokens = 5000000
 
+[providers.permissions]
+# Qué puede hacer cada CLI sin preguntarte. Los valores de abajo son los predeterminados:
+# editar archivos sí, ejecutar comandos solo dentro del sandbox o con aprobación.
+# Cambiarlos da más poder al agente (y más riesgo). Kimi y OpenCode no tienen modo restringido.
+# claude_permission_mode = "acceptEdits"       # default · acceptEdits · plan · bypassPermissions
+# codex_sandbox = "workspace-write"            # read-only · workspace-write · danger-full-access
+# antigravity_skip_permissions = false         # true: cualquier comando, sin sandbox
+# copilot_allow_all_tools = false              # true: cualquier comando
+
 [logging]
 # error · warn · info · debug · trace
 level = "info"
@@ -322,6 +361,25 @@ impl Config {
                     "providers.limits.{id}: window_hours y window_tokens deben ser mayores que 0"
                 )));
             }
+        }
+        let perm = &self.providers.permissions;
+        // Forma, no lista: un modo nuevo de Claude Code no debe rechazarse; pero nada que pueda
+        // leerse como otra opción de la línea de comandos.
+        let mode = &perm.claude_permission_mode;
+        if mode.is_empty() || !mode.chars().all(|c| c.is_ascii_alphabetic()) {
+            return Err(invalid(format!(
+                "providers.permissions.claude_permission_mode = {mode:?} debe ser una palabra \
+                 (acceptEdits, default, plan, bypassPermissions…)"
+            )));
+        }
+        if !["read-only", "workspace-write", "danger-full-access"]
+            .contains(&perm.codex_sandbox.as_str())
+        {
+            return Err(invalid(format!(
+                "providers.permissions.codex_sandbox = {:?} debe ser read-only, workspace-write \
+                 o danger-full-access",
+                perm.codex_sandbox
+            )));
         }
         let perf = &self.performance;
         if perf.max_heavy == Some(0) {
@@ -656,6 +714,76 @@ mod tests {
         assert!(set_value(&home, "providers.quota_reserve", 1.5.into()).is_err());
         assert!(set_value(&home, "routing.typo_key", "x".into()).is_err());
         assert_eq!(std::fs::read_to_string(home.config_path()).unwrap(), before);
+    }
+
+    /// P11.5.S2: `[providers.permissions]` — valores predeterminados, cambios y rechazos.
+    #[test]
+    fn provider_permissions_default_to_the_restrictive_values_and_validate() {
+        let (_d, home) = home();
+        std::fs::create_dir_all(home.root()).unwrap();
+        let write = |t: &str| std::fs::write(home.config_path(), t).unwrap();
+
+        // Ausente = los valores de siempre.
+        write(
+            "[providers]
+quota_reserve = 0.1
+",
+        );
+        let p = load_or_create(&home).unwrap().providers.permissions;
+        assert_eq!(p, ProviderPermissions::default());
+        assert_eq!(p.claude_permission_mode, "acceptEdits");
+        assert_eq!(p.codex_sandbox, "workspace-write");
+        assert!(!p.antigravity_skip_permissions && !p.copilot_allow_all_tools);
+
+        // Parcial: lo no dicho conserva el predeterminado.
+        write(
+            "[providers.permissions]
+codex_sandbox = \"read-only\"
+copilot_allow_all_tools = true
+",
+        );
+        let p = load_or_create(&home).unwrap().providers.permissions;
+        assert_eq!(p.codex_sandbox, "read-only");
+        assert!(p.copilot_allow_all_tools);
+        assert_eq!(p.claude_permission_mode, "acceptEdits");
+
+        // Inválidos: el error nombra la clave.
+        for (text, key) in [
+            (
+                "[providers.permissions]
+codex_sandbox = \"todo\"
+",
+                "codex_sandbox",
+            ),
+            (
+                "[providers.permissions]
+claude_permission_mode = \"\"
+",
+                "claude_permission_mode",
+            ),
+            (
+                "[providers.permissions]
+claude_permission_mode = \"--dangerously-skip-permissions\"
+",
+                "claude_permission_mode",
+            ),
+            (
+                "[providers.permissions]
+codex_sandbx = \"read-only\"
+",
+                "codex_sandbx",
+            ),
+            (
+                "[providers.permissions]
+antigravity_skip_permissions = \"si\"
+",
+                "antigravity_skip_permissions",
+            ),
+        ] {
+            write(text);
+            let err = load_or_create(&home).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}: {err}");
+        }
     }
 
     #[test]

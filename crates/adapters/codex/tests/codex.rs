@@ -322,3 +322,29 @@ fn native_codex_is_found_in_both_npm_layouts() {
     );
     assert_eq!(native_codex_in(d.path()), Some(nested));
 }
+
+/// P11.5.S2: el sandbox sale de la config; el valor por defecto sigue siendo `workspace-write`.
+#[test]
+fn sandbox_comes_from_the_config() {
+    let a = CodexAdapter {
+        sandbox: "read-only".into(),
+        ..adapter()
+    };
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "gpt-5.6-luna".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        hook: None,
+        env: vec![],
+    };
+    let args: Vec<String> = a
+        .spawn_spec(&req)
+        .unwrap()
+        .args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(&args[..3], ["exec", "-s", "read-only"]);
+    assert!(!args.iter().any(|a| a == "workspace-write"), "{args:?}");
+}

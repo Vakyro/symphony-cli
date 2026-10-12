@@ -389,3 +389,32 @@ fn shared_skills_plugin_and_extra_mcp_servers_are_registered_per_invocation() {
     assert_eq!(servers["remoto"]["type"], "http");
     assert_eq!(at("--allowedTools"), "mcp__fs,mcp__remoto");
 }
+
+/// P11.5.S2: el modo de permisos sale de la config; el valor por defecto sigue siendo `acceptEdits`.
+#[test]
+fn permission_mode_comes_from_the_config() {
+    let a = ClaudeAdapter {
+        permission_mode: "plan".into(),
+        ..adapter()
+    };
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "sonnet".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        hook: None,
+        env: vec![],
+    };
+    let args: Vec<String> = a
+        .spawn_spec(&req)
+        .unwrap()
+        .args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        args[args.iter().position(|a| a == "--permission-mode").unwrap() + 1],
+        "plan"
+    );
+    assert!(!args.iter().any(|a| a == "acceptEdits"), "{args:?}");
+}

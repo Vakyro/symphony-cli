@@ -170,12 +170,19 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
             args: vec!["hook".into(), "emit".into()],
         }
     });
+    // La config se lee antes que el runtime: los permisos de los proveedores (`[providers.
+    // permissions]`) se fijan al crear los adapters. Una config inválida deja los predeterminados.
+    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home));
+    let permissions = config
+        .as_ref()
+        .map(|c| c.providers.permissions.clone())
+        .unwrap_or_default();
     let runtime = crate::runtime::Runtime::new(
         home,
         writer.handle(),
         runtime_reader,
         bus.clone(),
-        crate::providers::builtin_arc(),
+        crate::providers::builtin_arc(&permissions),
         hook_cmd,
     );
     runtime.watch_active_projects();
@@ -187,7 +194,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     runtime.set_scheduling(scheduling.clone());
     scheduling.spawn(writer.handle(), shutdown.clone());
 
-    match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
+    match config {
         Ok(config) => {
             bus.set_health_config(crate::health::HealthConfig::from_config(&config));
             scheduling.set_limits(symphony_scheduler::Limits::from_config(&config.performance));
@@ -207,7 +214,11 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
             runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
         }
         Err(e) => {
-            tracing::warn!(error = %e, "config.toml no se pudo leer; el chat no cambia por umbral")
+            tracing::warn!(
+                error = %e,
+                "config.toml no se pudo leer: permisos de proveedores predeterminados y el chat \
+                 no cambia por umbral"
+            )
         }
     }
 
@@ -1505,10 +1516,12 @@ async fn recovery_act(req: Request, state: &State) -> Response {
 async fn refresh_providers(
     writer: &symphony_store::WriterHandle,
 ) -> Result<(), symphony_store::StoreError> {
-    let detected =
-        tokio::task::spawn_blocking(|| crate::providers::detect_all(&crate::providers::builtin()))
-            .await
-            .unwrap_or_default();
+    // Detectar no depende de los permisos: se usan los predeterminados.
+    let detected = tokio::task::spawn_blocking(|| {
+        crate::providers::detect_all(&crate::providers::builtin(&Default::default()))
+    })
+    .await
+    .unwrap_or_default();
     crate::providers::save(writer, detected, now_ms()).await
 }
 

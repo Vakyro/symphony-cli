@@ -13,8 +13,8 @@ pub use ansi::{AnsiMode, sanitize};
 pub use config::{
     ChatConfig, Config, ConfigError, ContextConfig, DEFAULT_CONFIG, LoggingConfig,
     PerformanceConfig, PhaseStart, PlanConfig, ProjectConfig, ProjectInit, ProjectSection,
-    ProviderLimits, ProvidersConfig, RoutingConfig, SymphonyHome, init_project, load_or_create,
-    load_project, project_config_path, set_value,
+    ProviderLimits, ProviderPermissions, ProvidersConfig, RoutingConfig, SymphonyHome,
+    init_project, load_or_create, load_project, project_config_path, set_value,
 };
 pub use config::{MergeConfig, ValidationConfig, WorktreeConfig};
 pub use enums::{

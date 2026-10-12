@@ -9,9 +9,11 @@
 //! ctx://tool/<id>                   la salida de una herramienta
 //! ```
 //!
-//! El parser es **estricto**: una dirección nunca puede salir de su raíz. No se decodifica nada
-//! (`%` se rechaza), no se aceptan `.` ni `..`, rutas absolutas, `\`, letras de unidad ni
-//! caracteres de control. Lo que parsea, al formatearse vuelve a dar la misma dirección.
+//! El parser es **estricto**: una dirección nunca puede salir de su raíz. Solo se decodifican
+//! cuatro escapes, en mayúsculas, y solo en la ruta de un archivo: `%25` (`%`), `%40` (`@`),
+//! `%3F` (`?`) y `%23` (`#`), para que `packages/@scope/x.ts` tenga dirección. Cualquier otro
+//! `%` se rechaza (nunca `%2e` ni `%2f`), igual que `.` y `..`, rutas absolutas, `\`, letras de
+//! unidad y caracteres de control. Lo que parsea, al formatearse vuelve a dar la misma dirección.
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -49,7 +51,9 @@ pub enum UriError {
     Scheme,
     #[error("tipo de dirección desconocido: `{0}`")]
     Kind(String),
-    #[error("la dirección no puede contener `%`, `\\`, caracteres de control ni `?`/`#`")]
+    #[error(
+        "la dirección no puede contener `\\`, caracteres de control, `?`/`#` ni un `%` que no sea `%25`, `%40`, `%3F` o `%23`"
+    )]
     ForbiddenChar,
     #[error("segmento de ruta inválido (`..`, `.`, vacío o con `:`): `{0}`")]
     Segment(String),
@@ -76,6 +80,37 @@ fn segment_ok(s: &str) -> bool {
         && !s.ends_with('.')
 }
 
+/// Los únicos escapes que acepta la ruta de un archivo (en mayúsculas, para que cada ruta tenga
+/// una sola dirección).
+const ESCAPES: [(char, &str); 4] = [('%', "%25"), ('@', "%40"), ('?', "%3F"), ('#', "%23")];
+
+/// `a%40b` → `a@b`. `None` si hay un `%` que no es uno de [`ESCAPES`].
+fn decode_path(raw: &str) -> Option<String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let (c, _) = ESCAPES.iter().find(|(_, e)| tail.starts_with(e))?;
+        out.push(*c);
+        rest = &tail[3..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// Lo inverso de [`decode_path`]: la ruta tal como va en la dirección.
+pub fn encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        match ESCAPES.iter().find(|(e, _)| *e == c) {
+            Some((_, esc)) => out.push_str(esc),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 fn rev_ok(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 100
@@ -86,19 +121,25 @@ fn rev_ok(s: &str) -> bool {
 }
 
 impl CtxUri {
-    /// Parsea y valida. No decodifica nada.
+    /// Parsea y valida. Solo decodifica los escapes de [`ESCAPES`], y solo en la ruta de un archivo.
     pub fn parse(input: &str) -> Result<Self, UriError> {
         if input.is_empty() || input.len() > MAX_URI_LEN {
             return Err(UriError::Length);
         }
         let rest = input.strip_prefix("ctx://").ok_or(UriError::Scheme)?;
+        let (kind, tail) = rest.split_once('/').unwrap_or((rest, ""));
+        // En un archivo, `%` solo puede ser uno de ESCAPES (se comprueba al decodificar la ruta).
+        let reserved: &[char] = if kind == "file" {
+            &['\\', '?', '#']
+        } else {
+            &['%', '\\', '?', '#']
+        };
         if rest
             .chars()
-            .any(|c| c.is_control() || matches!(c, '%' | '\\' | '?' | '#'))
+            .any(|c| c.is_control() || reserved.contains(&c))
         {
             return Err(UriError::ForbiddenChar);
         }
-        let (kind, tail) = rest.split_once('/').unwrap_or((rest, ""));
         match kind {
             "file" => {
                 let (path, rev) = match tail.split_once('@') {
@@ -107,6 +148,10 @@ impl CtxUri {
                 };
                 if path.is_empty() {
                     return Err(UriError::Segment(String::new()));
+                }
+                let path = decode_path(path).ok_or(UriError::ForbiddenChar)?;
+                if path.chars().any(char::is_control) {
+                    return Err(UriError::ForbiddenChar);
                 }
                 for seg in path.split('/') {
                     if !segment_ok(seg) {
@@ -118,10 +163,7 @@ impl CtxUri {
                     Some(r) => return Err(UriError::Rev(r.to_string())),
                     None => None,
                 };
-                Ok(Self::File {
-                    path: path.to_string(),
-                    rev,
-                })
+                Ok(Self::File { path, rev })
             }
             "diff" => {
                 let (agent, hash) = tail
@@ -171,11 +213,11 @@ impl CtxUri {
 impl fmt::Display for CtxUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::File { path, rev: None } => write!(f, "ctx://file/{path}"),
+            Self::File { path, rev: None } => write!(f, "ctx://file/{}", encode_path(path)),
             Self::File {
                 path,
                 rev: Some(rev),
-            } => write!(f, "ctx://file/{path}@{rev}"),
+            } => write!(f, "ctx://file/{}@{rev}", encode_path(path)),
             Self::Diff { agent, hash } => write!(f, "ctx://diff/{agent}/{hash}"),
             Self::Message { id } => write!(f, "ctx://message/{id}"),
             Self::Run { id } => write!(f, "ctx://run/{id}"),
@@ -196,6 +238,9 @@ mod tests {
             "ctx://file/src/auth.ts@a1b2c3d",
             "ctx://file/README.md@main",
             "ctx://file/dir/sub dir/a b.txt",
+            "ctx://file/packages/%40scope/x.ts",
+            "ctx://file/src/%40types.ts@main",
+            "ctx://file/a%3Fb%23c%25d.txt",
             "ctx://diff/01M3AGENT/9f8e7d6c",
             "ctx://message/01M3MSG",
             "ctx://run/921",
@@ -218,6 +263,16 @@ mod tests {
             "ctx://file",
             "ctx://file/%2e%2e/%2e%2e/etc/passwd",
             "ctx://file/a%2fb",
+            "ctx://file/a%2Fb",
+            "ctx://file/a%5Cb",
+            "ctx://file/a%40b%",
+            "ctx://file/a%4",
+            "ctx://file/a%3fb",
+            "ctx://file/a%00b",
+            "ctx://file/a%0Ab",
+            "ctx://file/%252e%252e/%2e",
+            "ctx://diff/a%40b/c",
+            "ctx://message/a%40b",
             "ctx://file/..%2f..%2fx",
             "ctx://file/a\\..\\b",
             "ctx://file/C:/Windows/system.ini",
@@ -269,7 +324,52 @@ mod tests {
         assert_eq!(absolute.file_under(root), None);
     }
 
+    #[test]
+    fn escaped_reserved_characters_roundtrip_to_the_real_path() {
+        let uri = CtxUri::parse("ctx://file/packages/%40scope/x%23y.ts@main").unwrap();
+        assert_eq!(
+            uri,
+            CtxUri::File {
+                path: "packages/@scope/x#y.ts".into(),
+                rev: Some("main".into()),
+            }
+        );
+        // El `@` escapado no se confunde con el separador de revisión.
+        assert_eq!(
+            uri.to_string(),
+            "ctx://file/packages/%40scope/x%23y.ts@main"
+        );
+        let root = Path::new("/raiz");
+        assert_eq!(
+            uri.file_under(root),
+            Some(root.join("packages").join("@scope").join("x#y.ts"))
+        );
+        // Un nombre que parece un escape queda literal: `%252e` es el archivo `%2e`.
+        let lit = CtxUri::parse("ctx://file/%252e").unwrap();
+        assert_eq!(
+            lit,
+            CtxUri::File {
+                path: "%2e".into(),
+                rev: None
+            }
+        );
+    }
+
     proptest! {
+        /// Cualquier ruta sin segmentos que escapen sobrevive a formatear y volver a parsear.
+        #[test]
+        fn any_safe_path_roundtrips(segs in proptest::collection::vec("[A-Za-z0-9 @?#%_-]{1,8}", 1..5)) {
+            let path = segs.join("/");
+            let uri = CtxUri::File { path: path.clone(), rev: None };
+            let s = uri.to_string();
+            match CtxUri::parse(&s) {
+                Ok(back) => prop_assert_eq!(back, uri),
+                // Solo se rechazan segmentos con espacio final (regla de `segment_ok`).
+                Err(UriError::Segment(seg)) => prop_assert!(seg.ends_with(' ') || seg.ends_with('.'), "{s}"),
+                Err(e) => prop_assert!(false, "{s}: {e}"),
+            }
+        }
+
         /// Con cualquier texto, el parser no entra en pánico; lo que acepta es canónico y
         /// nunca contiene un segmento que escape.
         #[test]

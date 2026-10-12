@@ -1951,7 +1951,13 @@ impl App {
                         if p.starts_with("ctx://") {
                             p
                         } else {
-                            format!("ctx://file/{p}")
+                            // Mismos escapes que `symphony_context::uri` (la TUI no depende de ese crate).
+                            let esc = p
+                                .replace('%', "%25")
+                                .replace('@', "%40")
+                                .replace('?', "%3F")
+                                .replace('#', "%23");
+                            format!("ctx://file/{esc}")
                         }
                     });
                 match uri {

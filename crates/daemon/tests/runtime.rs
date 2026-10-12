@@ -3347,6 +3347,13 @@ text = \"ok\"
         })
         .collect();
     std::fs::write(e.repo.join("src/big.ts"), &body).unwrap();
+    // P11.5.S1: una ruta con `@` (paquete con scope) tiene dirección propia, con `@` escapado.
+    std::fs::create_dir_all(e.repo.join("packages/@scope")).unwrap();
+    std::fs::write(
+        e.repo.join("packages/@scope/x.ts"),
+        "export const palabraescopada = 1;\n",
+    )
+    .unwrap();
     std::fs::write(
         e.repo.join("src/secret.ts"),
         "const KEY = \"sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv\"; // claveindexada
@@ -3437,7 +3444,39 @@ linea 4 rotarmcp"
             .contains("claveindexada")
     );
 
-    for bad in ["ctx://file/../../etc/passwd", "no-es-una-uri"] {
+    let started = std::time::Instant::now();
+    let scoped = loop {
+        let a = mcp::search(&conn, &project, "palabraescopada", None, None).unwrap();
+        if !a.value["hits"].as_array().unwrap().is_empty() {
+            break a;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "sin indexar");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(
+        scoped.value["hits"][0]["uri"],
+        "ctx://file/packages/%40scope/x.ts"
+    );
+    let uri_scoped = "ctx://file/packages/%40scope/x.ts";
+    let got = mcp::retrieve(&conn, &objects, &project, uri_scoped).unwrap();
+    assert_eq!(got.value["text"], "export const palabraescopada = 1;\n");
+    assert!(
+        mcp::lines(&conn, &objects, &project, uri_scoped, 1, 1)
+            .unwrap()
+            .retrievals[0]
+            .found
+    );
+    // El `@` sin escapar sigue siendo el separador de revisión (`packages/` + rev `scope/x.ts`):
+    // la ruta queda con un segmento vacío y se rechaza.
+    let err =
+        mcp::retrieve(&conn, &objects, &project, "ctx://file/packages/@scope/x.ts").unwrap_err();
+    assert_eq!(err.0, "invalid_params");
+
+    for bad in [
+        "ctx://file/../../etc/passwd",
+        "ctx://file/packages/%2e%2e/x.ts",
+        "no-es-una-uri",
+    ] {
         let err = mcp::retrieve(&conn, &objects, &project, bad).unwrap_err();
         assert_eq!(err.0, "invalid_params", "{bad}");
     }
