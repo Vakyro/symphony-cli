@@ -43,9 +43,13 @@ impl std::str::FromStr for Resolution {
 pub fn spawn(runtime: Runtime, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
     let mut changes = runtime.writer.state_changes();
     tokio::spawn(async move {
+        // La cuota también cambia sin que un agente cambie de estado: se revisa cada tanto.
+        let mut refill = tokio::time::interval(std::time::Duration::from_secs(3));
+        refill.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
+                _ = refill.tick() => runtime.fill_batches().await,
                 change = changes.recv() => match change {
                     Ok(c) => {
                         let outcome = match c.to {
@@ -56,6 +60,8 @@ pub fn spawn(runtime: Runtime, shutdown: CancellationToken) -> tokio::task::Join
                         };
                         if let Ok(agent) = c.agent_id.parse::<AgentId>() {
                             react(&runtime, agent, outcome).await;
+                            // Terminó uno: puede haber cupo para quien esperaba.
+                            runtime.fill_batches().await;
                         }
                     }
                     Err(RecvError::Lagged(_)) => {}
@@ -78,6 +84,33 @@ async fn react(rt: &Runtime, agent: AgentId, outcome: Finished) {
         .and_then(|c| repo::get_agent(&c, agent).ok())
         .map(|a| a.task_id);
     let Some(task) = task else { return };
+    reconcile_and_start(rt, task, outcome).await;
+}
+
+/// Un agente que nació esperando puede haber perdido la carrera contra el fin de su dependencia
+/// (lo leyó pendiente y, antes de que se confirmara su creación, la dependencia terminó y el
+/// reactor ya había pasado): queda `WAITING_DEPENDENCY` para siempre. Se reevalúa con las
+/// dependencias que ya están hechas. Es idempotente.
+pub async fn recheck_new(rt: &Runtime, task: TaskId) {
+    let done: Vec<TaskId> = rt
+        .reader
+        .lock()
+        .ok()
+        .and_then(|c| deps::dependencies_of(&c, task).ok())
+        .map(|rows| {
+            rows.into_iter()
+                .filter(|d| d.status == TaskStatus::Done)
+                .map(|d| d.task_id)
+                .collect()
+        })
+        .unwrap_or_default();
+    for dep in done {
+        reconcile_and_start(rt, dep, Finished::Done).await;
+    }
+}
+
+/// Reevalúa a los dependientes de `task` (que terminó con `outcome`) y arranca a los liberados.
+async fn reconcile_and_start(rt: &Runtime, task: TaskId, outcome: Finished) {
     let reactions: Arc<Mutex<Vec<Reaction>>> = Arc::default();
     let sink = reactions.clone();
     let written = rt
@@ -118,6 +151,16 @@ async fn react(rt: &Runtime, agent: AgentId, outcome: Finished) {
 /// Un agente liberado arranca solo si ya sabe con qué modelo (exacto o profile); si quedó
 /// «decidir después», espera en `READY` a que el usuario elija.
 pub async fn start_released(rt: &Runtime, agent_id: AgentId) {
+    // Un agente de un lote espera si la cuota de ahora no deja cupo; `fill_batches` lo arranca.
+    if !rt.batch_has_room_for(agent_id) {
+        rt.hold_for_batch(agent_id).await;
+        return;
+    }
+    start_now(rt, agent_id).await;
+}
+
+/// Arranca a un agente `READY` sin mirar el cupo del lote (lo mira quien llama).
+pub(crate) async fn start_now(rt: &Runtime, agent_id: AgentId) {
     let agent = rt
         .reader
         .lock()

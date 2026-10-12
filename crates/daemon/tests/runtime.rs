@@ -4572,6 +4572,12 @@ text = '''Revisé el diff.
 async fn a_batch_creates_agents_with_dependencies_and_integrates_what_finished() {
     let e = env_with(&[("alpha", &slow_writes("fix.txt", "hecho"))], None).await;
     let chat = make_chat(&e).await;
+    // El reactor ya existe cuando se crea el lote (como en el daemon): bajo carga, el primer
+    // agente puede terminar mientras se crean los demás y esa transición no debe perderse.
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
     let plan = "# Plan: lote\n## Fase 1: base\n- [ ] [A] Primera\n- [ ] [B] Segunda (needs: A)\n- [ ] [C] Tercera\n";
     let batch = e
         .runtime
@@ -4606,10 +4612,6 @@ async fn a_batch_creates_agents_with_dependencies_and_integrates_what_finished()
     assert_eq!(note, 1);
 
     // Con la dependencia en marcha, el lote termina solo (el reactor arranca a B y a C).
-    let reactor = symphony_daemon::dependencies::spawn(
-        e.runtime.clone(),
-        tokio_util::sync::CancellationToken::new(),
-    );
     for a in &batch.agents {
         wait_state(&e, &a.agent_id.to_string(), "COMPLETED").await;
     }
@@ -4804,5 +4806,133 @@ async fn a_handoff_flags_a_checkpoint_older_than_the_last_activity() {
         .await
         .unwrap();
     assert!(stale.stale);
+    e.writer.shutdown();
+}
+
+/// P11.5.S5: el tope de simultáneos de un lote sigue a la cuota de ahora. Con la cuota conocida
+/// en 30 % solo caben 2 de 3: el tercero espera `READY` y arranca cuando termina uno.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_cap_follows_the_quota_that_is_known_now() {
+    // Cada agente tarda 4 s: A sigue vivo cuando baja la cuota aunque la creación del lote vaya
+    // lenta (bajo la carga del workspace completo).
+    let script = slow_writes("fix.txt", "hecho").replace("ms = 1500", "ms = 4000");
+    let e = env_with(&[("alpha", &script)], None).await;
+    make_chat(&e).await;
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let plan = "# Plan: cuota\n## Fase 1: base\n- [ ] [A] Base\n- [ ] [B] Uno (needs: A)\n- [ ] [C] Dos (needs: A)\n- [ ] [D] Tres (needs: A)\n";
+    let batch = e
+        .runtime
+        .batch_create(symphony_daemon::batch::BatchRequest {
+            project_root: e.repo.clone(),
+            title: "Lote por cuota".into(),
+            plan: plan.into(),
+            execution: Execution::Exact("alpha/fast".into()),
+            max_parallel: Some(3),
+            failover: FailoverPolicy::Any,
+            context_mode: ContextMode::Balanced,
+        })
+        .await
+        .unwrap();
+    assert_eq!(batch.parallel, 3, "al crearlo no hay cuota conocida");
+    // Después de crearlo, la cuota conocida baja: 30 % → la mitad (2 de 3).
+    set_health(&e, "alpha", "HEALTHY", "KNOWN", Some(0.30), None).await;
+    let id = |name: &str| {
+        batch
+            .agents
+            .iter()
+            .find(|a| a.id == name)
+            .unwrap()
+            .agent_id
+            .to_string()
+    };
+    let (b, c, d) = (id("B"), id("C"), id("D"));
+    // D queda esperando cupo con B y C ya en marcha.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let why: Option<String> = one(
+            &e,
+            &format!("SELECT state_reason FROM agents WHERE id = '{d}'"),
+        );
+        if why.as_deref().is_some_and(|w| w.contains("cupo")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "D nunca quedó esperando cupo"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let runs = |a: &str| -> i64 {
+        one(
+            &e,
+            &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id = '{a}'"),
+        )
+    };
+    assert_eq!((runs(&b), runs(&c), runs(&d)), (1, 1, 0));
+    assert_eq!(
+        one::<String>(&e, &format!("SELECT state FROM agents WHERE id = '{d}'")),
+        "READY"
+    );
+    // Cuando uno termina hay cupo: D arranca y el lote completo termina.
+    for a in &batch.agents {
+        wait_state(&e, &a.agent_id.to_string(), "COMPLETED").await;
+    }
+    assert_eq!(runs(&d), 1);
+    e.runtime.wait_executors().await;
+    reactor.abort();
+    e.writer.shutdown();
+}
+
+/// P11.5.S5: un agente que nació esperando a una tarea que terminó mientras se creaba (el
+/// reactor ya había pasado) no se queda en `WAITING_DEPENDENCY` para siempre.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_born_waiting_for_a_task_that_just_finished_is_released() {
+    let e = env_with(&[("alpha", &writes("a.txt", "hecho"))], None).await;
+    let (a, _) = complete(&e, "Primera", "alpha/fast").await;
+    let b = e
+        .runtime
+        .create_agent(req(&e, "Segunda", Execution::DecideLater))
+        .await
+        .unwrap();
+    // Reproduce el resultado de la carrera: B quedó esperando a A, que ya está hecha.
+    let (task_a, task_b, agent_b) = (
+        a.task_id.to_string(),
+        b.task_id.to_string(),
+        b.agent_id.to_string(),
+    );
+    e.writer
+        .handle()
+        .write(Box::new(move |t| {
+            t.execute(
+                "INSERT INTO task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, 0)",
+                [&task_b, &task_a],
+            )?;
+            t.execute(
+                "UPDATE agents SET state = 'WAITING_DEPENDENCY', state_reason = 'espera a T-1' WHERE id = ?1",
+                [&agent_b],
+            )?;
+            t.execute("UPDATE tasks SET status = 'WAITING' WHERE id = ?1", [&task_b])?;
+            Ok(())
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT state FROM agents WHERE id = '{}'", b.agent_id)
+        ),
+        "WAITING_DEPENDENCY"
+    );
+    symphony_daemon::dependencies::recheck_new(&e.runtime, b.task_id).await;
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT state FROM agents WHERE id = '{}'", b.agent_id)
+        ),
+        "READY"
+    );
     e.writer.shutdown();
 }

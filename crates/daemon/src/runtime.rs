@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use symphony_adapter_common::{HookCommand, ProviderAdapter};
 use symphony_core::{
-    AgentId, AgentState, CheckpointId, ContextMode, ExecutionMode, FailoverPolicy, ProjectId,
-    RunId, SessionId, TaskId, TaskStatus, WorktreeId,
+    AgentId, AgentState, CheckpointId, ContextMode, ExecutionMode, FailoverPolicy, MilestoneId,
+    ProjectId, RunId, SessionId, TaskId, TaskStatus, WorktreeId,
 };
 use symphony_git::{GitError, Repo, deps};
 use symphony_store::{WriterHandle, repo};
@@ -173,6 +173,9 @@ pub struct Inner {
     pub(crate) default_profile: Mutex<String>,
     /// File watchers, uno por proyecto (P09.S5).
     pub(crate) watchers: crate::watcher::Watchers,
+    /// Lotes vivos (P11.5.S5): milestone → tope de simultáneos pedido. En memoria: tras reiniciar
+    /// el daemon, un lote sigue con las dependencias que ya tiene, sin el ajuste por cuota.
+    pub(crate) batches: Mutex<HashMap<MilestoneId, usize>>,
 }
 
 /// Persistencia del latido por defecto (producción).
@@ -243,6 +246,7 @@ impl Runtime {
                 chat_switch_tokens: AtomicU64::new(0),
                 default_profile: Mutex::new("@code".into()),
                 watchers: crate::watcher::Watchers::default(),
+                batches: Mutex::default(),
                 scheduling: std::sync::OnceLock::new(),
                 integration: tokio::sync::Mutex::new(()),
             }),
@@ -859,6 +863,18 @@ impl Runtime {
         }
         // Los archivos del proyecto quedan buscables (P09.S5): un watcher por proyecto.
         self.watch_project(&project_id.to_string(), &repo_root);
+        // Nació esperando: si sus dependencias terminaron mientras se creaba, se libera ya.
+        let mut state = state;
+        let mut waiting_phrase = waiting_phrase;
+        if state == AgentState::WaitingDependency {
+            crate::dependencies::recheck_new(self, task_id).await;
+            if let Ok(a) = self.read(|c| repo::get_agent(c, agent_id))
+                && a.state != AgentState::WaitingDependency
+            {
+                state = a.state;
+                waiting_phrase = a.state_reason;
+            }
+        }
 
         let mut created = Created {
             agent_id,
