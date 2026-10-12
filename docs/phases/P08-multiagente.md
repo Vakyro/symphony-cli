@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | CERRADA CON PENDIENTES (falta la opinión de Leo sobre el benchmark, el merge y el tag) |
+| Estado | CERRADA (benchmark aprobado por Leo el 2026-10-12; merge a `main` y tag `p08-done` hechos) |
 | Rama | phase/p08-runtime-multiagente |
-| Inicio / cierre | 2026-10-11 / — |
+| Inicio / cierre | 2026-10-11 / 2026-10-12 |
 | Agentes que trabajaron | claude-code/sonnet-5.5 (S1–S10) |
-| Tag | p08-done (pendiente) |
+| Tag | p08-done |
 | Docs usados | ADR-0011, ADR-0013, DB §3.B/§3.C/§3.H, PLAN §P08, CONSTRAINTS A12 |
 
 ## Diseño (ADR-0013, aceptado por Leo el 2026-10-11)
@@ -102,7 +102,7 @@
 - **Cómo se verificó:** `cargo xtask check` → 557 passed. Snapshots `insta` de cada vista (los de Home y de las pestañas del agente cambiaron solo por la franja de sistema y las teclas nuevas, revisados); acciones y llamadas IPC probadas sobre el estado puro; el daemon real responde `system.get`/`performance.set`/`task.list` sin proyecto.
 - **Pendiente / notas:** (1) «Enviar al agente» de la vista 28 queda en el re-run: el fallo ya vuelve al agente solo en el gate. (2) La vista 17 decide sobre milestones ya creados (por un lote o por IPC): no hay formulario para crearlos desde la TUI. (3) Las vistas se probaron sobre estado simulado, no en una terminal real con Leo (⛔ para la revisión de fluidez de S9).
 
-### P08.S9 · Benchmark principal (gate) — 🟡 medido, pendiente la opinión de Leo
+### P08.S9 · Benchmark principal (gate) — ✅ medido y aprobado por Leo (2026-10-12)
 - **Agente:** claude-code/sonnet-5.5 · **Fecha:** 2026-10-11
 - **Qué se hizo:** dos harness (STACK §25.2). **L2** (`crates/daemon/tests/benchmark.rs`, corre en CI con `fake-agent`): 1 agente, 3 agentes en 3 worktrees y 3 agentes con una prueba pesada cada uno (el gate de validación corre `npm test`, clase 3, por el scheduler con 1 slot). **L3** (`crates/cli/tests/live_benchmark.rs`, `SYMPHONY_LIVE=1`): los **seis** proveedores a la vez (Claude, Codex, Kimi, Antigravity, Copilot y OpenCode) con dos mensajes mínimos cada uno (`spawn` y luego `send`, el plan por fases apagado), con el permiso que dio Leo (todos, dos mensajes sencillos, mínimo de tokens). Para medir bien, el motor de validación ahora registra cuándo empezó de verdad cada comando (turno concedido) y cuándo terminó, antes de soltar el slot.
 - **Máquina:** Latitude 7390, i7-8650U (4 núcleos / 8 hilos), 15,9 GB, Windows 11.
@@ -130,7 +130,8 @@
 - **Contra CONSTRAINTS §5:** R2 (daemon en idle < 100 MB): **cumple**, 25 MB. R1 (consumo con Symphony ≤ los mismos agentes sueltos): el sobrecoste de Symphony es el daemon (25 MB en reposo, ~32 MB en el proceso del benchmark bajo carga) frente a +1,5 GB de los CLIs, es decir ~2 %; **no se midió la línea base «sueltos»** con los seis CLIs (duplicaría la cuota) → **estimado, no medido**. R4 (evento hook → bus → TUI, p99 < 50 ms): p95 ≈ 20 ms, pero **p99 de 60–77 ms con 3 agentes** en esta máquina (medido en el bus, con un muestreador de procesos corriendo en la misma máquina). Es un objetivo, no una garantía; no se ajusta sin un ADR de Leo.
 - **Archivos clave:** `crates/daemon/tests/benchmark.rs`, `crates/cli/tests/live_benchmark.rs`, `crates/daemon/src/validation.rs` (`Timing`), `crates/store/src/repo.rs` (`mark_tool_call_started`).
 - **Cómo se verificó:** `cargo nextest run -p symphony-daemon --test benchmark --no-capture` (L2, ~18 s) y `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_benchmark --no-capture` (L3, ~4 min, gasta unos pocos tokens por proveedor). `cargo xtask check` → 558 passed.
-- **Pendiente (⛔ Leo):** la opinión sobre la fluidez de la máquina mientras corre el lote («UI del sistema responde»). El criterio de salida de P08 pide que Leo apruebe el benchmark; por eso no se etiqueta `p08-done`. Para dársela: ejecutar el L3 mientras usa la máquina con normalidad.
+- **Corrida L3 con Leo usando la máquina (2026-10-12, 202 s, ✅):** los seis proveedores terminaron los dos turnos. Kimi (`moonshot/default`) falló otra vez con `AUTH_ERROR` (71 s, `HANDED_OFF`) y el failover lo retomó **en Claude (anthropic)** en 2 runs más; es un problema de credenciales de Kimi en la máquina de Leo, que él resuelve, no del código. Turno 1 por modelo: claude/haiku 57 s, openai/gpt-5.6-luna 52 s, moonshot 90 s (3 runs), google/gemini-3.8-flash-low 47 s, github/auto 56 s, opencode/big-pickle 67 s. Daemon en reposo 26 MB; pico de RAM del árbol 1 750 MB (+3 319 MB de la máquina sobre la base); CPU de la máquina media 80 %, p50 98 %, p95 100 %; pico de 54 procesos; turno 1: 96 s, turno 2: 65 s, total 162 s; slots pesados usados (máx) 0 y mayor espera de cola 0 ms (con estos seis modelos ningún slot pesado se ocupó: el límite de concurrencia pesada no se ejercitó en L3; sí en L2).
+- **Opinión de Leo (✅):** usó la computadora durante la corrida y estaba usable, sin lag ni retrasos ni cosas que dejaran de funcionar; solo las páginas web tardaron un poco más en cargar o responder, «casi normal». Con esto queda aprobado el criterio «Benchmark principal aprobado por Leo».
 - **Hallazgos para decidir:** (1) Seis CLIs simultáneos llevan la CPU al 87 % (p95) en esta máquina de 4 núcleos aunque el perfil sea `balanced` (objetivo 70 %): el scheduler solo retiene operaciones pesadas, no cuenta CLIs. Con 3 agentes el pico fue menor. Si Leo quiere un tope de agentes simultáneos por perfil (no solo de procesos pesados), es una decisión nueva (ADR), no un ajuste. (2) El p99 de eventos bajo carga supera el objetivo de 50 ms; habría que medirlo con el hook real (`symphony hook emit`) antes de ajustar nada.
 
 ### P08.S10 · Cierre — 🟡 hecho salvo el merge y el tag
@@ -139,8 +140,8 @@
 - **`ponytail-review`:** 9 hallazgos, ~170 líneas posibles. Hecho: se borraron `Plan::ready_tasks` y `Plan::waves` (sin llamadores fuera de sus tests). **Anotado como deuda, sin tocar:** `scheduler::creates_cycle` (duplica al CTE del almacén; lo conserva el proptest que exige el PLAN), `Resolution::Replan` (alias de `Ignore`), `store::merge::queue` (nadie la lee), el conteo que devuelve `merge_mark_resolved`, `restart_with_feedback` sin test propio, `Validation::headline` derivable de `feedback`, y `os_max_memory_mb`/`os_max_processes` que nadie fija.
 - **Revisión de código:** sobre la rama completa (S1–S9) a mano, con los tests de cada paso. Riesgos que quedan documentados arriba y en cada paso: (1) retención por hook y plan por fases dependen de que el CLI real siga instrucciones (no probado en L3 más allá del benchmark mínimo); (2) `commit_on_complete` está activo por defecto: un agente que completa deja un commit en su rama; (3) la validación y la preparación del worktree ejecutan los comandos del `project.toml` con el shell de la plataforma, sin sandbox.
 - **Gate:** `cargo xtask check` → 558 passed, 0 fallos; CI en ubuntu/windows/macos/msrv/deny **no corrió** (la rama no está pusheada: pide permiso de Leo).
-- **Criterios de salida de P08:** «Journeys B y D pasan» ✅ (D en L2: `two_agents_on_the_same_file_conflict_and_the_user_can_abort_or_resolve`; B —varios agentes sin conflicto y lote— en `a_batch_creates_agents_with_dependencies_and_integrates_what_finished`). «Benchmark principal aprobado por Leo» ⛔ **pendiente**: está medido (S9), falta su opinión. Por eso la rama `phase/p08-runtime-multiagente` **no se fusionó a `main` ni se etiquetó `p08-done`**.
-- **Para cerrar la fase:** Leo corre `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_benchmark --no-capture` usando la máquina con normalidad y responde si la fluidez fue aceptable; luego `git merge --no-ff phase/p08-runtime-multiagente` en `main` (con CI verde) y el tag `p08-done`.
+- **Criterios de salida de P08:** «Journeys B y D pasan» ✅ (D en L2: `two_agents_on_the_same_file_conflict_and_the_user_can_abort_or_resolve`; B —varios agentes sin conflicto y lote— en `a_batch_creates_agents_with_dependencies_and_integrates_what_finished`). «Benchmark principal aprobado por Leo» ✅ (2026-10-12, ver S9). La rama `phase/p08-runtime-multiagente` se fusionó a `main` (`d74719d`, `--no-ff`) y se etiquetó `p08-done`.
+- **Cómo se cerró la fase (hecho):** Leo corrió `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_benchmark --no-capture` usando la máquina con normalidad y responde si la fluidez fue aceptable; luego `git merge --no-ff phase/p08-runtime-multiagente` en `main` (con CI verde) y el tag `p08-done`.
 
 ## Desviaciones del spec
 | Documento y sección | Qué dice | Qué se hizo | Por qué |
