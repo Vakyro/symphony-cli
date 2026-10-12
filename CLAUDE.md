@@ -73,6 +73,9 @@ symphonyd (crates/daemon) — owns all project state
   ├─ recorder.rs   mirrors canonical events into messages / tool_calls (dedups hook vs stream)
   ├─ handoff.rs    last valid checkpoint + live git state → crates/context assembler
   ├─ routing.rs    calls crates/router (deterministic scoring) for failover and profiles
+  ├─ scheduling.rs / resources.rs   crates/scheduler queue + slots; CPU/RAM sampling, OS limits (P08)
+  ├─ plan.rs / dependencies.rs / batch.rs   phase plans, task DAG, delegated batches (P08)
+  ├─ validation.rs / merge.rs   tiered validation gate; integration into symphony/chat (P08)
   └─ watcher.rs / context_index.rs   notify-based file watcher feeding ctx:// chunks (P09)
 ```
 
@@ -84,12 +87,13 @@ Provider CLIs also report through their hooks: the hook runs `symphony hook emit
 |---|---|
 | `protocol` | IPC framing + typed, versioned `Request`/`Response`. Transport is chosen by the caller. |
 | `core` | Domain enums (`enums.rs`, checked against the DB spec by a test), ULID ids, pure state transitions (`transitions.rs`), config, health state machine, secret redaction. No I/O. |
-| `store` | SQLite: `writer.rs` is the single writer thread (bounded channel, batched transactions); `repo.rs`, `context.rs`, `health.rs` are the repositories. Migrations live in top-level `migrations/` (001 core, 002 health/routing, 003 context). |
+| `store` | SQLite: `writer.rs` is the single writer thread (bounded channel, batched transactions); `repo.rs`, `context.rs`, `health.rs` are the repositories. Migrations live in top-level `migrations/` (001 core, 002 health/routing, 003 context, 004 multi-agent, 005 validation). |
 | `object-store` | Content-addressed blobs (BLAKE3 + zstd, atomic writes). |
 | `git` | Git CLI wrapper: worktrees, status, diff. |
 | `process` | Process supervisor: spawn, stream, kill-tree (ADR-0002). |
-| `adapters/common` | `ProviderAdapter` trait + shared parsing. One crate per provider: `claude`, `codex`, `kimi`, `antigravity`, `copilot`. |
+| `adapters/common` | `ProviderAdapter` trait + shared parsing. One crate per provider: `claude`, `codex`, `kimi`, `antigravity`, `copilot`, `opencode` (ADR-0012). |
 | `router` | Deterministic model router: availability filter → weighted score per profile → explanation. No I/O, no LLM. |
+| `scheduler` | Pure P08 logic: operation classifier (classes 0–4), queue with heavy slots and `explain`, task DAG, phase plans, validation tiers. |
 | `context` | Context engine: handoff assembler (modes RAW/SAFE/BALANCED/AGGRESSIVE), `ctx://` URIs, chunking, deterministic compressors, tree-sitter AST levels L0–L5. |
 | `daemon` | `symphonyd`; wires everything above. Biggest files: `executor.rs`, `server.rs`, `runtime.rs`. |
 | `tui` | Ratatui app: `app.rs` state + pure logic, `ui.rs` render, `io.rs` IPC, `lib.rs` terminal loop. Default view is the Chat. |
@@ -113,7 +117,7 @@ States are DB strings defined in `crates/core/src/enums.rs`; legal moves are the
 
 - **Agent:** `CREATED, READY, RUNNING, WAITING_PROVIDER, WAITING_RESOURCE, WAITING_DEPENDENCY, TESTING, BLOCKED, PAUSED, COMPLETED, FAILED, CANCELLED`
 - **Task:** `BACKLOG, READY, RUNNING, WAITING, BLOCKED, DONE, FAILED, CANCELLED`
-- **Run** (`agent_runs`): `STARTING, RUNNING, EXITED, KILLED, FAILED, HANDED_OFF`, with an end reason (`COMPLETED, QUOTA_EXHAUSTED, RATE_LIMITED, AUTH_ERROR, CRASH, NO_HEARTBEAT, USER_SWITCH, USER_STOP`).
+- **Run** (`agent_runs`): `STARTING, RUNNING, EXITED, KILLED, FAILED, HANDED_OFF`, with an end reason (`COMPLETED, QUOTA_EXHAUSTED, RATE_LIMITED, AUTH_ERROR, CRASH, NO_HEARTBEAT, USER_SWITCH, USER_STOP, PHASE_DONE`; `PHASE_DONE` from ADR-0013).
 
 Adding a state or transition changes the core → ADR first (like ADR-0009).
 
@@ -147,9 +151,9 @@ If a test leaves an orphaned `symphonyd.exe`, the next build fails with "Acceso 
 
 ## Phase status (see STATUS.md for the live version)
 
-- ✅ P00–P07 (v0.1.0), P07.5 (general chat), P11 (Kimi, Antigravity, Copilot), P10 (health, router, profiles, failover — v0.5.0).
-- 🟡 **P09 Context Engine** in progress on `phase/p09-context-engine` (order set by ADR-0010: P10 → P09 → P08).
-- 🟡 **P08 multi-agent runtime** done in code on `phase/p08-runtime-multiagente` (S1–S10, ADR-0013); pending Leo's benchmark approval, then merge + tag `p08-done`. It accounts for ADR-0011 (agents plan by phases/tasks; fresh session per phase, `/compact` between tasks, both automatic by default and configurable). P12–P16 remain provisional.
+- ✅ P00–P07 (v0.1.0), P07.5 (general chat), P11 (Kimi, Antigravity, Copilot, OpenCode), P10 (health, router, profiles, failover — v0.5.0), P09 (context engine), P08 (multi-agent runtime, ADR-0011/0013; live benchmark with 6 providers approved 2026-10-12).
+- `/compact` between tasks (ADR-0013 D2) is **not implemented**: it needs a live measurement first.
+- Next (ADR-0014): **P11.5 → P12 → P14 → P15 → P13 → P16**, run continuously; ⛔ items go to STATUS § «Para Leo» and work moves on. Merged phase branches are deleted; history lives in `pNN-done` tags.
 
 ---
 
@@ -166,4 +170,4 @@ If a test leaves an orphaned `symphonyd.exe`, the next build fails with "Acceso 
 
 - Spec: [`docs/spec/idea.md`](docs/spec/idea.md) (vision), [`docs/spec/symphony_database.md`](docs/spec/symphony_database.md) (schema), [`docs/spec/Symphony_CLI_User_Flow_and_Views.html`](docs/spec/Symphony_CLI_User_Flow_and_Views.html) (views, journeys A–F), [`docs/spec/Symphony_CLI_Ideal_Technology_Stack.md`](docs/spec/Symphony_CLI_Ideal_Technology_Stack.md) (stack, §58 deps)
 - Usage: [`QUICKSTART.md`](QUICKSTART.md) (install, providers and their permission limits)
-- ADRs: [`docs/adr/`](docs/adr/) — 0001–0011
+- ADRs: [`docs/adr/`](docs/adr/) — 0001–0014

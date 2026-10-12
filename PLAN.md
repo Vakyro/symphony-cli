@@ -14,6 +14,7 @@
 | 2026-09-28 | Nueva fase **P07.5 · Chat general** antes de P08 (ADR-0006, aceptado): chat agéntico en la vista inicial, con worktree propio pre-main y cambio de proveedor sin perder contexto. P08–P10 quedan diferidas y pendientes de rediseño | El uso real de v0.1 mostró que el valor está en un chat simple con continuidad entre proveedores, no en orquestar varios agentes. El chat reutiliza casi todo P05–P07 |
 | 2026-10-01 | **P11 se adelanta** tras P07.S10; P09 y P10 se recortan al chat (ADR-0008, aceptado). Orden: P07.S10 → P11 → P10 recortada → P09 recortada → P08 | El core ya es genérico y los 3 CLIs están instalados; el chat no usa P08–P10 |
 | 2026-10-01 | **P07.S10 cerrada por ADR-0010:** P08–P10 dejan de ser provisionales y se ejecutan completas en el orden **P10 → P09 → P08**; se levanta el gate de tiempo de ADR-0007 §3 por instrucción de Leo | P11 ya cerró con cinco proveedores; Leo pidió hacer lo diferido. Cada fase empieza con un párrafo de diseño en su bitácora y cierra con revisión, CI, merge y tag |
+| 2026-10-12 | **ADR-0014:** nueva fase **P11.5 · Pendientes y pulido**; P12–P16 dejan de ser provisionales y se ejecutan en el orden **P11.5 → P12 → P14 → P15 → P13 → P16**; P14.S1 pasa a migración 006; el empaquetado de la GUI (P15.S5) entra en P13.S7 | P08 cerrada; quedaban pendientes sin dueño en P07.5–P11 y Leo delegó el orden. Endurecer al final cubre plugins, sugerencias y GUI |
 
 ---
 
@@ -418,13 +419,14 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 | P09 | Context Engine | Compresión reversible, handoff por niveles y MCP de contexto | `p09-done` |
 | P10 | Salud, failover y routing | Failover automático, profiles y `/explain-route` | `p10-done`, `v0.5.0` |
 | P11 | Proveedores restantes | Kimi, Antigravity y Copilot | `p11-done` |
-| P12 ⚠️ | Plugins | Host de plugins aislados y un plugin de ejemplo | `p12-done` |
-| P13 ⚠️ | Endurecimiento y pre-release | Seguridad, fuzzing, recovery, benchmarks, docs, instaladores | `p13-done`, `v0.9.0` |
-| P14 ⚠️ | Sugerencias y experimentos | Sugerencias de modelo por reglas; experimentos ML con gate | `p14-done` |
-| P15 ⚠️ | GUI de escritorio | Tauri + SolidJS sobre la misma API | `p15-done` |
-| P16 ⚠️ | Validación final | Todas las vistas y journeys probados, benchmark principal, v1.0 | `p16-done`, `v1.0.0` |
+| P11.5 | Pendientes y pulido | Lo que dejaron P07.5–P11: `ctx://` con `@`, permisos en config, texto en vivo, `/compact` medido, merge chat → `main`, live gratuitos | `p115-done` |
+| P12 | Plugins | Host de plugins aislados y un plugin de ejemplo | `p12-done` |
+| P13 | Endurecimiento y pre-release | Seguridad, fuzzing, recovery, benchmarks, docs, instaladores | `p13-done`, `v0.9.0` |
+| P14 | Sugerencias y experimentos | Sugerencias de modelo por reglas; experimentos ML con gate | `p14-done` |
+| P15 | GUI de escritorio | Tauri + SolidJS sobre la misma API | `p15-done` |
+| P16 | Validación final | Todas las vistas y journeys probados, benchmark principal, v1.0 | `p16-done`, `v1.0.0` |
 
-⚠️ **Provisional (P12–P16).** P07.5 se añadió por ADR-0006 y P11 se adelantó por ADR-0008. **ADR-0010 cierra P07.S10:** P08–P10 se ejecutan completas en el orden **P10 → P09 → P08**. P12–P16 describen la dirección, no un contrato, y se revisan cuando se llegue a ellas; cualquier cambio queda en un ADR.
+P07.5 se añadió por ADR-0006 y P11 se adelantó por ADR-0008. ADR-0010 cerró P07.S10 con el orden **P10 → P09 → P08**. **ADR-0014** (2026-10-12) añade P11.5 y fija el orden hasta v1.0: **P11.5 → P12 → P14 → P15 → P13 → P16**. El número de fase no es el orden: sigue la tabla de ADR-0014. Las reglas de ejecución continua (qué es ⛔, qué se hace sin preguntar) están en ese ADR.
 
 ---
 
@@ -1074,14 +1076,72 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 
 ---
 
+## P11.5 · Pendientes y pulido
+
+**Objetivo:** cerrar lo que P07.5–P11 dejaron anotado y mejorar el chat, que es el valor principal del producto. Sin funciones nuevas grandes. Fase añadida por ADR-0014; va **primera** en el orden hasta v1.0.
+**Rama:** `phase/p115-pendientes` · **Bitácora:** `docs/phases/P11.5-pendientes.md` (copia `_TEMPLATE.md`).
+**Docs:** ADR-0006 (chat → `main`), ADR-0013 D2 (`/compact`), FLOW §13.3 y §13.4; bitácoras P07.5 § S7b/S9, P08 § S5–S9, P09 § S8–S11 y su tabla de problemas, P10 § S5, P11 § «Problemas conocidos»; `docs/research/uso-v0.1.md` § Día 2.
+**Skills:** `incremental-implementation`, `test-driven-development`, `ponytail`, `code-review`.
+
+Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se anota en STATUS § «Para Leo» y se sigue con el siguiente.
+
+### P11.5.S1 · `ctx://` con `@` y caracteres reservados en la ruta
+- **Qué:** hoy los archivos con `@`, `?`, `#`, `%` o `\` en la ruta (`packages/@scope/…`, `src/@types.ts`) no se indexan porque `ctx://file/<ruta>@<rev>` usa `@` como separador (bitácora P09, tabla de problemas). Codificar esos caracteres con `%XX` en el segmento de ruta al formar la URI y decodificar al parsear. Las URIs sin esos caracteres no cambian (las ya guardadas siguen valiendo).
+- **Verifica:** test que indexa, busca (`context_search`) y recupera (`context_retrieve`) `packages/@scope/x.ts`; proptest `parse(format(ruta)) == ruta` para rutas con cualquier carácter imprimible.
+
+### P11.5.S2 · Permisos de proveedores en `config.toml`
+- **Qué:** sacar a la config los permisos que hoy están fijos en cada adapter (pendiente arrastrado desde P06): `[providers.permissions]` con `claude_permission_mode` (`acceptEdits`), `codex_sandbox` (`workspace-write`), `antigravity_skip_permissions` (`false`), `copilot_allow_all_tools` (`false`) y lo que tenga OpenCode. **Los defaults no cambian** (cambiarlos es ⛔ Leo). Valor inválido → error claro al arrancar el daemon (`deny_unknown_fields`, como el resto de la config). Kimi no tiene modo restringido: se documenta, no se inventa una opción.
+- **Verifica:** tests de parseo de config (válido, inválido, ausente = default) y argv exacto de cada adapter con y sin la opción; QUICKSTART § permisos actualizado.
+
+### P11.5.S3 · Respuesta construyéndose en el chat
+- **Qué:** Claude con `--include-partial-messages` emite deltas de texto; el adapter los convierte en un evento canónico de texto parcial que va por el bus a la TUI **sin persistirse** (solo el mensaje final va a `messages`; CONSTRAINTS A11). La vista Chat pinta el texto parcial del turno en curso y lo reemplaza por el final al llegar. Codex `exec --json` no emite deltas: se queda como hoy. `fake-agent` gana un modo que emite deltas.
+- **Verifica:** L1 con un fixture de stream con parciales (si no hay uno real, uno sintético basado en el formato documentado, marcado `synthetic` en su nombre, y ⛔ «capturar fixture real» en «Para Leo»); L2 con `fake-agent`: la TUI muestra el parcial y al final hay **un** mensaje `ASSISTANT` en la base; snapshot de la vista con texto parcial.
+
+### P11.5.S4 · Router: `needed_context` y checkpoint obsoleto
+- **Qué:** (1) al elegir destino de un failover o de un spawn con handoff, pasar al router el tamaño estimado del handoff como `needed_context` (hoy siempre `None`, bitácora P10 § S5): un modelo cuya ventana no lo cabe no es elegible, y la explicación lo dice. (2) Aviso de «checkpoint obsoleto» de FLOW §13.3 cuando el último checkpoint válido es más viejo que el último cambio del worktree.
+- **Verifica:** test del router (modelo con ventana chica descartado con razón); L2 de failover donde el handoff grande salta al modelo con ventana suficiente; test del aviso.
+
+### P11.5.S5 · Lote: el tope de simultáneos sigue a la cuota
+- **Qué:** hoy el tope de un lote se fija al crearlo (bitácora P08 § S7, nota 4). Recalcularlo cuando cambia la salud o la cuota del proveedor: si baja, no se arrancan agentes nuevos del lote hasta que haya hueco; **nunca se mata un agente en curso**. Si sube, arrancan los que esperaban.
+- **Verifica:** L2 con `fake-agent`: lote de 4, cuota cae a la mitad a media corrida → no arranca el 3.º hasta que termina uno; `explain` de la cola lo dice.
+
+### P11.5.S6 · Merge chat → `main` con review agent
+- **Qué:** ADR-0006 punto 5: la integración chat → `main` pasa por un review agent; hoy es una acción manual del usuario (bitácora P08 § S7, nota 2). Reusar lo que ya existe: el bloque ```review de S7, las vistas 26 Merge Preflight, 27 Conflict Review y Review Result de S8, y `merge.rs`. Flujo: el usuario pide integrar el chat (`symphony chat merge` y la tecla de la vista Chat) → preflight (worktree limpio, rama del chat adelante de `main`, validación del proyecto) → review agent con el modelo elegido por el profile → el usuario confirma → merge `--no-ff` a `main`. **Nunca se integra sin confirmación.** Con conflicto: vista 27 con abortar/resolver, `main` intacto si se aborta. Si el review agent no devuelve el bloque, la revisión queda `FAILED` con razón y el usuario puede integrar igual, explícitamente.
+- **Verifica:** L2 con `fake-agent` que devuelve el bloque: aprobado → `main` tiene el merge commit; cambios pedidos → no se integra; conflicto → abortar deja `main` igual que antes (hash). `trycmd` de `symphony chat merge`. Snapshots de las vistas con el flujo nuevo.
+
+### P11.5.S7 · Pulido de la TUI
+- **Qué:** (1) vista 17: formulario para crear un milestone desde la TUI (hoy solo por lote o IPC); (2) vista 28: «Enviar al agente» manda el fallo de validación al agente por su sesión (hoy solo re-run); (3) los avisos del pie («Chat iniciado…», «Executor cambiado…») caducan solos tras unos segundos; (4) el texto de cambio de executor sin el id del modelo repetido (bitácora P07.5 § S7, observaciones).
+- **Verifica:** tests de lógica pura en `app.rs`; snapshots nuevos revisados (no aceptar a ciegas).
+
+### P11.5.S8 · Medir `resume` y `/compact` (micro-sesiones)
+- **Qué:** con los modelos **gratuitos** de OpenCode (permiso de Leo): (1) medir un mensaje con `resume` sin cambio de proveedor contra uno con handoff (tiempo al primer evento, tokens de entrada; n ≥ 3), que es la comparación pendiente de P07.5 § S9; (2) averiguar si algún CLI acepta `/compact` (u otro mecanismo de compactar) por `continue_session` y cuánto ahorra entre dos tareas del plan por fases. **Solo si** algún proveedor lo admite y el ahorro se mide, implementarlo para ese proveedor detrás de `[plan] compact_between_tasks` (default `false`; ADR-0013 D2: se mide antes de ser default). Si ninguno lo admite en modo no interactivo, no se escribe código: queda documentado y la medición con Claude/Codex va a «Para Leo».
+- **Verifica:** tabla de medición en la bitácora con comando, modelo y n; si hay implementación, L2 que comprueba que entre dos tareas se manda el compact y no entre fases (allí ya hay sesión nueva).
+
+### P11.5.S9 · Live gratuito con OpenCode
+- **Qué:** con `SYMPHONY_LIVE=1` y **solo** modelos gratuitos (`opencode/…-free`, `opencode/big-pickle`), probar lo que quedó sin live: (1) el broker MCP: que el modelo llame a `context_search` y reciba el fragmento (P09.S8); (2) handoff OpenCode → OpenCode con failover y los cuatro modos (P09.S10); (3) plan por fases: que el CLI escriba el plan en el formato de ADR-0011 y pare al final de la fase (P08.S5); (4) que devuelva el bloque ```review (P08.S7). Cada uno con su test `live_*.rs` o su comando exacto.
+- **Verifica:** resultados en la bitácora con n, modelo y salida relevante. Un fallo del modelo gratuito (429, inestable) no es un fallo de Symphony: se reintenta una vez y se documenta. Un bug de Symphony que aparezca se corrige con test L2.
+
+### P11.5.S10 · Deuda anotada
+- **Qué:** resolver o cerrar con razón lo anotado como deuda: `ponytail-review` de P08 (p. ej. `scheduler::creates_cycle`, duplicado del CTE del almacén), marcadores `ponytail:` cuyo techo ya se alcanzó, y los «repositorios diferidos» de P03.S3 (`executor_changes`, `messages`, …): solo se escriben si hay un lector que los necesite; si no, se cierra el pendiente con esa razón. Limpiar STATUS de pendientes ya resueltos.
+- **Verifica:** `cargo xtask check`; lista de lo hecho y lo cerrado en la bitácora.
+
+### P11.5.S11 · Cierre
+- Protocolo §4.6 (revisión de código del diff de la fase, CI verde en `main` tras el merge, tag `p115-done`). Reinstalar local (`symphony daemon stop` + los dos `cargo install --force`) para que Leo use lo nuevo.
+
+**Criterios de salida P11.5:** S1–S7 y S10 hechos con sus tests; S8 y S9 con medición documentada (o ⛔ documentado); nada de lo anotado en las bitácoras P07.5–P11 queda sin dueño (hecho, cerrado con razón o en «Para Leo»).
+
+---
+
 ## P12 · Plugins
 
 **Objetivo:** extensiones de terceros sin riesgo para el daemon.
 **Docs:** STACK §17, §46, §47; IDEA §5.12.
 **Skills:** `security-and-hardening`, `api-and-interface-design`.
 
+**Orden (ADR-0014):** segunda, tras P11.5. Rama `phase/p12-plugins`. Los plugins se instalan en `~/.symphony/plugins/<nombre>/` (CONSTRAINTS A12: nada por proyecto); un proyecto solo puede **activar** plugins ya instalados desde `project.toml`. Un plugin nunca abre la DB (A10): todo lo que necesita lo pide por el protocolo.
+
 ### P12.S1 · Protocolo y manifiesto
-- **Qué:** `plugin.toml` (nombre, versión, `plugin_api`, tipo: `validator`/`context-transformer`/`tool`/`provider-adapter`, ejecutable), protocolo JSON versionado por stdin/stdout.
+- **Qué:** `plugin.toml` (nombre, versión, `plugin_api`, tipo: `validator`/`context-transformer`/`tool`/`provider-adapter`, ejecutable), protocolo JSON versionado por stdin/stdout. Empezar por `validator` y `context-transformer` (los que tienen un punto de enganche claro: el gate de validación de P08 y el ensamblador de handoff de P09); `tool` y `provider-adapter` se diseñan en el protocolo pero solo se implementan si el ejemplo de S3 o un caso real lo pide (si no, ADR corto que los difiere a v1.1).
 
 ### P12.S2 · Plugin host
 - **Qué:** descubrimiento, arranque vía ProcessSupervisor (con límites), timeouts y políticas: **un plugin nunca ejecuta comandos sin pasar por las políticas de Symphony**.
@@ -1097,6 +1157,8 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 
 ## P13 · Endurecimiento y pre-release
 
+**Orden (ADR-0014):** quinta, después de P15: endurece el producto completo (plugins, sugerencias y GUI incluidos). Rama `phase/p13-endurecimiento`.
+
 **Objetivo:** que sea seguro, estable, medible, documentado e instalable.
 **Docs:** STACK §22, §24–§32, §47–§49, §53–§54, §59; CONSTRAINTS.md.
 **Tecnologías:** cargo-fuzz, cargo-llvm-cov, cargo-deny, typos-cli, lychee, mdBook, Mermaid, cargo-dist, git-cliff, GitHub attestations.
@@ -1106,7 +1168,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** IPC, hook emit, ctx://, plugins, redacción y permisos de socket. Corrige lo que salga.
 
 ### P13.S2 · Fuzzing
-- **Qué:** targets de STACK §24.5 (stdout de CLIs, frames IPC, JSON/TOML, parsers de error, ANSI, URIs `ctx://`). Corre cada uno al menos 30 min localmente y agrega corpus a CI (corto).
+- **Qué:** targets de STACK §24.5 (stdout de CLIs, frames IPC, JSON/TOML, parsers de error, ANSI, URIs `ctx://`) y el protocolo de plugins de P12. Corre cada uno al menos 30 min localmente y agrega corpus a CI (corto). `cargo-fuzz` necesita nightly; si no corre en Windows/MSVC, se corre en WSL o en un job de CI en ubuntu, y se documenta.
 
 ### P13.S3 · Recuperación y estabilidad
 - **Qué:** Journey E completo: matar el daemon durante escrituras, reiniciar a media sesión, checkpoint corrupto (FLOW §16). Pruebas de larga duración (4 h con fake-agents).
@@ -1118,13 +1180,13 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** `cargo-deny`, cobertura en scheduler/estados/persistencia/routing/recovery/parsers, `typos`, `lychee` y `ponytail-audit` (borrar lo que sobra).
 
 ### P13.S6 · Documentación
-- **Qué:** mdBook en `docs/book/`: arquitectura, protocolo, adapters, cómo escribir un plugin, troubleshooting, configuración y referencia de comandos. ER en Mermaid generado desde las migraciones (DB como explicación, migraciones como verdad, STACK §44).
+- **Qué:** mdBook en `docs/book/`: arquitectura, protocolo, adapters, cómo escribir un plugin, troubleshooting, configuración y referencia de comandos. ER en Mermaid generado desde las migraciones (DB como explicación, migraciones como verdad, STACK §44). Incluye una guía de **uso remoto por SSH** (idea de Leo, `docs/research/uso-v0.1.md`): abrir la TUI desde el teléfono con Tailscale/SSH + `tmux`, sin código nuevo.
 
 ### P13.S7 · Pipeline de release
-- **Qué:** cargo-dist (zip/tar.xz, instalador shell y PowerShell, Homebrew), checksums SHA-256, attestations, CHANGELOG con git-cliff. **Publicar requiere permiso de Leo.**
+- **Qué:** cargo-dist (zip/tar.xz, instalador shell y PowerShell, Homebrew), checksums SHA-256, attestations, CHANGELOG con git-cliff. Incluye los bundles de la GUI (P15.S5) como artefactos opcionales aparte del CLI. Se prueba con `dist build` / `dist plan` local y en un workflow que **no publica** (dry run). **Publicar y pushear un tag `v*` requieren permiso de Leo** (el tag dispara la publicación).
 
 ### P13.S8 · Cierre
-- Protocolo §4.6. Tags `p13-done` y `v0.9.0`.
+- Protocolo §4.6. Tag `p13-done` (se pushea). Tag `v0.9.0` local; su push queda ⛔ hasta que Leo apruebe publicar.
 
 ---
 
@@ -1134,8 +1196,10 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 **Docs:** IDEA §5.7 (tabla de políticas), §8 Phase 6; STACK §19.1, §37; DB §3.E (`model_suggestions`, `learned_adjustment`).
 **Skills:** `the-council`, `eval-harness`, `ponytail`.
 
-### P14.S1 · Migración 005
-- **Qué:** `model_suggestions`; activación de `profile_models.learned_adjustment`.
+**Orden (ADR-0014):** tercera, tras P12. Rama `phase/p14-sugerencias`.
+
+### P14.S1 · Migración 006
+- **Qué:** `model_suggestions` (la única tabla del spec sin migrar); activación de `profile_models.learned_adjustment`. Es la **006**: la 005 ya es la de validación de P08.
 
 ### P14.S2 · Sugerencias por reglas
 - **Qué:** detectar cambios de tipo de tarea (por ejemplo, documentación → refactor multiarchivo, por archivos tocados y tipo de comandos) y proponer `[Switch] [Keep] [Don't suggest again]`. **Nunca cambiar automáticamente.**
@@ -1146,7 +1210,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 
 ### P14.S4 · Experimentos ML (opcional, con gate)
 - **Qué:** solo si P10 y P13 muestran que las reglas se quedan cortas: decision model local, compresión ML o embeddings, cada uno detrás de la feature `experimental-ml` y **medido** contra las reglas (latencia, RAM, acierto).
-- **Salida:** ADR que acepta o rechaza cada uno. **Rechazar es un resultado válido.**
+- **Salida:** ADR que acepta o rechaza cada uno. **Rechazar es un resultado válido.** Primero se revisa la evidencia (benchmarks de P10 y P08, aciertos de S2–S3): si no muestra que las reglas se quedan cortas, el ADR rechaza sin construir nada. CONSTRAINTS prohíbe embeddings en v1: si alguno se aceptara, queda para v1.1.
 
 ### P14.S5 · Cierre
 - Protocolo §4.6. Tag `p14-done`.
@@ -1154,6 +1218,8 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 ---
 
 ## P15 · GUI de escritorio
+
+**Orden (ADR-0014):** cuarta, tras P14 y antes de P13. Rama `phase/p15-gui`. Node y pnpm solo para construir la GUI; el binario final no lleva Node (CONSTRAINTS). El CI de la GUI va en un job aparte para no frenar el de Rust.
 
 **Objetivo:** GUI opcional que refleja las mismas vistas; ninguna función crítica vive solo aquí.
 **Docs:** STACK §35, §55; FLOW §18 (inventario completo) y regla 9; STACKDIAG.
@@ -1173,7 +1239,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Qué:** `design-review`; pruebas del WebView con DevTools; tests de componentes (Vitest).
 
 ### P15.S5 · Empaquetado
-- **Qué:** bundles Tauri por OS dentro de la pipeline de release (opcional aparte del CLI).
+- **Qué:** que `tauri build` produzca los bundles por OS en CI (artefactos del workflow). Su publicación se integra en la pipeline de release en P13.S7 (ADR-0014), opcional aparte del CLI.
 
 ### P15.S6 · Cierre
 - Protocolo §4.6. Tag `p15-done`.
@@ -1181,6 +1247,8 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 ---
 
 ## P16 · Validación final y v1.0.0
+
+**Orden (ADR-0014):** última. Rama `phase/p16-validacion`. Lo que el agente hace solo: S1, la parte con fake-agents de S2, la parte medible de S3, S4 en CI y S5. **⛔ Leo:** la sesión live de S2, el veredicto de S3, la instalación en máquinas limpias reales de S4 (si Leo la quiere además de la de CI) y S6. S7 se escribe al final con lo que haya.
 
 **Objetivo:** demostrar que el programa completo funciona como dicen los documentos.
 **Docs:** todos. En particular IDEA §2–§3, FLOW §18–§21, DB §5, STACK §25.2 y §64.
@@ -1209,7 +1277,7 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 - **Salida:** tabla final + veredicto de Leo sobre la usabilidad de la máquina.
 
 ### P16.S4 · Instalación limpia
-- **Qué:** instalar desde los artefactos de release en una máquina o VM limpia por OS: solo binario + git + un CLI de proveedor (STACK §64). Primer uso guiado (FLOW §4).
+- **Qué:** instalar desde los artefactos de release en una máquina o VM limpia por OS: solo binario + git + un CLI de proveedor (STACK §64). Primer uso guiado (FLOW §4). Sin publicar: un workflow de CI que baja los artefactos del dry run de P13.S7 en runners limpios (ubuntu, windows, macos), instala con el instalador generado y corre `symphony --version`, `symphony daemon start` y un Journey A con `fake-agent`.
 
 ### P16.S5 · Documentación "as-built"
 - **Qué:** actualizar `docs/spec/` con un anexo de desviaciones (lo que cambió respecto al spec y por qué, con links a los ADRs), el README final, la guía de usuario en mdBook y el CHANGELOG.
