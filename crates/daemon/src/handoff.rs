@@ -26,6 +26,9 @@ pub struct PreparedHandoff {
     /// `seq` y fecha del checkpoint usado (para el separador y `checkpoint_age_ms`).
     pub checkpoint_seq: i64,
     pub checkpoint_created_at: i64,
+    /// Hubo actividad que amerita checkpoint después de este (FLOW §13.3): el estado del código
+    /// se reconstruye del worktree vivo, pero el objetivo y el «qué seguía» pueden venir atrasados.
+    pub stale: bool,
     pub mode: ContextMode,
     pub tokens_sent: i64,
     pub tokens_raw_estimate: i64,
@@ -158,7 +161,7 @@ pub async fn prepare(
     reason: &str,
 ) -> Result<PreparedHandoff, String> {
     let started = Instant::now();
-    let (a, wt, checkpoint, conversation, facts) = {
+    let (a, wt, checkpoint, conversation, facts, stale) = {
         let conn = reader
             .lock()
             .map_err(|_| "lector de la base no disponible")?;
@@ -168,6 +171,16 @@ pub async fn prepare(
         let checkpoint = repo::latest_checkpoint(&conn, agent)
             .map_err(|e| e.to_string())?
             .ok_or("el agente no tiene un checkpoint válido")?;
+        // Los eventos que piden checkpoint (ver `checkpoint::Progress::apply`): si hay uno más
+        // nuevo que el checkpoint, el checkpoint no lo alcanzó.
+        let stale: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE agent_id = ?1 AND occurred_at > ?2
+                   AND type IN ('TurnFinished','ToolFinished','CommandFinished','FileModified'))",
+                rusqlite::params![agent.to_string(), checkpoint.created_at],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
         let conversation = conversation(&conn, objects, agent)?;
         let facts = symphony_store::context::get_current_facts(&conn, &a.project_id.to_string())
             .map_err(|e| e.to_string())?
@@ -178,7 +191,7 @@ pub async fn prepare(
                 kind: f.kind,
             })
             .collect();
-        (a, wt, checkpoint, conversation, facts)
+        (a, wt, checkpoint, conversation, facts, stale)
     };
     let (path, base) = (wt.path.clone(), wt.base_ref.clone());
     let git = tokio::task::spawn_blocking(move || live_git(Path::new(&path), &base))
@@ -235,6 +248,7 @@ pub async fn prepare(
         checkpoint_id: Some(checkpoint.id),
         checkpoint_seq,
         checkpoint_created_at,
+        stale,
         mode: a.context_mode,
         tokens_sent: built.tokens_sent,
         tokens_raw_estimate: raw,

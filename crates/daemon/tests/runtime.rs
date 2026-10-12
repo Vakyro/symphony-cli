@@ -4716,3 +4716,93 @@ deltas = true
     assert_eq!(said, 1);
     e.writer.shutdown();
 }
+
+/// P11.5.S4: el router recibe el tamaño del handoff; un modelo cuya ventana no lo cabe queda
+/// descartado por `CONTEXT` y el failover va al siguiente.
+#[tokio::test(flavor = "multi_thread")]
+async fn failover_skips_a_model_whose_window_cannot_hold_the_handoff() {
+    let e = env_with(&[("alpha", QUOTA), ("beta", SAY), ("gamma", SAY)], None).await;
+    // Sin esto gana beta (a igualdad de puntaje, por id): su ventana es demasiado chica.
+    e.writer
+        .handle()
+        .write(Box::new(|t| {
+            t.execute(
+                "UPDATE models SET context_window = 5 WHERE provider_id = 'beta'",
+                [],
+            )?;
+            Ok(())
+        }))
+        .await
+        .unwrap();
+    let mut r = req(&e, "ventana", Execution::Exact("alpha/fast".into()));
+    r.failover = symphony_core::FailoverPolicy::Any;
+    let agent = e
+        .runtime
+        .create_agent(r)
+        .await
+        .unwrap()
+        .agent_id
+        .to_string();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let providers: String = one(
+        &e,
+        &format!(
+            "SELECT group_concat(provider_id, '>') FROM (SELECT provider_id FROM agent_runs WHERE agent_id = '{agent}' ORDER BY seq)"
+        ),
+    );
+    assert_eq!(providers, "alpha>gamma");
+    let rej = rejections(&e, &agent);
+    assert!(
+        rej.iter()
+            .any(|(m, r)| m.starts_with("beta/") && r.as_deref() == Some("CONTEXT")),
+        "{rej:?}"
+    );
+    e.writer.shutdown();
+}
+
+/// P11.5.S4 (FLOW §13.3): si hubo actividad que pide checkpoint después del último, el handoff
+/// lo marca como obsoleto (el código se rehace del worktree).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_handoff_flags_a_checkpoint_older_than_the_last_activity() {
+    use symphony_daemon::bus::{BusEvent, EventSource};
+    let e = env(SAY, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "obsoleto", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let fresh = e
+        .runtime
+        .prepare_handoff(created.agent_id, "prueba")
+        .await
+        .unwrap();
+    assert!(!fresh.stale, "un run terminado deja el checkpoint al día");
+
+    let project: String = one(&e, "SELECT id FROM projects");
+    e.bus
+        .publish(BusEvent {
+            project_id: project,
+            agent_id: Some(created.agent_id.to_string()),
+            run_id: None,
+            source: EventSource::System,
+            event: AgentEvent::FileModified {
+                tool: "Write".into(),
+                path: Some("a.txt".into()),
+            },
+            // Más nuevo que cualquier checkpoint que se tome ahora.
+            occurred_at: now_secs() * 1000 + 3_600_000,
+        })
+        .await
+        .unwrap();
+    e.bus.checkpoints_idle().await;
+    let stale = e
+        .runtime
+        .prepare_handoff(created.agent_id, "prueba")
+        .await
+        .unwrap();
+    assert!(stale.stale);
+    e.writer.shutdown();
+}
