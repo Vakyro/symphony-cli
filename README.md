@@ -62,8 +62,9 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
  ├── Checkpoints ... incrementales, escritos antes de fallar, no después
  ├── Handoff ....... arma el prompt para el siguiente modelo (con la conversación)
  ├── Adapters ...... Claude Code · Codex · Kimi · Antigravity · Copilot
- ├── Scheduler ..... planeado (P08): clases de operación 0–4 + límites del SO
- └── Context engine  planeado (P09): handoff comprimido y MCP de contexto
+ ├── Scheduler ..... clases de operación 0–4, cola explicada y límites del SO (P08)
+ ├── Multiagente ... DAG de dependencias, validación por niveles e integración a `symphony/chat` (P08)
+ └── Context engine  handoff comprimido y MCP de contexto (P09)
         │
         ▼
  CLIs oficiales, cada uno en su propio worktree y con su propio login
@@ -91,8 +92,8 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
 | P02–P07 · Core → **v0.1** | Daemon, SQLite, worktrees, adapters, checkpoints, handoff, TUI | ✅ **v0.1.0** |
 | P07.5 · Chat general | Chat como vista inicial, cambio de proveedor sin perder contexto, skills, exportar | ✅ p075-done |
 | P07.S10 | Replanificación de P08–P16 con lo aprendido en el uso (ADR-0007, ADR-0008, ADR-0010: P10 → P09 → P08) | ✅ cerrada |
-| P08 · Multiagente | Scheduler de recursos, DAG, validación | ⏳ (tras P09) |
-| P09 · Context engine | Handoff comprimido, MCP de contexto | 🟡 en curso |
+| P08 · Multiagente | Scheduler de recursos, DAG, plan por fases, validación, integración y revisión | ✅ p08-done (falta la opinión de Leo sobre el benchmark) |
+| P09 · Context engine | Handoff comprimido, MCP de contexto | ✅ p09-done |
 | P10 · Failover → **v0.5** | Salud de proveedores, failover con router, profiles y `explain-route` | ✅ **v0.5.0** |
 | P11 · Más proveedores | Kimi, Antigravity y Copilot con el mismo contrato; matriz de handoff entre los cinco | ✅ p11-done |
 | P12–P13 → **v0.9** | Plugins, endurecimiento | ⏳ |
