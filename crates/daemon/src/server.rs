@@ -815,7 +815,9 @@ async fn agent_logs(req: Request, state: &State) -> Response {
                 .into_iter()
                 .map(|(role, content, at)| json!({ "role": role, "content": content, "at": at }))
                 .collect();
-            Response::ok(req.id, json!({ "messages": messages }))
+            // `partial`: lo que el agente lleva escrito del mensaje en curso (P11.5.S3).
+            let partial = state.bus.partial(&agent_id.to_string());
+            Response::ok(req.id, json!({ "messages": messages, "partial": partial }))
         }
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }

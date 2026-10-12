@@ -128,6 +128,11 @@ pub enum AgentEvent {
     AssistantText {
         text: String,
     },
+    /// Trozo de texto del asistente mientras se escribe (P11.5.S3). Efímero: el bus lo difunde
+    /// pero no lo persiste; el mensaje completo llega después como `AssistantText`.
+    AssistantDelta {
+        text: String,
+    },
     UserMessage {
         text: String,
     },
@@ -174,6 +179,7 @@ impl AgentEvent {
             Self::TurnStarted => "TurnStarted",
             Self::TurnFinished { .. } => "TurnFinished",
             Self::AssistantText { .. } => "AssistantText",
+            Self::AssistantDelta { .. } => "AssistantDelta",
             Self::UserMessage { .. } => "UserMessage",
             Self::ToolRequested {
                 kind: ToolKind::Command,

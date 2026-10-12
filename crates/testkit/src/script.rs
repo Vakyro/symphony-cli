@@ -48,6 +48,10 @@ pub enum Step {
     /// Texto del asistente.
     Say {
         text: String,
+        /// Antes del mensaje completo, lo emite en trozos (`assistant_delta`), como Claude con
+        /// `--include-partial-messages`.
+        #[serde(default)]
+        deltas: bool,
     },
     /// Escribe un archivo (tool `Write`), con hooks Pre/PostToolUse.
     Edit {

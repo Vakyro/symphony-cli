@@ -277,6 +277,8 @@ pub struct AgentView {
     pub tab: Tab,
     pub inspect: Value,
     pub messages: Vec<Value>,
+    /// Texto del mensaje en curso, mientras el agente lo escribe (vacío si no hay).
+    pub partial: String,
     pub activity: Vec<Value>,
     pub diff: String,
     pub history: Value,
@@ -309,6 +311,7 @@ impl AgentView {
             tab: Tab::Overview,
             inspect: Value::Null,
             messages: Vec::new(),
+            partial: String::new(),
             activity: Vec::new(),
             diff: String::new(),
             history: Value::Null,
@@ -1086,8 +1089,10 @@ impl App {
             }
             Req::Logs => {
                 let messages = list("messages");
+                let partial = v["partial"].as_str().unwrap_or("").to_string();
                 if let Some(a) = self.view_mut() {
                     a.messages = messages;
+                    a.partial = partial;
                 }
             }
             Req::Activity => {

@@ -181,6 +181,9 @@ impl ProviderAdapter for FakeAdapter {
                     transient: true,
                 })]
             }
+            (Some("assistant_delta"), _) => s(&v, "text")
+                .map(|text| vec![AgentEvent::AssistantDelta { text }])
+                .unwrap_or_default(),
             (Some("assistant"), _) => s(&v, "text")
                 .map(|text| vec![AgentEvent::AssistantText { text }])
                 .unwrap_or_default(),

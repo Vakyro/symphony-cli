@@ -2,8 +2,8 @@
 
 **Actualizado:** 2026-10-12 · por claude-code/opus-5.5
 **Fase actual:** P11.5 · Pendientes y pulido (rama `phase/p115-pendientes`)
-**Paso actual:** P11.5.S3 · Respuesta construyéndose en el chat (deltas de Claude)
-**Estado del paso:** sin empezar (S1 y S2 hechos)
+**Paso actual:** P11.5.S4 · Router: `needed_context` y aviso de checkpoint obsoleto
+**Estado del paso:** sin empezar (S1–S3 hechos)
 **En curso por:** nadie
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P13 → P16**. El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
@@ -20,7 +20,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 **P11.5 · Pendientes y pulido** (`phase/p115-pendientes`, bitácora `docs/phases/P11.5-pendientes.md`)
 - [x] S1 `ctx://` con `@` y caracteres reservados en la ruta
 - [x] S2 Permisos de proveedores en `config.toml` (defaults iguales)
-- [ ] S3 Respuesta construyéndose en el chat (deltas de Claude)
+- [x] S3 Respuesta construyéndose en el chat (deltas de Claude)
 - [ ] S4 Router: `needed_context` y aviso de checkpoint obsoleto
 - [ ] S5 Lote: el tope de simultáneos sigue a la cuota
 - [ ] S6 Merge chat → `main` con review agent (ADR-0006)
@@ -50,6 +50,7 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 - **Siempre ⛔:** live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); push de ramas que no sean `main`; publicar releases o pushear tags `v*`; cambiar defaults de permisos de proveedores; ToS.
 - **2026-10-12 · cuota gastada sin permiso (error del agente):** la sesión arrancó con `SYMPHONY_LIVE=1` en el entorno y el `cargo xtask check` de baseline de P11.5 corrió los 6 tests live con CLIs reales (`live_benchmark`, `live_handoff`, `live_cost`, `live_resume`, `live_sessions`, `live` de la TUI; ~9 min, 557 pasaron). **Falló `symphony-tui::live live_journey_a_with_claude_code`** (47 s): no se investigó; no es un cambio de P11.5, pero conviene que Leo lo revise (¿Claude Code, auth o cambio de CLI?). Corrección: `unset SYMPHONY_LIVE` antes de todo comando de cargo. Leo: revisa tu terminal de lanzamiento (`echo $SYMPHONY_LIVE`) para que no vuelva a heredarse.
 - P08 · Live de plan por fases y bloque ```review con Claude/Codex (si S9 con OpenCode no basta).
+- P11.5.S3 · Capturar un fixture real del stream parcial de Claude (`--include-partial-messages`) y ver el texto avanzar en una terminal real (gasta cuota: ⛔).
 - P08 · Revisión de fluidez de las vistas 15–19 y 26–28 en una terminal real.
 - P09 · Que Claude y Codex llamen a `context_search` en vivo y que Codex `exec` apruebe herramientas MCP sin preguntar.
 - P11 · Re-validación de Kimi, Antigravity y Copilot (criterios en `docs/research/opencode-y-calidad-de-proveedores.md` § 4); ToS de los tres y de usar la credencial de Copilot dentro de OpenCode; skills de los tres; sondear los modelos habilitados de Copilot; Kimi sin sandbox.

@@ -766,6 +766,15 @@ fn chat_lines(messages: &[Value], tools: &[Value], width: usize) -> Vec<Line<'st
     timeline.into_iter().flat_map(|(_, l)| l).collect()
 }
 
+/// El mensaje que el agente está escribiendo (vacío si no hay), con cursor al final.
+fn partial_lines(partial: &str, width: usize) -> Vec<Line<'static>> {
+    if partial.is_empty() {
+        return Vec::new();
+    }
+    let m = serde_json::json!({ "role": "ASSISTANT", "content": format!("{partial}▍") });
+    message_lines(&m, width)
+}
+
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// «⠋ pensando… 12 s» / «⠋ ejecutando Bash… 3 s»: lo que el agente está haciendo ahora.
@@ -844,7 +853,12 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
     let inner_h = usize::from(body.height.saturating_sub(2));
     let mut lines = view.map_or_else(Vec::new, |v| chat_lines(&v.messages, &v.activity, inner_w));
     if let Some(v) = view.filter(|v| v.state() == "RUNNING") {
-        lines.push(working_line(app, v));
+        // Con texto parcial, el texto mismo es la señal de trabajo.
+        if v.partial.is_empty() {
+            lines.push(working_line(app, v));
+        } else {
+            lines.extend(partial_lines(&v.partial, inner_w));
+        }
     }
     if lines.is_empty() {
         lines.push(Line::from(dim("Escribe tu primer mensaje para empezar.")));
@@ -1298,7 +1312,9 @@ fn from_bottom(total: usize, height: u16, scroll: u16) -> u16 {
 fn conversation(app: &App, f: &mut Frame, area: Rect) {
     let Some(a) = &app.agent else { return };
     // Con ajuste de línea: un texto largo del agente no se corta en el borde.
-    let mut lines = chat_lines(&a.messages, &[], usize::from(area.width.saturating_sub(2)));
+    let width = usize::from(area.width.saturating_sub(2));
+    let mut lines = chat_lines(&a.messages, &[], width);
+    lines.extend(partial_lines(&a.partial, width));
     if lines.is_empty() {
         lines.push(Line::from(dim("Sin mensajes todavía.")));
     }

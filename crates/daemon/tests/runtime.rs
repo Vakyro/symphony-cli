@@ -4680,3 +4680,39 @@ async fn a_batch_with_an_unknown_need_or_a_cycle_is_rejected_before_creating_any
     assert_eq!(count(&e, "agents"), 0);
     e.writer.shutdown();
 }
+
+/// P11.5.S3 (L2): un turno con texto en trozos. Los suscriptores ven cada trozo, pero en la base
+/// queda un solo mensaje del asistente y ningún evento `AssistantDelta`.
+#[tokio::test(flavor = "multi_thread")]
+async fn streamed_text_is_broadcast_but_only_the_full_message_is_stored() {
+    let e = env(
+        "[[step]]
+kind = \"say\"
+text = \"respuesta con varios trozos de texto\"
+deltas = true
+",
+        None,
+    )
+    .await;
+    let mut rx = e.bus.subscribe();
+    e.runtime
+        .create_agent(req(&e, "deltas", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    let mut seen = String::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let AgentEvent::AssistantDelta { text } = &ev.event {
+            seen.push_str(text);
+        }
+    }
+    assert_eq!(seen, "respuesta con varios trozos de texto");
+    let deltas: i64 = one(
+        &e,
+        "SELECT COUNT(*) FROM events WHERE type = 'AssistantDelta'",
+    );
+    assert_eq!(deltas, 0);
+    let said: i64 = one(&e, "SELECT COUNT(*) FROM messages WHERE role = 'ASSISTANT'");
+    assert_eq!(said, 1);
+    e.writer.shutdown();
+}

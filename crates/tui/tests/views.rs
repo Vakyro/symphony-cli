@@ -1037,6 +1037,45 @@ fn chat_shows_the_agent_process_live_in_time_order() {
     assert!(screen.contains("ejecutando Bash… 2 s"));
 }
 
+/// P11.5.S3: el texto que el agente va escribiendo se ve en el chat (con cursor) y reemplaza
+/// al «pensando…»; al llegar el mensaje completo desaparece.
+#[test]
+fn chat_shows_the_partial_text_while_the_agent_writes() {
+    let mut app = chat_app();
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    app.chat.as_mut().unwrap().inspect = json!({ "agent": { "state": "RUNNING" } });
+    ok(
+        &mut app,
+        Req::Logs,
+        json!({
+            "messages": [{ "role": "USER", "content": "explícame el bus", "at": NOW - 3_000 }],
+            "partial": "El bus persiste primero y desp",
+        }),
+    );
+    let screen = draw(&app);
+    assert!(
+        screen.contains("El bus persiste primero y desp▍"),
+        "{screen}"
+    );
+    assert!(!screen.contains("pensando"), "{screen}");
+
+    // Mensaje completo: el parcial llega vacío y queda solo el mensaje.
+    ok(
+        &mut app,
+        Req::Logs,
+        json!({
+            "messages": [
+                { "role": "USER", "content": "explícame el bus", "at": NOW - 3_000 },
+                { "role": "ASSISTANT", "content": "El bus persiste primero y después difunde.", "at": NOW - 1_000 },
+            ],
+            "partial": "",
+        }),
+    );
+    let screen = draw(&app);
+    assert!(screen.contains("y después difunde."), "{screen}");
+    assert!(!screen.contains('▍'), "{screen}");
+}
+
 #[test]
 fn chat_at_rest_does_not_animate() {
     let mut app = chat_app();
