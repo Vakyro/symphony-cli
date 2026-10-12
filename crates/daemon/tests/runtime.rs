@@ -4936,3 +4936,191 @@ async fn an_agent_born_waiting_for_a_task_that_just_finished_is_released() {
     );
     e.writer.shutdown();
 }
+
+/// Espera a que la revisión de `reviewer` deje de estar en curso.
+async fn wait_review(e: &Env, reviewer: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let status: Option<String> = symphony_store::open_reader(&e.db)
+            .unwrap()
+            .query_row(
+                "SELECT status FROM reviews WHERE reviewer_agent_id = ?1",
+                [reviewer],
+                |r| r.get(0),
+            )
+            .ok();
+        if status.as_deref().is_some_and(|s| s != "RUNNING") {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el veredicto no llegó"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn review_script(recommendation: &str) -> String {
+    format!(
+        "[[step]]\nkind = \"say\"\ntext = '''Revisé el chat.\n```review\n{{\"recommendation\":\"{recommendation}\",\"findings\":[{{\"severity\":\"medium\",\"file\":\"notas.md\",\"text\":\"detalle\"}}]}}\n```'''\n"
+    )
+}
+
+/// Un commit en la rama del chat (como el commit por turno).
+fn chat_commit(chat: &symphony_daemon::runtime::Created, file: &str, content: &str) {
+    std::fs::write(chat.worktree.join(file), content).unwrap();
+    git(&chat.worktree, &["add", "-A"]);
+    git(&chat.worktree, &["commit", "-q", "-m", "chat: cambios"]);
+}
+
+fn check_status(pre: &symphony_daemon::chat_merge::ChatMerge, name: &str) -> String {
+    pre.checks
+        .iter()
+        .find(|c| c.name == name)
+        .map(|c| c.status.to_string())
+        .unwrap_or_else(|| format!("sin check {name}"))
+}
+
+/// P11.5.S6 (ADR-0006 §5): el chat entra a `main` solo con confirmación explícita y una
+/// revisión que recomiende integrar; el merge es un commit `--no-ff`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_chat_merges_into_main_only_with_confirmation_and_an_approving_review() {
+    let e = env_with(&[("rev", &review_script("APPROVE"))], None).await;
+    let chat = make_chat(&e).await;
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let main_before = git(&e.repo, &["rev-parse", "main"]);
+
+    // Sin nada que integrar: el preflight lo dice y no hay merge.
+    let pre = e.runtime.chat_merge_prepare(&e.repo, false).await.unwrap();
+    assert!(!pre.ready());
+    assert_eq!(check_status(&pre, "ahead"), "FAIL");
+
+    chat_commit(&chat, "notas.md", "# notas\n");
+    let pre = e.runtime.chat_merge_prepare(&e.repo, false).await.unwrap();
+    assert_eq!(pre.ahead, 1);
+    assert_eq!(pre.target, "main");
+    assert!(pre.ready(), "{:?}", pre.checks);
+    assert_eq!(check_status(&pre, "review"), "WARN");
+
+    // Sin confirmación: no. Con confirmación pero sin revisión: tampoco.
+    let err = e
+        .runtime
+        .chat_merge_integrate(&e.repo, false, false)
+        .await
+        .unwrap_err();
+    assert!(err.contains("confirmación"), "{err}");
+    let err = e
+        .runtime
+        .chat_merge_integrate(&e.repo, true, false)
+        .await
+        .unwrap_err();
+    assert!(err.contains("revisión"), "{err}");
+    assert_eq!(git(&e.repo, &["rev-parse", "main"]), main_before);
+
+    // La revisión aprueba: ahora sí.
+    let reviewer = e
+        .runtime
+        .chat_merge_review(&e.repo, Some("rev/fast".into()), None)
+        .await
+        .unwrap();
+    wait_state(&e, &reviewer.to_string(), "COMPLETED").await;
+    wait_review(&e, &reviewer.to_string()).await;
+    let pre = e.runtime.chat_merge_prepare(&e.repo, false).await.unwrap();
+    assert_eq!(check_status(&pre, "review"), "PASS", "{:?}", pre.checks);
+    assert_eq!(pre.review.as_ref().unwrap()["recommendation"], "APPROVE");
+
+    let commit = e
+        .runtime
+        .chat_merge_integrate(&e.repo, true, false)
+        .await
+        .unwrap();
+    assert_eq!(git(&e.repo, &["rev-parse", "main"]), commit);
+    assert_eq!(
+        git(&e.repo, &["rev-list", "--merges", "--count", "main"]),
+        "1",
+        "un commit de merge --no-ff"
+    );
+    assert!(e.repo.join("notas.md").is_file());
+    assert_eq!(count(&e, "merge_requests"), 1);
+    let note: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM messages WHERE agent_id = '{}' AND content LIKE 'Integrado `symphony/chat` en `main`%'",
+            chat.agent_id
+        ),
+    );
+    assert_eq!(note, 1);
+    // Ya no hay nada que integrar.
+    let pre = e.runtime.chat_merge_prepare(&e.repo, false).await.unwrap();
+    assert_eq!(check_status(&pre, "ahead"), "FAIL");
+    reactor.abort();
+    e.writer.shutdown();
+}
+
+/// P11.5.S6: un revisor que pide cambios bloquea la integración (salvo orden explícita), y un
+/// repo principal sucio, en otra rama o con conflictos la bloquea siempre sin tocar `main`.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_to_main_is_blocked_by_requested_changes_a_dirty_repo_or_conflicts() {
+    let e = env_with(&[("rev", &review_script("REQUEST_CHANGES"))], None).await;
+    let chat = make_chat(&e).await;
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    chat_commit(&chat, "README.md", "# del chat\n");
+    let main_before = git(&e.repo, &["rev-parse", "main"]);
+
+    let reviewer = e
+        .runtime
+        .chat_merge_review(&e.repo, Some("rev/fast".into()), None)
+        .await
+        .unwrap();
+    wait_state(&e, &reviewer.to_string(), "COMPLETED").await;
+    wait_review(&e, &reviewer.to_string()).await;
+    let pre = e.runtime.chat_merge_prepare(&e.repo, false).await.unwrap();
+    assert_eq!(check_status(&pre, "review"), "FAIL");
+    let err = e
+        .runtime
+        .chat_merge_integrate(&e.repo, true, false)
+        .await
+        .unwrap_err();
+    assert!(err.contains("REQUEST_CHANGES"), "{err}");
+    assert_eq!(git(&e.repo, &["rev-parse", "main"]), main_before);
+
+    // Cambios sin commitear en tu repo: se rechaza aunque pidas saltarte la revisión.
+    let readme = std::fs::read_to_string(e.repo.join("README.md")).unwrap();
+    std::fs::write(e.repo.join("README.md"), format!("{readme}\nlocal\n")).unwrap();
+    let err = e
+        .runtime
+        .chat_merge_integrate(&e.repo, true, true)
+        .await
+        .unwrap_err();
+    assert!(err.contains("main_clean"), "{err}");
+    git(&e.repo, &["checkout", "--", "README.md"]);
+
+    // `main` con un cambio propio en la misma línea: conflicto, `main` intacto.
+    std::fs::write(e.repo.join("README.md"), "# de main\n").unwrap();
+    git(&e.repo, &["commit", "-q", "-am", "main: README"]);
+    let main_now = git(&e.repo, &["rev-parse", "main"]);
+    let pre = e.runtime.chat_merge_prepare(&e.repo, false).await.unwrap();
+    assert_eq!(check_status(&pre, "conflicts"), "FAIL");
+    assert_eq!(pre.conflicts, ["README.md"]);
+    let err = e
+        .runtime
+        .chat_merge_integrate(&e.repo, true, true)
+        .await
+        .unwrap_err();
+    assert!(err.contains("conflicts"), "{err}");
+    assert_eq!(git(&e.repo, &["rev-parse", "main"]), main_now);
+    assert!(e.repo.join("README.md").is_file());
+    assert_eq!(
+        git(&e.repo, &["status", "--porcelain", "--untracked-files=no"]),
+        "",
+        "el repo no quedó a medias"
+    );
+    reactor.abort();
+    e.writer.shutdown();
+}

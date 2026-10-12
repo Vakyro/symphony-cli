@@ -141,6 +141,10 @@ pub enum Req {
     MergePrepare,
     MergeAction,
     ReviewStart,
+    /// chat → `main` (P11.5.S6): preflight, pedir la revisión e integrar.
+    ChatMerge,
+    ChatMergeReview,
+    ChatMergeIntegrate,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -419,6 +423,9 @@ pub struct App {
     /// Barra de comandos abierta (`:`), con lo escrito.
     pub command: Option<String>,
     pub notice: Option<Notice>,
+    /// El último preflight chat → `main` quedó listo y con revisión aprobada: la siguiente
+    /// `Ctrl+G` integra. Cualquier otra tecla lo desarma.
+    pub chat_merge_armed: bool,
     pub now_ms: i64,
     pub connected: bool,
     pub quit: bool,
@@ -492,6 +499,7 @@ impl App {
             frame: 0,
             selection: None,
             copy: None,
+            chat_merge_armed: false,
             mouse: true,
             chat_max: std::cell::Cell::new(u16::MAX),
             command: None,
@@ -1068,6 +1076,42 @@ impl App {
                 self.info("Review agent creado: el resultado aparece al terminar.");
                 return self.refresh();
             }
+            Req::ChatMerge => {
+                let ahead = v["ahead"].as_u64().unwrap_or(0);
+                let empty = Vec::new();
+                let checks = v["checks"].as_array().unwrap_or(&empty);
+                let review = checks.iter().find(|c| c["name"] == "review");
+                if let Some(bad) = checks.iter().find(|c| c["status"] == "FAIL") {
+                    self.error(format!(
+                        "Integrar en main: {} — {}",
+                        bad["name"].as_str().unwrap_or("?"),
+                        bad["detail"].as_str().unwrap_or("")
+                    ));
+                } else if review.is_some_and(|r| r["status"] == "PASS") {
+                    self.chat_merge_armed = true;
+                    self.info(format!(
+                        "{ahead} commit(s) listos para main, el revisor aprueba. Ctrl+G otra vez integra."
+                    ));
+                } else {
+                    self.info(format!(
+                        "{ahead} commit(s) por integrar en main. Revisión: {}. Ctrl+R la pide.",
+                        review
+                            .and_then(|r| r["detail"].as_str())
+                            .unwrap_or("sin datos")
+                    ));
+                }
+            }
+            Req::ChatMergeReview => {
+                self.info("Revisión pedida. Cuando termine, Ctrl+G muestra su veredicto.");
+            }
+            Req::ChatMergeIntegrate => {
+                let commit = v["commit"].as_str().unwrap_or("?");
+                self.info(format!(
+                    "Chat integrado en main ({}).",
+                    &commit[..commit.len().min(8)]
+                ));
+                return self.refresh();
+            }
             Req::RecoveryAct => {
                 self.info("Hecho.");
                 return self.refresh();
@@ -1390,7 +1434,32 @@ impl App {
     }
 
     fn chat_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        // Integrar a `main` pide dos veces Ctrl+G seguidas, sin otra tecla en medio.
+        let armed = std::mem::take(&mut self.chat_merge_armed);
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.code == KeyCode::Char('g') {
+                let root = self.root().to_string();
+                return vec![if armed {
+                    call(
+                        Req::ChatMergeIntegrate,
+                        "chat.merge.integrate",
+                        json!({ "project_root": root, "confirm": true }),
+                    )
+                } else {
+                    call(
+                        Req::ChatMerge,
+                        "chat.merge.prepare",
+                        json!({ "project_root": root }),
+                    )
+                }];
+            }
+            if key.code == KeyCode::Char('r') {
+                return vec![call(
+                    Req::ChatMergeReview,
+                    "chat.merge.review",
+                    json!({ "project_root": self.root() }),
+                )];
+            }
             if key.code == KeyCode::Char('e') {
                 return self
                     .chat

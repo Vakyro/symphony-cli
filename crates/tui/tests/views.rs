@@ -1543,3 +1543,52 @@ fn the_new_views_open_from_the_command_bar() {
         assert_eq!(methods(&calls), [method], "{cmd}");
     }
 }
+
+/// P11.5.S6: integrar el chat en `main` desde la vista Chat pide `Ctrl+G` dos veces seguidas y
+/// solo si el preflight quedó listo con la revisión aprobada; otra tecla lo desarma.
+#[test]
+fn chat_merge_needs_two_ctrl_g_after_an_approving_preflight() {
+    let mut app = chat_app();
+    let prepared = |status: &str| {
+        json!({
+            "ahead": 2, "ready": true,
+            "checks": [{ "name": "review", "status": status, "detail": "el revisor recomienda integrar" }],
+        })
+    };
+
+    // Primer Ctrl+G: solo el preflight, nunca el merge.
+    let calls = ctrl(&mut app, 'g');
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].method, "chat.merge.prepare");
+    // Sin revisión aprobada, no queda armado: otro Ctrl+G vuelve a ser preflight.
+    ok(&mut app, Req::ChatMerge, prepared("WARN"));
+    assert!(!app.chat_merge_armed);
+    assert_eq!(ctrl(&mut app, 'g')[0].method, "chat.merge.prepare");
+
+    // Revisión aprobada: queda armado y el siguiente Ctrl+G integra con confirmación.
+    ok(&mut app, Req::ChatMerge, prepared("PASS"));
+    assert!(app.chat_merge_armed);
+    let calls = ctrl(&mut app, 'g');
+    assert_eq!(calls[0].method, "chat.merge.integrate");
+    assert_eq!(calls[0].params["confirm"], true);
+
+    // Una tecla en medio lo desarma.
+    ok(&mut app, Req::ChatMerge, prepared("PASS"));
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('x'),
+        KeyModifiers::NONE,
+    )));
+    assert_eq!(ctrl(&mut app, 'g')[0].method, "chat.merge.prepare");
+
+    // Un FAIL se muestra como error y no arma nada.
+    ok(
+        &mut app,
+        Req::ChatMerge,
+        json!({ "ahead": 1, "checks": [{ "name": "conflicts", "status": "FAIL", "detail": "choca en a.rs" }] }),
+    );
+    assert!(!app.chat_merge_armed);
+    assert!(matches!(&app.notice, Some(Notice::Error(m)) if m.contains("choca en a.rs")));
+
+    // Ctrl+R pide la revisión.
+    assert_eq!(ctrl(&mut app, 'r')[0].method, "chat.merge.review");
+}

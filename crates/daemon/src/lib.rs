@@ -3,6 +3,7 @@
 pub mod attach;
 pub mod batch;
 pub mod bus;
+pub mod chat_merge;
 pub mod checkpoint;
 pub mod context_index;
 pub mod context_mcp;

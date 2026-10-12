@@ -227,6 +227,25 @@ impl Repo {
         self.text(["rev-parse", "HEAD"])
     }
 
+    /// Cuántos commits tiene `head` que `base` no tiene (`base..head`).
+    pub fn commits_ahead(&self, base: &str, head: &str) -> Result<u32, GitError> {
+        let range = format!("{base}..{head}");
+        Ok(self
+            .text(["rev-list", "--count", &range])?
+            .trim()
+            .parse()
+            .unwrap_or(0))
+    }
+
+    /// Hora (segundos desde epoch) del último commit de `rev`.
+    pub fn commit_time(&self, rev: &str) -> Result<i64, GitError> {
+        Ok(self
+            .text(["log", "-1", "--format=%ct", rev])?
+            .trim()
+            .parse()
+            .unwrap_or(0))
+    }
+
     /// Archivos que `head` cambió desde su ancestro común con `base` (`base...head`).
     pub fn changed_paths(&self, base: &str, head: &str) -> Result<Vec<String>, GitError> {
         let range = format!("{base}...{head}");

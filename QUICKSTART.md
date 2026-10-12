@@ -291,6 +291,18 @@ git merge symphony/session-xyz/agent-1
 git branch -d symphony/session-xyz/agent-1
 ```
 
+### Integrar el chat en `main`
+
+El chat trabaja en la rama `symphony/chat` y los agentes se integran a ella: `main` no se toca hasta que tú lo pides. Para llevar lo que hay en el chat a `main` (un commit de merge `--no-ff`):
+
+```bash
+symphony chat merge            # preflight: qué entra, conflictos, estado de tu repo y de la revisión
+symphony chat merge --review   # pide a un review agent que revise el chat (solo recomienda)
+symphony chat merge --yes      # integra (exige el preflight sin ✗ y una revisión que apruebe)
+```
+
+En la vista Chat: `Ctrl+G` hace el preflight, `Ctrl+R` pide la revisión y una segunda `Ctrl+G` seguida (con la revisión aprobada) integra. Symphony no cambia tu rama: tu repo tiene que estar en `main` y sin cambios sin commitear. Si el revisor falló o no hubo revisión, `--yes --skip-review` integra igual, porque tú lo decides; si pidió cambios, también hace falta `--skip-review`.
+
 ---
 
 ## 9. Múltiples agentes en paralelo

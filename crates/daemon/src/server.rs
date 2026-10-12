@@ -430,6 +430,9 @@ async fn dispatch(req: Request, state: &State) -> Response {
         }
         "merge.get" => merge_get(req, state),
         "review.start" => review_start(req, state).await,
+        "chat.merge.prepare" | "chat.merge.review" | "chat.merge.integrate" => {
+            chat_merge(req, state).await
+        }
         "batch.create" => batch_create(req, state).await,
         "batch.status" => batch_status(req, state),
         "batch.integrate" => batch_integrate(req, state).await,
@@ -2292,6 +2295,54 @@ fn merge_get(req: Request, state: &State) -> Response {
             })).collect::<Vec<_>>(),
         }))
     })
+}
+
+/// chat → `main` (P11.5.S6): `prepare` (preflight, sin cambios), `review` (pide la revisión) e
+/// `integrate` (merge, solo con `confirm: true`).
+async fn chat_merge(req: Request, state: &State) -> Response {
+    let root = project_root_param(&req.params);
+    let flag = |k: &str, default: bool| {
+        req.params
+            .get(k)
+            .and_then(Value::as_bool)
+            .unwrap_or(default)
+    };
+    let text = |k: &str| {
+        req.params
+            .get(k)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let runtime = state.runtime.clone();
+    let method = req.method.clone();
+    let (validate, confirm, skip_review) = (
+        flag("validate", false),
+        flag("confirm", false),
+        flag("skip_review", false),
+    );
+    let (model, profile) = (text("model"), text("profile"));
+    let done = tokio::spawn(async move {
+        match method.as_str() {
+            "chat.merge.prepare" => runtime
+                .chat_merge_prepare(&root, validate)
+                .await
+                .map(|p| p.to_json()),
+            "chat.merge.review" => runtime
+                .chat_merge_review(&root, model, profile)
+                .await
+                .map(|r| json!({ "reviewer_agent_id": r.to_string() })),
+            _ => runtime
+                .chat_merge_integrate(&root, confirm, skip_review)
+                .await
+                .map(|c| json!({ "status": "MERGED", "commit": c })),
+        }
+    })
+    .await;
+    match done {
+        Ok(Ok(v)) => Response::ok(req.id, v),
+        Ok(Err(e)) => Response::error(req.id, "merge_error", e),
+        Err(e) => Response::error(req.id, "merge_error", e.to_string()),
+    }
 }
 
 async fn review_start(req: Request, state: &State) -> Response {
