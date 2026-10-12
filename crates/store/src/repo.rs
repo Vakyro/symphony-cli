@@ -23,6 +23,9 @@ pub enum RepoError {
     Transition(#[from] InvalidTransition),
     #[error("el estado {state} necesita una razón legible (FLOW §7)")]
     MissingReason { state: &'static str },
+    /// Una operación que el estado actual no permite (con la frase para el usuario).
+    #[error("{0}")]
+    Invalid(String),
 }
 
 impl From<RepoError> for rusqlite::Error {
@@ -191,9 +194,20 @@ pub struct Task {
 }
 
 pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> Result<(), RepoError> {
+    insert_task_kind(conn, t, "WORK", now)
+}
+
+/// Como `insert_task`, con el tipo explícito: `WORK` o `REVIEW` (las tareas del review agent
+/// también son tasks, DB §3.B).
+pub fn insert_task_kind(
+    conn: &Connection,
+    t: &Task,
+    kind: &str,
+    now: i64,
+) -> Result<(), RepoError> {
     conn.execute(
         "INSERT INTO tasks (id, project_id, code, kind, title, description, status, status_reason, priority, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'WORK', ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+         VALUES (?1, ?2, ?3, ?10, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
         params![
             t.id.to_string(),
             t.project_id.to_string(),
@@ -203,10 +217,20 @@ pub fn insert_task(conn: &Connection, t: &Task, now: i64) -> Result<(), RepoErro
             t.status.as_str(),
             t.status_reason,
             t.priority,
-            now
+            now,
+            kind
         ],
     )?;
     Ok(())
+}
+
+/// `WORK` o `REVIEW`.
+pub fn task_kind(conn: &Connection, id: TaskId) -> Result<String, RepoError> {
+    Ok(conn.query_row(
+        "SELECT kind FROM tasks WHERE id = ?1",
+        [id.to_string()],
+        |r| r.get(0),
+    )?)
 }
 
 /// Código de la task del chat general: identifica al agente sin migración (P07.5.S4).
@@ -378,6 +402,25 @@ pub fn get_agent(conn: &Connection, id: AgentId) -> Result<Agent, RepoError> {
     )
     .optional()?
     .ok_or_else(not_found("agente", id))
+}
+
+/// La tarea de un proyecto con ese código visible (`T-12`).
+pub fn task_by_code(
+    conn: &Connection,
+    project: ProjectId,
+    code: &str,
+) -> Result<Option<Task>, RepoError> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM tasks WHERE project_id = ?1 AND code = ?2",
+            params![project.to_string(), code],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match id.and_then(|i| i.parse().ok()) {
+        Some(id) => Ok(Some(get_task(conn, id)?)),
+        None => Ok(None),
+    }
 }
 
 /// Siguiente número visible `#N` del proyecto.
@@ -1312,6 +1355,84 @@ pub fn insert_tool_call(conn: &Connection, c: &NewToolCall, now: i64) -> Result<
             c.op_class,
             now
         ],
+    )?;
+    Ok(())
+}
+
+/// Una operación pesada que pasa por el scheduler (P08.S3): corre ya (`RUNNING`) o queda
+/// en cola (`QUEUED`, con su razón y quién la bloquea). Siempre `HOOK_HOLD`.
+pub fn insert_scheduled_tool_call(
+    conn: &Connection,
+    c: &NewToolCall,
+    queued: Option<(&str, Option<symphony_core::ToolCallId>)>,
+    now: i64,
+) -> Result<(), RepoError> {
+    let (status, reason, blocked_by, started) = match queued {
+        Some((reason, by)) => ("QUEUED", Some(reason), by.map(|b| b.to_string()), None),
+        None => ("RUNNING", None, None, Some(now)),
+    };
+    conn.execute(
+        "INSERT INTO tool_calls (id, agent_id, run_id, tool_name, command, op_class, status,
+                                 queue_reason, blocked_by_tool_call_id, enforcement, requested_at, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'HOOK_HOLD', ?10, ?11)",
+        params![
+            c.id.to_string(),
+            c.agent_id.to_string(),
+            c.run_id.to_string(),
+            c.tool_name,
+            c.command,
+            c.op_class,
+            status,
+            reason,
+            blocked_by,
+            now,
+            started
+        ],
+    )?;
+    Ok(())
+}
+
+/// Una operación en cola obtuvo su slot: pasa a `RUNNING`.
+pub fn start_queued_tool_call(
+    conn: &Connection,
+    id: symphony_core::ToolCallId,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE tool_calls SET status = 'RUNNING', started_at = ?2, queue_reason = NULL
+         WHERE id = ?1 AND status = 'QUEUED'",
+        params![id.to_string(), now],
+    )?;
+    Ok(())
+}
+
+/// Una operación en cola se rechazó (esperó más que el máximo del hook): `DENIED`, con la
+/// razón que recibe el modelo.
+pub fn deny_queued_tool_call(
+    conn: &Connection,
+    id: symphony_core::ToolCallId,
+    reason: &str,
+    now: i64,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE tool_calls SET status = 'DENIED', queue_reason = ?2, finished_at = ?3
+         WHERE id = ?1 AND status = 'QUEUED'",
+        params![id.to_string(), reason, now],
+    )?;
+    Ok(())
+}
+
+/// Una operación que esperó turno: cuándo empezó de verdad y por qué esperó. La latencia de
+/// cola es `started_at - requested_at` (P08.S9).
+pub fn mark_tool_call_started(
+    conn: &Connection,
+    id: symphony_core::ToolCallId,
+    started_at: i64,
+    queue_reason: Option<&str>,
+) -> Result<(), RepoError> {
+    conn.execute(
+        "UPDATE tool_calls SET started_at = ?2, queue_reason = COALESCE(?3, queue_reason) WHERE id = ?1",
+        params![id.to_string(), started_at, queue_reason],
     )?;
     Ok(())
 }

@@ -98,6 +98,17 @@ pub enum MergePreflight {
     Conflicts { paths: Vec<String> },
 }
 
+/// Resultado de integrar una rama con `merge --no-ff` (P08.S7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOutcome {
+    /// Se creó el commit de merge.
+    Merged { commit: String },
+    /// Había conflictos: el merge se abortó y el worktree quedó como estaba.
+    Conflicts { paths: Vec<String> },
+    /// La rama ya estaba incluida: no hay nada que integrar.
+    UpToDate,
+}
+
 /// Nombre de rama de un agente (IDEA §5.9): `symphony/<sesión>/agent-003`.
 /// Rama fija del chat general: una por proyecto, basada en la rama principal (ADR-0006).
 pub const CHAT_BRANCH: &str = "symphony/chat";
@@ -214,6 +225,103 @@ impl Repo {
 
     pub fn head_commit(&self) -> Result<String, GitError> {
         self.text(["rev-parse", "HEAD"])
+    }
+
+    /// Archivos que `head` cambió desde su ancestro común con `base` (`base...head`).
+    pub fn changed_paths(&self, base: &str, head: &str) -> Result<Vec<String>, GitError> {
+        let range = format!("{base}...{head}");
+        let out = self.run(["diff", "--name-only", "-z", range.as_str()])?;
+        Ok(nul_fields(&out.stdout))
+    }
+
+    /// El diff de lo que `head` cambió desde su ancestro común con `base`.
+    pub fn diff_range(&self, base: &str, head: &str) -> Result<String, GitError> {
+        let range = format!("{base}...{head}");
+        let out = self.run(["diff", range.as_str()])?;
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// ¿Existe la rama local `name`?
+    pub fn branch_exists(&self, name: &str) -> Result<bool, GitError> {
+        let refname = format!("refs/heads/{name}");
+        let r = git_cmd(
+            Some(&self.root),
+            ["show-ref", "--verify", "--quiet", refname.as_str()],
+        );
+        match r {
+            Ok(_) => Ok(true),
+            Err(GitError::Failed { code, .. }) if code == "1" => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// ¿El worktree no tiene cambios en archivos versionados ni conflictos pendientes?
+    /// (Los archivos sin seguimiento no cuentan: no estorban a un merge.)
+    pub fn is_clean(&self) -> Result<bool, GitError> {
+        Ok(self
+            .text(["status", "--porcelain", "--untracked-files=no"])?
+            .is_empty())
+    }
+
+    /// Integra `branch` en la rama actual con un commit de merge (`--no-ff`). Con conflictos
+    /// aborta el merge y devuelve los archivos, sin dejar el worktree a medias.
+    pub fn merge_no_ff(&self, branch: &str, message: &str) -> Result<MergeOutcome, GitError> {
+        let lock = self.index_lock();
+        let _exclusive = lock.write().unwrap_or_else(PoisonError::into_inner);
+        let run = |args: &[&str]| git_cmd(Some(&self.root), args);
+        let before = run(&["rev-parse", "HEAD"])?;
+        match run(&["merge", "--no-ff", "-m", message, branch]) {
+            Ok(_) => {
+                let after = run(&["rev-parse", "HEAD"])?;
+                if after.stdout == before.stdout {
+                    return Ok(MergeOutcome::UpToDate);
+                }
+                Ok(MergeOutcome::Merged {
+                    commit: String::from_utf8_lossy(&after.stdout).trim().to_string(),
+                })
+            }
+            Err(GitError::Failed { .. }) => {
+                let unmerged = run(&["diff", "--name-only", "--diff-filter=U", "-z"])
+                    .map(|o| nul_fields(&o.stdout))
+                    .unwrap_or_default();
+                let _ = run(&["merge", "--abort"]);
+                if unmerged.is_empty() {
+                    return Err(GitError::Failed {
+                        args: format!("merge --no-ff {branch}"),
+                        code: "1".into(),
+                        stderr: "el merge falló sin conflictos de archivos".into(),
+                    });
+                }
+                Ok(MergeOutcome::Conflicts { paths: unmerged })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Añade `pattern` a `info/exclude` del repositorio (local, nunca versionado) si falta:
+    /// un archivo temporal de Symphony no entra en `git add -A` ni en el diff del agente.
+    pub fn exclude_locally(&self, pattern: &str) -> Result<(), GitError> {
+        let raw = self.text(["rev-parse", "--git-path", "info/exclude"])?;
+        let path = Path::new(&raw);
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        let current = std::fs::read_to_string(&path).unwrap_or_default();
+        if current.lines().any(|l| l.trim() == pattern) {
+            return Ok(());
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(GitError::Unlink)?;
+        }
+        let mut next = current;
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(pattern);
+        next.push('\n');
+        std::fs::write(&path, next).map_err(GitError::Unlink)
     }
 
     /// `git add -A` y commit con `message`. `None` si no había nada que guardar.

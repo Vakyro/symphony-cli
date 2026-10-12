@@ -32,7 +32,7 @@ const HOOK_EVENTS: [&str; 8] = [
     "SessionEnd",
 ];
 /// `timeout` explícito del hook (ADR-0003): mayor que la espera máxima de `symphony hook emit`.
-const HOOK_TIMEOUT_SECS: u32 = 30;
+const HOOK_TIMEOUT_SECS: u64 = symphony_adapter_common::hooks::HoldTimes::CLAUDE.hook_secs;
 
 #[derive(Debug, Clone)]
 pub struct ClaudeAdapter {

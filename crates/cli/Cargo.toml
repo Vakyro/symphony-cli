@@ -15,6 +15,7 @@ name = "symphony"
 path = "src/main.rs"
 
 [dependencies]
+symphony-adapter-common = { path = "../adapters/common" }
 symphony-core = { path = "../core" }
 symphony-protocol = { path = "../protocol" }
 symphony-tui = { path = "../tui" }
@@ -29,9 +30,10 @@ tokio = { workspace = true, features = ["rt", "time", "macros"] }
 [dev-dependencies]
 symphony-adapter-claude = { path = "../adapters/claude" }
 symphony-adapter-codex = { path = "../adapters/codex" }
-symphony-adapter-common = { path = "../adapters/common" }
 symphony-store = { path = "../store" }
 symphony-testkit = { path = "../testkit" }
+rusqlite.workspace = true
+sysinfo.workspace = true
 tempfile.workspace = true
 trycmd.workspace = true
 

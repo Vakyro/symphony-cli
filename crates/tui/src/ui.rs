@@ -85,6 +85,15 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::SharedSkills => "· Skills compartidas",
         Screen::SharedMcp => "· Servidores MCP",
         Screen::Stats => "· Uso y contexto",
+        Screen::Tasks => "· Tareas",
+        Screen::TaskDetail => "· Tarea",
+        Screen::Milestones => "· Milestones",
+        Screen::System => "· Sistema",
+        Screen::PerformanceProfile => "· Perfil de rendimiento",
+        Screen::Validation => "· Validación",
+        Screen::MergePreflight => "· Integración",
+        Screen::ConflictReview => "· Conflictos",
+        Screen::ReviewResult => "· Revisión",
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -113,6 +122,15 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::SharedSkills => shared_skills(app, f, body),
         Screen::SharedMcp => shared_mcp(app, f, body),
         Screen::Stats => stats(app, f, body),
+        Screen::Tasks => tasks(app, f, body),
+        Screen::TaskDetail => task_detail(app, f, body),
+        Screen::Milestones => milestones(app, f, body),
+        Screen::System => system(app, f, body),
+        Screen::PerformanceProfile => performance_profile(app, f, body),
+        Screen::Validation => validation(app, f, body),
+        Screen::MergePreflight => merge_preflight(app, f, body),
+        Screen::ConflictReview => conflict_review(app, f, body),
+        Screen::ReviewResult => review_result(app, f, body),
     }
 
     footer_line(app, f, footer);
@@ -133,7 +151,7 @@ fn hints(app: &App) -> &'static str {
             "Enter enviar · Tab modelo · ↑↓/rueda · ^Y copiar · ^E exportar · F2 ratón · Esc tareas"
         }
         Screen::Home => {
-            "↑↓ elegir · Enter abrir · n nuevo · p proveedores · r recovery · : comando · Esc chat · q salir"
+            "↑↓ elegir · Enter abrir · n nuevo · t tareas · m milestones · s sistema · p proveedores · r recovery · : comando · Esc chat · q salir"
         }
         Screen::NewAgent => "↑↓ campo · ←→ opción · Enter siguiente/crear · Esc cancelar",
         Screen::ModelPicker => "↑↓ elegir · Enter usar · Esc volver",
@@ -141,7 +159,7 @@ fn hints(app: &App) -> &'static str {
         Screen::Agent => match app.agent.as_ref() {
             Some(a) if a.typing => "Enter enviar · Esc cancelar",
             _ => {
-                "←→ pestaña · m mensaje · p pausa · s modelo · ? por qué · c contexto · o CLI · e exportar · d diff · x detener · Esc"
+                "←→ pestaña · m mensaje · p pausa · s modelo · ? por qué · v validación · g integrar · c contexto · o CLI · e exportar · d diff · x detener · Esc"
             }
         },
         Screen::Recovery => {
@@ -153,6 +171,23 @@ fn hints(app: &App) -> &'static str {
             "↑↓ elegir · Espacio/Enter encender o apagar · r releer · Esc volver"
         }
         Screen::Stats => "r releer · Esc volver",
+        Screen::Tasks => {
+            "↑↓ elegir · Enter detalle · a agente · m milestones · r releer · Esc volver"
+        }
+        Screen::TaskDetail => "a abrir el agente · r releer · Esc volver a tareas",
+        Screen::Milestones => {
+            "↑↓ elegir · a aprobar · c pedir cambios · h retener · r releer · Esc volver"
+        }
+        Screen::System => "p cambiar perfil · r releer · Esc volver",
+        Screen::PerformanceProfile => "↑↓ elegir · Enter aplicar · Esc volver",
+        Screen::Validation => "r volver a validar · g integración · Esc volver al agente",
+        Screen::MergePreflight => {
+            "p preflight · a aprobar · i integrar · x abandonar · c conflictos · w revisar · y veredicto"
+        }
+        Screen::ConflictReview => {
+            "m resuelto a mano · w pedir revisor · p volver a comprobar · x abandonar · Esc"
+        }
+        Screen::ReviewResult => "w pedir revisión · r releer · Esc volver",
     }
 }
 
@@ -1004,9 +1039,27 @@ fn home(app: &App, f: &mut Frame, area: Rect) {
 
     lines.push(Line::raw(""));
     lines.push(section("SISTEMA"));
-    lines.push(Line::from(dim(
-        "  CPU, RAM y operaciones pesadas: se muestran cuando llegue el scheduler (v0.5).",
-    )));
+    match app.system.as_ref() {
+        Some(s) => {
+            let pct = |v: &Value| v.as_f64().map_or("—".to_string(), |p| format!("{p:.0}%"));
+            lines.push(Line::raw(format!(
+                "  Perfil {} · CPU {} · RAM {} · slots pesados {}/{}",
+                text(&s["profile"]),
+                pct(&s["cpu_pct"]),
+                pct(&s["ram_pct"]),
+                num(&s["heavy_slots_used"]),
+                num(&s["heavy_slots_total"])
+            )));
+            let waiting = s["waiting"].as_array().map_or(0, Vec::len);
+            if waiting > 0 {
+                lines.push(Line::from(colored(
+                    format!("  {waiting} operación(es) esperando turno: s para ver por qué."),
+                    Color::Yellow,
+                )));
+            }
+        }
+        None => lines.push(Line::from(dim("  Midiendo…"))),
+    }
 
     paragraph(f, area, "Inicio", lines);
 }
@@ -1760,4 +1813,530 @@ pub fn selected_text(buf: &Buffer, sel: &Selection) -> String {
     )
     .trim()
     .to_string()
+}
+
+// --- Fase 2: tareas, milestones, sistema, validación e integración (P08.S8) -------------
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{cut}…")
+    }
+}
+
+fn status_color(status: &str) -> Color {
+    match status {
+        "DONE" | "PASS" | "APPROVED" | "MERGED" | "READY" => Color::Green,
+        "FAILED" | "FAIL" | "BLOCKED" | "CANCELLED" | "ABORTED" | "REJECT" => Color::Red,
+        "RUNNING" | "OPEN" | "TESTING" => Color::Cyan,
+        _ => Color::Yellow,
+    }
+}
+
+/// 15 Task List.
+fn tasks(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.tasks.is_empty() {
+        lines.push(Line::from(dim(
+            "Todavía no hay tareas: crea un agente con n desde Inicio.",
+        )));
+    } else {
+        lines.push(Line::from(dim(format!(
+            "  {:<6} {:<30} {:<10} {:<20} {}",
+            "CÓDIGO", "TAREA", "ESTADO", "AGENTE", "ESPERA / INTEGRACIÓN"
+        ))));
+    }
+    for (i, t) in app.tasks.iter().enumerate() {
+        let status = text(&t["status"]);
+        let agent = match (t["agent_number"].as_i64(), t["agent_state"].as_str()) {
+            (Some(n), Some(s)) => format!("#{n} {s}"),
+            _ => "—".to_string(),
+        };
+        let waits = t["waiting_for"].as_array().cloned().unwrap_or_default();
+        let tail = if !waits.is_empty() {
+            format!(
+                "espera a {}",
+                waits.iter().map(text).collect::<Vec<_>>().join(", ")
+            )
+        } else if let Some(m) = t["merge_status"].as_str() {
+            format!("integración {m}")
+        } else {
+            String::new()
+        };
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            Span::raw(format!(
+                "{:<6} {:<30} ",
+                text(&t["code"]),
+                truncate(&text(&t["title"]), 30)
+            )),
+            colored(format!("{status:<10} "), status_color(&status)),
+            Span::raw(format!("{agent:<20} ")),
+            dim(tail),
+        ]));
+    }
+    paragraph(f, area, "Tareas", lines);
+}
+
+/// 16 Task Detail.
+fn task_detail(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(t) = app.detail_task.as_ref() else {
+        lines.push(Line::from(dim("Elige una tarea en la lista.")));
+        return paragraph(f, area, "Tarea", lines);
+    };
+    let status = text(&t["status"]);
+    lines.push(Line::from(vec![bold(format!(
+        "{} · {}",
+        text(&t["code"]),
+        text(&t["title"])
+    ))]));
+    lines.push(Line::from(vec![
+        Span::raw("  Estado: "),
+        colored(status.clone(), status_color(&status)),
+    ]));
+    if let Some(r) = t["status_reason"].as_str() {
+        lines.push(Line::from(dim(format!("  {r}"))));
+    }
+    if let Some(m) = t["milestone"].as_str() {
+        lines.push(Line::raw(format!("  Milestone: {m}")));
+    }
+    match (t["agent_number"].as_i64(), t["agent_state"].as_str()) {
+        (Some(n), Some(s)) => {
+            lines.push(Line::raw(format!("  Agente: #{n} ({s}) — a para abrirlo")))
+        }
+        _ => lines.push(Line::from(dim("  Sin agente todavía."))),
+    }
+    if let Some(m) = t["merge_status"].as_str() {
+        lines.push(Line::raw(format!("  Integración: {m}")));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("DEPENDENCIAS"));
+    let deps = app
+        .task_deps
+        .as_ref()
+        .and_then(|d| d["dependencies"].as_array().cloned())
+        .unwrap_or_default();
+    if deps.is_empty() {
+        lines.push(Line::from(dim("  Ninguna.")));
+    }
+    for d in deps {
+        let s = text(&d["status"]);
+        lines.push(Line::from(vec![
+            Span::raw(format!(
+                "  {} {:<28} ",
+                text(&d["code"]),
+                truncate(&text(&d["title"]), 28)
+            )),
+            colored(s.clone(), status_color(&s)),
+            dim(if s == "DONE" { "" } else { "  ← la bloquea" }),
+        ]));
+    }
+    paragraph(f, area, "Tarea", lines);
+}
+
+/// 17 Milestone Review.
+fn milestones(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.milestones.is_empty() {
+        lines.push(Line::from(dim(
+            "No hay milestones: un lote delegado (`batch.create`) crea uno.",
+        )));
+    }
+    for (i, m) in app.milestones.iter().enumerate() {
+        let status = text(&m["status"]);
+        let gate = if m["requires_approval"].as_bool().unwrap_or(false) {
+            "con aprobación"
+        } else {
+            "sin aprobación"
+        };
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            bold(truncate(&text(&m["name"]), 34)),
+            Span::raw(format!(
+                "  {}/{} tareas  ",
+                num(&m["tasks_done"]),
+                num(&m["tasks_total"])
+            )),
+            colored(format!("{status:<18}"), status_color(&status)),
+            dim(gate),
+        ]));
+        if status == "IN_REVIEW" && i == app.selected {
+            lines.push(Line::from(dim(
+                "      Gate Review: a aprobar · c pedir cambios · h retener",
+            )));
+        }
+    }
+    paragraph(f, area, "Milestones", lines);
+}
+
+fn bar(pct: f64, width: usize) -> String {
+    let filled = ((pct.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
+    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+}
+
+/// 18 System / Resources.
+fn system(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(s) = app.system.as_ref() else {
+        lines.push(Line::from(dim("Cargando…")));
+        return paragraph(f, area, "Sistema", lines);
+    };
+    lines.push(Line::from(vec![
+        Span::raw("Perfil: "),
+        bold(text(&s["profile"])),
+        dim("   p para cambiarlo"),
+    ]));
+    lines.push(Line::raw(""));
+    let metric = |name: &str, value: Option<f64>, target: Option<f64>| -> Line<'static> {
+        match value {
+            Some(v) => {
+                let over = target.is_some_and(|t| v > t);
+                Line::from(vec![
+                    Span::raw(format!("  {name:<5} ")),
+                    colored(bar(v, 20), if over { Color::Red } else { Color::Green }),
+                    Span::raw(format!(" {v:>3.0}%")),
+                    dim(target.map_or(String::new(), |t| format!(" / objetivo {t:.0}%"))),
+                ])
+            }
+            None => Line::from(dim(format!("  {name:<5} sin muestra todavía"))),
+        }
+    };
+    lines.push(metric(
+        "CPU",
+        s["cpu_pct"].as_f64(),
+        s["cpu_ceiling_pct"].as_f64(),
+    ));
+    lines.push(metric(
+        "RAM",
+        s["ram_pct"].as_f64(),
+        s["ram_ceiling_pct"].as_f64(),
+    ));
+    lines.push(Line::raw(format!(
+        "  Slots pesados {} / {}",
+        num(&s["heavy_slots_used"]),
+        num(&s["heavy_slots_total"])
+    )));
+    lines.push(Line::raw(""));
+    lines.push(section("EJECUTANDO"));
+    let running = s["running"].as_array().cloned().unwrap_or_default();
+    if running.is_empty() {
+        lines.push(Line::from(dim("  Nada pesado corriendo.")));
+    }
+    for r in running {
+        lines.push(Line::raw(format!(
+            "  {} · clase {} · {}",
+            text(&r["agent"]),
+            num(&r["class"]),
+            truncate(&text(&r["command"]), 50)
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("EN COLA"));
+    let waiting = s["waiting"].as_array().cloned().unwrap_or_default();
+    if waiting.is_empty() {
+        lines.push(Line::from(dim("  Nadie espera.")));
+    }
+    for w in waiting {
+        lines.push(Line::raw(format!(
+            "  {} · {}",
+            text(&w["agent"]),
+            truncate(&text(&w["command"]), 50)
+        )));
+        lines.push(Line::from(dim(format!("      {}", text(&w["why"])))));
+    }
+    paragraph(f, area, "Sistema", lines);
+}
+
+/// 19 Performance Profile.
+fn performance_profile(app: &App, f: &mut Frame, area: Rect) {
+    let current = app
+        .system
+        .as_ref()
+        .and_then(|s| s["profile"].as_str())
+        .unwrap_or("");
+    let describe = |id: &str| match id {
+        "ECO" => "1 proceso pesado, CPU al 50 % y RAM al 60 %: la máquina casi no lo nota.",
+        "BALANCED" => "1 proceso pesado, CPU y RAM al 70 %: trabajar mientras los agentes corren.",
+        "PERFORMANCE" => {
+            "3 procesos pesados, CPU al 90 % y RAM al 85 %: la máquina es de los agentes."
+        }
+        _ => "Los valores de `[performance]` en config.toml (max_heavy y techos).",
+    };
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(dim("El cambio vale al instante para lo que está en cola.")),
+        Line::raw(""),
+    ];
+    for (i, (id, name)) in PERFORMANCE.iter().enumerate() {
+        let mark = if i == app.perf_sel { "(•)" } else { "( )" };
+        let now = if *id == current { "  ← vigente" } else { "" };
+        lines.push(Line::from(vec![
+            marker(i == app.perf_sel),
+            if i == app.perf_sel {
+                colored(format!("{mark} {name}"), ACCENT)
+            } else {
+                Span::raw(format!("{mark} {name}"))
+            },
+            dim(now),
+        ]));
+        lines.push(Line::from(dim(format!("      {}", describe(id)))));
+    }
+    paragraph(f, area, "Perfil de rendimiento", lines);
+}
+
+/// 28 Validation.
+fn validation(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(v) = app.validation.as_ref() else {
+        lines.push(Line::from(dim("Cargando…")));
+        return paragraph(f, area, "Validación", lines);
+    };
+    let runs = v["runs"].as_array().cloned().unwrap_or_default();
+    if runs.is_empty() {
+        lines.push(Line::from(dim(
+            "Todavía no se validó esta tarea. r para correr la validación del proyecto.",
+        )));
+    }
+    // Más nuevo primero: cada tier muestra solo su última pasada.
+    let mut shown: Vec<i64> = Vec::new();
+    let mut by_tier: Vec<&Value> = Vec::new();
+    for r in &runs {
+        let tier = r["tier"].as_i64().unwrap_or(0);
+        if !shown.contains(&tier) {
+            shown.push(tier);
+            by_tier.push(r);
+        }
+    }
+    by_tier.sort_by_key(|r| r["tier"].as_i64().unwrap_or(0));
+    for r in by_tier {
+        let status = text(&r["status"]);
+        lines.push(Line::from(vec![
+            bold(format!("Tier {}", num(&r["tier"]))),
+            Span::raw("  "),
+            colored(status.clone(), status_color(&status)),
+            dim(format!("  ({})", text(&r["trigger"]))),
+        ]));
+        for c in r["checks"].as_array().cloned().unwrap_or_default() {
+            let s = text(&c["status"]);
+            let counts = match (c["passed"].as_i64(), c["failed"].as_i64()) {
+                (Some(p), Some(fl)) => format!("  {p} ok · {fl} fallos"),
+                _ => String::new(),
+            };
+            lines.push(Line::from(vec![
+                Span::raw(format!("  {:<16} ", text(&c["name"]))),
+                colored(s.clone(), status_color(&s)),
+                dim(counts),
+            ]));
+            if s != "PASS"
+                && let Some(sum) = c["summary"].as_str()
+            {
+                for l in sum.lines().take(4) {
+                    lines.push(Line::from(dim(format!("      {}", truncate(l, 80)))));
+                }
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+    if !shown.contains(&3) && !runs.is_empty() {
+        lines.push(Line::from(dim(
+            "Tier 3: todavía no se requiere (corre al integrar).",
+        )));
+    }
+    paragraph(f, area, "Validación", lines);
+}
+
+fn flow_agent_label(app: &App) -> String {
+    app.flow_agent
+        .as_ref()
+        .and_then(|id| {
+            app.agents
+                .iter()
+                .find(|a| a["agent_id"].as_str() == Some(id.as_str()))
+        })
+        .and_then(|a| a["number"].as_i64())
+        .map_or_else(String::new, |n| format!(" · Agente #{n}"))
+}
+
+/// 26 Merge Preflight.
+fn merge_preflight(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(m) = app.merge.as_ref() else {
+        lines.push(Line::from(dim("Cargando…")));
+        return paragraph(f, area, "Integración", lines);
+    };
+    let mr = &m["merge_request"];
+    if mr.is_null() {
+        lines.push(Line::from(dim(
+            "Todavía no hay una solicitud de integración. p para correr el preflight.",
+        )));
+        return paragraph(
+            f,
+            area,
+            &format!("Integración{}", flow_agent_label(app)),
+            lines,
+        );
+    }
+    let status = text(&mr["status"]);
+    lines.push(Line::from(vec![
+        Span::raw("Destino: "),
+        bold(text(&mr["target_branch"])),
+        Span::raw("   Estado: "),
+        colored(status.clone(), status_color(&status)),
+    ]));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(dim(format!(
+        "  {:<14} {:<7} {}",
+        "CHECK", "ESTADO", "DETALLE"
+    ))));
+    for c in mr["preflight"]["checks"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        let s = text(&c["status"]);
+        lines.push(Line::from(vec![
+            Span::raw(format!("  {:<14} ", text(&c["name"]))),
+            colored(format!("{s:<7} "), status_color(&s)),
+            Span::raw(truncate(&text(&c["detail"]), 56)),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    let requires = mr["requires_approval"].as_bool().unwrap_or(true);
+    let approved = !mr["approved_at"].is_null();
+    lines.push(Line::raw(format!(
+        "  Política: {}",
+        match (requires, approved) {
+            (false, _) => "integración automática permitida",
+            (true, true) => "aprobada por ti",
+            (true, false) => "necesita tu aprobación (a)",
+        }
+    )));
+    if !mr["merge_commit"].is_null() {
+        lines.push(Line::raw(format!(
+            "  Integrada en el commit {}",
+            truncate(&text(&mr["merge_commit"]), 10)
+        )));
+    }
+    let conflicts = m["conflicts"].as_array().map_or(0, Vec::len);
+    if conflicts > 0 {
+        lines.push(Line::from(colored(
+            format!("  {conflicts} archivo(s) en conflicto: c para revisarlos."),
+            Color::Red,
+        )));
+    }
+    if let Some(r) = m["reviews"].as_array().and_then(|r| r.first()) {
+        lines.push(Line::raw(format!(
+            "  Review: {} ({}) — y para ver los hallazgos",
+            text(&r["status"]),
+            r["recommendation"].as_str().unwrap_or("sin recomendación")
+        )));
+    }
+    paragraph(
+        f,
+        area,
+        &format!("Integración{}", flow_agent_label(app)),
+        lines,
+    );
+}
+
+/// 27 Conflict Review.
+fn conflict_review(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let conflicts = app
+        .merge
+        .as_ref()
+        .and_then(|m| m["conflicts"].as_array().cloned())
+        .unwrap_or_default();
+    if conflicts.is_empty() {
+        lines.push(Line::from(dim("Sin conflictos.")));
+    } else {
+        lines.push(Line::from(colored(
+            "La tarea no entra limpia en la rama del chat.",
+            Color::Red,
+        )));
+        lines.push(Line::raw(""));
+        lines.push(Line::from(dim(format!(
+            "  {:<34} {:<14} {}",
+            "ARCHIVO", "CHOCA CON", "RESOLUCIÓN"
+        ))));
+    }
+    for c in conflicts {
+        let other = c["other_agent_id"]
+            .as_str()
+            .and_then(|id| {
+                app.agents
+                    .iter()
+                    .find(|a| a["agent_id"].as_str() == Some(id))
+                    .and_then(|a| a["number"].as_i64())
+            })
+            .map_or("—".to_string(), |n| format!("Agente #{n}"));
+        lines.push(Line::raw(format!(
+            "  {:<34} {:<14} {}",
+            truncate(&text(&c["path"]), 34),
+            other,
+            text(&c["resolution"])
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(dim(
+        "  Resolver a mano: integra la rama del chat en la del agente, arregla y vuelve (p).",
+    )));
+    paragraph(
+        f,
+        area,
+        &format!("Conflictos{}", flow_agent_label(app)),
+        lines,
+    );
+}
+
+/// 29 Review Agent Result.
+fn review_result(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let reviews = app
+        .merge
+        .as_ref()
+        .and_then(|m| m["reviews"].as_array().cloned())
+        .unwrap_or_default();
+    if reviews.is_empty() {
+        lines.push(Line::from(dim(
+            "Todavía no hay una revisión de esta tarea. w para pedirla.",
+        )));
+    }
+    for r in reviews {
+        let status = text(&r["status"]);
+        let rec = r["recommendation"].as_str().unwrap_or("—").to_string();
+        lines.push(Line::from(vec![
+            bold("Revisión "),
+            colored(status.clone(), status_color(&status)),
+            Span::raw("  recomienda "),
+            colored(rec.clone(), status_color(&rec)),
+        ]));
+        let findings = r["findings"].as_array().cloned().unwrap_or_default();
+        if findings.is_empty() && status == "DONE" {
+            lines.push(Line::from(dim("  Sin hallazgos.")));
+        }
+        for fi in findings {
+            lines.push(Line::raw(format!(
+                "  [{}] {}: {}",
+                text(&fi["severity"]),
+                text(&fi["file"]),
+                truncate(&text(&fi["text"]), 60)
+            )));
+        }
+        if let Some(e) = r["findings"]["error"].as_str() {
+            lines.push(Line::from(colored(format!("  {e}"), Color::Red)));
+        }
+        lines.push(Line::raw(""));
+    }
+    lines.push(Line::from(dim(
+        "Un review solo recomienda: la decisión de integrar es tuya.",
+    )));
+    paragraph(
+        f,
+        area,
+        &format!("Revisión{}", flow_agent_label(app)),
+        lines,
+    );
 }

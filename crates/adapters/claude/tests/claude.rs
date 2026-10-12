@@ -218,7 +218,10 @@ fn spawn_uses_headless_stream_json_and_injects_hooks_per_invocation() {
         cmd,
         r#"'C:/Program Files/Symphony/symphony.exe' 'hook' 'emit'"#
     );
-    assert_eq!(hooks["PreToolUse"][0]["hooks"][0]["timeout"], 30);
+    assert_eq!(
+        hooks["PreToolUse"][0]["hooks"][0]["timeout"],
+        symphony_adapter_common::hooks::HoldTimes::CLAUDE.hook_secs
+    );
 
     let resume = a
         .resume_spec(&ResumeRequest {

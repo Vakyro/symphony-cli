@@ -4,6 +4,7 @@ members = [
     "crates/protocol",
     "crates/core",
     "crates/router",
+    "crates/scheduler",
     "crates/context",
     "crates/daemon",
     "crates/cli",

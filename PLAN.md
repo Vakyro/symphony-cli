@@ -923,44 +923,44 @@ El MCP que **Symphony construye** (`symphony mcp serve`, P09.S8) es producto, no
 **Tecnologías:** `tokio::sync::Semaphore`, BinaryHeap, sysinfo, Job Objects / cgroups v2 / process groups, notify (en P09), cargo-llvm-cov.
 **Skills:** `test-driven-development`, `performance-optimization`, `deprecation-and-migration`, `the-council` (si el benchmark falla).
 
-### P08.S1 · Migración 002
-- **Qué:** tablas de Fase 2: task_dependencies, milestones, processes, resource_samples, validation_runs, validation_checks, merge_requests, merge_conflicts y reviews (DB §3).
+### P08.S1 · Migración 004 ✅
+- **Qué:** (la 004, no la 002: ADR-0010/0013; además `PHASE_DONE` en `agent_runs.end_reason`) tablas de Fase 2: task_dependencies, milestones, processes, resource_samples, validation_runs, validation_checks, merge_requests, merge_conflicts y reviews (DB §3).
 - **Verifica:** migración 001 → 002 sobre una DB con datos de P07 sin pérdida.
 
-### P08.S2 · Clasificador de operaciones y Resource Manager
+### P08.S2 · Clasificador de operaciones y Resource Manager ✅
 - **Qué:** reglas de clase 0–4 (IDEA §5.4) sobre `tool_name` + comando; muestreo con sysinfo cada 5–10 s en `resource_samples`, agregado por minuto a las 24 h.
 - **Verifica:** tabla de casos (`npm test` → 3, `pnpm build` → 4, `rg` → 1…).
 
-### P08.S3 · Scheduler
+### P08.S3 · Scheduler ✅
 - **Qué:** crate `scheduler` (STACK §8): HeavySemaphore, cola por prioridad, fairness entre agentes, perfiles `eco`/`balanced`/`performance`/`custom` desde config, y QueueExplainer (texto humano de FLOW §10.1). Integración con `hook emit`: `QUEUED` → retención → `ALLOW`. `tool_calls.blocked_by_tool_call_id` y `enforcement`.
 - **Verifica:** simulación determinista + proptest: nunca más de N pesados; ningún agente espera indefinidamente con slots libres.
 
-### P08.S4 · Enforcement a nivel OS
+### P08.S4 · Enforcement a nivel OS ✅
 - **Qué:** Job Objects (Windows), cgroups v2 (Linux) y process groups (macOS) sobre el árbol de cada run. En los CLIs sin hook-hold (ADR-0003), el límite se aplica aquí. Llenar `processes`.
 - **Verifica:** test que lanza una carga CPU-bound bajo límite y mide que se respeta (por OS en CI).
 
-### P08.S5 · DAG de tareas y milestones
+### P08.S5 · DAG de tareas y milestones ✅
 - **Qué:** dependencias con detección de ciclos; transiciones automáticas `WAITING_DEPENDENCY` ↔ `READY`; dependencia fallida → `BLOCKED` con decisión (FLOW §9.3); milestones con gate (FLOW §9.4).
 - **Verifica:** proptest "un DAG nunca acepta ciclos".
 
-### P08.S6 · Validation engine
+### P08.S6 · Validation engine ✅
 - **Qué:** tiers 1–3 desde `project.toml` (STACK §23); corren a través del scheduler; guardan resultados; resumen de tests (colapso básico); feedback al agente (FLOW §15.2).
 - **Verifica:** repo de prueba con un test que falla → resumen correcto + agente recibe el fallo.
 
-### P08.S7 · Merge, conflictos y review agent
+### P08.S7 · Merge, conflictos y review agent ✅
 - **Qué:** preflight (FLOW §14.2), cola de integración, conflicto → `BLOCKED` + `merge_conflicts`, review agent como task `REVIEW` (FLOW §15.3). **Nunca merge a main sin política explícita.**
 - **Verifica:** Journey D con dos fake-agents que tocan el mismo archivo.
 
-### P08.S8 · Vistas TUI de Fase 2
+### P08.S8 · Vistas TUI de Fase 2 ✅
 - **Qué:** vistas 15–19 y 25–29 (FLOW §18) + System Strip real.
 - **Verifica:** snapshots `insta`.
 
-### P08.S9 · Benchmark principal (gate)
+### P08.S9 · Benchmark principal (gate) 🟡 medido; falta la opinión de Leo
 - **Qué:** harness E2E de STACK §25.2: 3 agentes, 3 worktrees, un test pesado. Primero con fake-agents y luego live (Claude Code + Codex + un tercero si ya existe, con permiso de Leo), mientras Leo usa la máquina normalmente.
 - **Salida:** tabla de RAM total, CPU p50/p95, número de procesos, latencia de cola y latencia de eventos, más la opinión de Leo sobre la fluidez de la máquina.
 - **Si falla la métrica principal:** `the-council` + ADR con el ajuste (perfiles, límites, slots). **No avanzar sin resolverlo.**
 
-### P08.S10 · Cierre
+### P08.S10 · Cierre 🟡 hecho salvo merge y tag (esperan la aprobación de Leo del benchmark)
 - Cobertura (`cargo-llvm-cov`) de scheduler, estados y DAG anotada. `ponytail-review`. Protocolo §4.6. Tag `p08-done`.
 
 **Criterios de salida P08:** Journeys B y D pasan; benchmark principal aprobado por Leo.

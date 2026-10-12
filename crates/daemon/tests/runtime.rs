@@ -153,6 +153,8 @@ fn req(e: &Env, title: &str, execution: Execution) -> CreateAgent {
         context_mode: ContextMode::Balanced,
         priority: 0,
         chat: false,
+        depends_on: Vec::new(),
+        review: false,
     }
 }
 
@@ -280,6 +282,53 @@ async fn exact_model_creates_everything_and_runs_the_executor() {
     assert_eq!(count(&e, "sessions"), 1);
     assert_eq!(count(&e, "projects"), 1);
     assert_ne!(second.worktree, created.worktree);
+    e.writer.shutdown();
+}
+
+/// P08.S4: el árbol de procesos del run queda en `processes` y se cierra al terminar.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_process_tree_of_a_run_is_recorded_and_closed() {
+    // El CLI vive más que la primera foto (que se toma al arrancar el run).
+    let script = r#"
+[[step]]
+kind = "say"
+text = "Pensando"
+
+[[step]]
+kind = "sleep"
+ms = 1500
+"#;
+    let e = env(script, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Proceso", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let (run_id, _) = created.run.clone().unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let pid: i64 = one(
+        &e,
+        &format!("SELECT pid FROM agent_runs WHERE id='{run_id}'"),
+    );
+    let root: String = one(
+        &e,
+        &format!(
+            "SELECT pid || '|' || (ended_at IS NOT NULL) || '|' || (command IS NOT NULL) FROM processes
+             WHERE run_id='{run_id}' AND parent_process_id IS NULL ORDER BY started_at LIMIT 1"
+        ),
+    );
+    assert_eq!(
+        root,
+        format!("{pid}|1|1"),
+        "la raíz es el CLI y quedó cerrada"
+    );
+    let open: i64 = one(
+        &e,
+        &format!("SELECT COUNT(*) FROM processes WHERE run_id='{run_id}' AND ended_at IS NULL"),
+    );
+    assert_eq!(open, 0, "al terminar el run no queda nada abierto");
     e.writer.shutdown();
 }
 
@@ -779,7 +828,8 @@ text = "{long}"
         calls.iter().all(|c| c.5),
         "toda tool call cerrada: {calls:?}"
     );
-    assert_eq!((calls[0].4, calls[1].4), (2, 1));
+    // P08.S2: `git status` es lectura (clase 1), igual que escribir un archivo.
+    assert_eq!((calls[0].4, calls[1].4), (1, 1));
     e.writer.shutdown();
 }
 
@@ -843,6 +893,13 @@ kind = "run"
 command = ["git", "no-such-subcommand"]
 "#;
     let e = env(script, None).await;
+    // Este test mira los checkpoints del trabajo vivo: sin commit al completar.
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        "[project]\nname = \"demo\"\ndefault_branch = \"main\"\n\n[merge]\ncommit_on_complete = false\n",
+    )
+    .unwrap();
     let created = e
         .runtime
         .create_agent(req(
@@ -1132,6 +1189,13 @@ kind = "run"
 command = ["git", "no-such-subcommand"]
 "#;
     let e = env(script, None).await;
+    // Este test mira el estado vivo de git tras el trabajo del agente: sin commit al completar.
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        "[project]\nname = \"demo\"\ndefault_branch = \"main\"\n\n[merge]\ncommit_on_complete = false\n",
+    )
+    .unwrap();
     let objective = "Arreglar auth";
     let created = e
         .runtime
@@ -3445,5 +3509,1135 @@ text = "primer paso listo"
         handoff.items
     );
 
+    e.writer.shutdown();
+}
+
+// --- P08.S5: dependencias entre tareas ---------------------------------------------
+
+/// Espera (hasta 30 s) a que el agente llegue a `state`.
+async fn wait_state(e: &Env, agent: &str, state: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let now: String = one(e, &format!("SELECT state FROM agents WHERE id='{agent}'"));
+        if now == state {
+            return;
+        }
+        let why: Option<String> = one(
+            e,
+            &format!("SELECT state_reason FROM agents WHERE id='{agent}'"),
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el agente #{} quedó en {now} ({why:?}), se esperaba {state}",
+            one::<i64>(e, &format!("SELECT number FROM agents WHERE id='{agent}'"))
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dependent_agent_waits_then_starts_when_its_dependency_is_done() {
+    // El primero tarda: cuando se crea el segundo, todavía corre.
+    let slow = r#"
+[[step]]
+kind = "say"
+text = "Trabajando"
+
+[[step]]
+kind = "sleep"
+ms = 1500
+
+[[step]]
+kind = "edit"
+path = "fix.txt"
+content = "ok"
+"#;
+    let e = env(slow, None).await;
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+
+    // B depende de T-1 antes de que exista el primer agente: es una dependencia desconocida.
+    let mut unknown = req(&e, "Segunda", Execution::Exact("fake/fast".into()));
+    unknown.depends_on = vec!["T-99".into()];
+    let err = e.runtime.create_agent(unknown).await.unwrap_err();
+    assert_eq!(err.code(), "unknown_dependency");
+    assert_nothing_created(&e);
+
+    // A corre; B se crea esperando a T-1 y no arranca todavía.
+    let a = e
+        .runtime
+        .create_agent(req(&e, "Primera", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let mut second = req(&e, "Segunda", Execution::Exact("fake/fast".into()));
+    second.depends_on = vec![a.task_code.clone()];
+    let b = e.runtime.create_agent(second).await.unwrap();
+    assert!(b.run.is_none(), "no arranca mientras espera");
+
+    let b_id = b.agent_id.to_string();
+    assert_eq!(b.state, AgentState::WaitingDependency);
+    assert_eq!(b.state_reason.as_deref(), Some("espera a T-1"));
+
+    // A termina → el reactor libera a B y lo arranca con su modelo exacto.
+    wait_state(&e, &a.agent_id.to_string(), "COMPLETED").await;
+    wait_state(&e, &b_id, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    let runs: i64 = one(
+        &e,
+        &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id='{b_id}'"),
+    );
+    assert_eq!(runs, 1, "B corrió una vez, ya liberado");
+    let b_started: i64 = one(
+        &e,
+        &format!("SELECT started_at FROM agent_runs WHERE agent_id='{b_id}'"),
+    );
+    let a_done: i64 = one(
+        &e,
+        &format!(
+            "SELECT COALESCE(t.completed_at, 0) FROM tasks t WHERE t.id='{}'",
+            a.task_id
+        ),
+    );
+    assert!(b_started >= a_done, "B no arrancó antes de que A terminara");
+    reactor.abort();
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_dependency_blocks_the_dependent_until_the_user_decides() {
+    let script = "[[step]]\nkind = \"crash\"\n";
+    let e = env(script, None).await;
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let a = e
+        .runtime
+        .create_agent(req(&e, "Primera", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let mut second = req(&e, "Segunda", Execution::Exact("fake/fast".into()));
+    second.depends_on = vec![a.task_code.clone()];
+    let b = e.runtime.create_agent(second).await.unwrap();
+    let b_id = b.agent_id.to_string();
+
+    // A muere → B queda BLOCKED con la decisión pendiente y un recovery item.
+    wait_state(&e, &a.agent_id.to_string(), "FAILED").await;
+    wait_state(&e, &b_id, "BLOCKED").await;
+    let reason: String = one(
+        &e,
+        &format!("SELECT state_reason FROM agents WHERE id='{b_id}'"),
+    );
+    assert!(
+        reason.contains("falló") && reason.contains("ignorar la dependencia"),
+        "{reason}"
+    );
+    let kind: String = one(
+        &e,
+        "SELECT kind FROM recovery_items WHERE kind='DEPENDENCY_FAILED'",
+    );
+    assert_eq!(kind, "DEPENDENCY_FAILED");
+    let none: i64 = one(
+        &e,
+        &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id='{b_id}'"),
+    );
+    assert_eq!(none, 0, "no arrancó");
+
+    // «Ignorar la dependencia»: se libera y arranca (con el mismo guion muere, pero corrió).
+    let resolved = symphony_daemon::dependencies::resolve(
+        &e.runtime,
+        b.task_id,
+        a.task_id,
+        symphony_daemon::dependencies::Resolution::Ignore,
+    )
+    .await
+    .unwrap();
+    assert!(resolved.released);
+    e.runtime.wait_executors().await;
+    let runs: i64 = one(
+        &e,
+        &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id='{b_id}'"),
+    );
+    assert_eq!(runs, 1, "tras ignorar la dependencia B arrancó");
+    let deps: i64 = one(&e, "SELECT COUNT(*) FROM task_dependencies");
+    assert_eq!(deps, 0);
+
+    // Cancelar es otra salida: una tercera tarea que depende de la fallida.
+    let mut third = req(&e, "Tercera", Execution::Exact("fake/fast".into()));
+    third.depends_on = vec![a.task_code.clone()];
+    let c = e.runtime.create_agent(third).await.unwrap();
+    wait_state(&e, &c.agent_id.to_string(), "BLOCKED").await;
+    symphony_daemon::dependencies::resolve(
+        &e.runtime,
+        c.task_id,
+        a.task_id,
+        symphony_daemon::dependencies::Resolution::Cancel,
+    )
+    .await
+    .unwrap();
+    wait_state(&e, &c.agent_id.to_string(), "CANCELLED").await;
+    reactor.abort();
+    e.writer.shutdown();
+}
+
+// --- P08.S5: plan por fases ----------------------------------------------------------
+
+const TWO_PHASES: &str = r##"
+[[step]]
+kind = "say"
+text = "Trabajando la fase"
+
+[[step]]
+kind = "plan"
+content = "# Plan: arreglar\n## Fase 1: preparar\nVerifica: cargo test\n- [ ] leer\n- [ ] escribir el test\n## Fase 2: arreglar\n- [ ] corregir\n- [ ] correr la suite\n"
+"##;
+
+fn run_rows(e: &Env, agent: &str) -> Vec<(i64, String, String, String)> {
+    let conn =
+        rusqlite::Connection::open_with_flags(&e.db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT seq, status, COALESCE(end_reason, ''), model_id FROM agent_runs
+             WHERE agent_id = ?1 ORDER BY seq",
+        )
+        .unwrap();
+    stmt.query_map([agent], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+    })
+    .unwrap()
+    .map(Result::unwrap)
+    .collect()
+}
+
+fn first_user_message(e: &Env, agent: &str, seq: i64) -> String {
+    one(
+        e,
+        &format!(
+            "SELECT m.content FROM messages m JOIN agent_runs r ON r.id = m.run_id
+             WHERE m.agent_id = '{agent}' AND r.seq = {seq} AND m.role = 'USER'
+             ORDER BY m.created_at, m.rowid LIMIT 1"
+        ),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plan_runs_one_phase_per_session_and_is_deleted_when_done() {
+    let e = env(TWO_PHASES, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Arreglar la rotación",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    // Dos sesiones: la fase 1 cerró con PHASE_DONE y la fase 2 con COMPLETED, mismo modelo.
+    let runs = run_rows(&e, &agent);
+    assert_eq!(
+        runs,
+        vec![
+            (
+                1,
+                "HANDED_OFF".into(),
+                "PHASE_DONE".into(),
+                "fake/fast".into()
+            ),
+            (2, "EXITED".into(), "COMPLETED".into(), "fake/fast".into()),
+        ]
+    );
+    // La conversación guarda lo que pidió el usuario (las reglas del plan van al CLI, no a
+    // la conversación); la segunda sesión recibe solo su fase.
+    assert_eq!(first_user_message(&e, &agent, 1), "Arreglar la rotación");
+    let second = first_user_message(&e, &agent, 2);
+    assert!(second.contains("fase 2 de 2: arreglar"), "{second}");
+    assert!(
+        !second.contains("Instrucciones de Symphony"),
+        "no repite las reglas"
+    );
+    // La tarea terminó y el plan temporal se borró; lo hecho quedó en la conversación.
+    assert!(
+        !created
+            .worktree
+            .join(".symphony/plan")
+            .join(format!("{}.md", created.task_id))
+            .exists()
+    );
+    let summaries: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM messages WHERE agent_id = '{agent}' AND role = 'SYSTEM' AND content LIKE 'Plan «%'"
+        ),
+    );
+    assert_eq!(summaries, 2, "una por fase terminada y una al final");
+    let changes: String = one(
+        &e,
+        &format!("SELECT reason FROM executor_changes WHERE agent_id = '{agent}'"),
+    );
+    assert_eq!(changes, "RESTART");
+    let task: String = one(
+        &e,
+        &format!("SELECT status FROM tasks WHERE id = '{}'", created.task_id),
+    );
+    assert_eq!(task, "DONE");
+    // Las dos sesiones son una sola tarea: ni recovery items ni un segundo agente.
+    assert_eq!(count(&e, "recovery_items"), 0);
+    assert_eq!(count(&e, "agents"), 1);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asking_before_each_phase_leaves_the_agent_ready_until_confirmed() {
+    let e = env(TWO_PHASES, None).await;
+    std::fs::write(
+        e.home.join("config.toml"),
+        "[plan]\nenabled = true\nphase_start = \"ask\"\nmin_tasks_per_phase = 2\n",
+    )
+    .unwrap();
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Con confirmación",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "READY").await;
+    e.runtime.wait_executors().await;
+    let why: String = one(
+        &e,
+        &format!("SELECT state_reason FROM agents WHERE id = '{agent}'"),
+    );
+    assert!(
+        why.contains("fase 2 «arreglar» lista para arrancar"),
+        "{why}"
+    );
+    assert_eq!(run_rows(&e, &agent).len(), 1, "no arrancó la fase 2 sola");
+
+    // El usuario confirma: arranca la fase 2 y la tarea termina.
+    let run = e.runtime.start_next_phase(created.agent_id).await.unwrap();
+    assert_ne!(run, created.run.clone().unwrap().0);
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    assert_eq!(run_rows(&e, &agent).len(), 2);
+    // Sin plan pendiente, confirmar otra vez no hace nada raro.
+    assert!(e.runtime.start_next_phase(created.agent_id).await.is_err());
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_task_in_the_plan_stops_the_agent_and_keeps_the_plan() {
+    let script = r##"
+[[step]]
+kind = "plan"
+content = "# Plan: x\n## Fase 1: a\n- [x] uno\n- [!] dos\n  > no compila\n"
+"##;
+    let e = env(script, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Plan que falla",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "FAILED").await;
+    e.runtime.wait_executors().await;
+    let why: String = one(
+        &e,
+        &format!("SELECT state_reason FROM agents WHERE id = '{agent}'"),
+    );
+    assert!(
+        why.contains("fase 1") && why.contains("no compila"),
+        "{why}"
+    );
+    let kind: String = one(&e, "SELECT kind FROM recovery_items");
+    assert_eq!(kind, "EXECUTOR_EXITED");
+    // El plan queda para quien reanude la tarea.
+    assert!(
+        created
+            .worktree
+            .join(".symphony/plan")
+            .join(format!("{}.md", created.task_id))
+            .is_file()
+    );
+    assert_eq!(run_rows(&e, &agent).len(), 1);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_plan_file_the_agent_completes_as_before() {
+    let e = env(WORK, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Sin plan", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    assert_eq!(run_rows(&e, &agent).len(), 1);
+    assert_eq!(first_user_message(&e, &agent, 1), "Sin plan");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_plan_file_never_reaches_git() {
+    let e = env(TWO_PHASES, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "No commitear",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    wait_state(&e, &created.agent_id.to_string(), "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    let exclude = std::fs::read_to_string(e.repo.join(".git/info/exclude")).unwrap();
+    assert!(
+        exclude.lines().any(|l| l.trim() == ".symphony/plan/"),
+        "{exclude}"
+    );
+    let status = git(&created.worktree, &["status", "--porcelain"]);
+    assert!(!status.contains(".symphony"), "{status}");
+    e.writer.shutdown();
+}
+
+// --- P08.S6: validación y preparación del worktree -----------------------------------
+
+/// Archivos de validación en el repo base (los worktrees nacen de este commit).
+fn seed_validation(e: &Env, project_toml: &str) {
+    let dir = e.repo.join("scripts");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ok.js"), "process.exit(0)\n").unwrap();
+    std::fs::write(
+        dir.join("check.js"),
+        "const fs = require('fs');\n\
+         if (!fs.existsSync('fixed.txt')) {\n  \
+           console.error('FAIL auth.refresh.test.ts expected 200, received 401');\n  \
+           console.log('Tests: 1 failed, 3 passed, 4 total');\n  \
+           process.exit(1);\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("fail.js"),
+        "console.error('error: nunca pasa');\nprocess.exit(1);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("prepare.js"),
+        "require('fs').writeFileSync('prepared.txt', 'listo');\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("prepare_fails.js"),
+        "console.error('pnpm: no se pudo instalar');\nprocess.exit(3);\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(e.repo.join(".symphony/project.toml"), project_toml).unwrap();
+    git(&e.repo, &["add", "."]);
+    git(&e.repo, &["commit", "-q", "-m", "validación"]);
+}
+
+const PROJECT_HEAD: &str = "[project]\nname = \"demo\"\ndefault_branch = \"main\"\n\n";
+
+/// Primer run: deja una marca y no arregla nada; los siguientes (la sesión retomada) sí.
+const FIX_ON_RETRY: &str = r##"
+[[step]]
+kind = "say"
+text = "Intento"
+
+[[step]]
+kind = "run"
+command = ["node", "-e", 'const fs=require("fs"); fs.writeFileSync(fs.existsSync(".attempt") ? "fixed.txt" : ".attempt", "x")']
+"##;
+
+fn validation_rows(e: &Env, agent: &str) -> Vec<(i64, String)> {
+    let conn =
+        rusqlite::Connection::open_with_flags(&e.db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT tier, status FROM validation_runs WHERE agent_id = ?1 ORDER BY started_at, rowid",
+        )
+        .unwrap();
+    stmt.query_map([agent], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_gate_returns_to_the_same_agent_and_the_task_completes_when_it_passes() {
+    let e = env(FIX_ON_RETRY, None).await;
+    seed_validation(
+        &e,
+        &format!(
+            "{PROJECT_HEAD}[validation]\ntier1 = [\"node scripts/ok.js\"]\ntier2 = [\"node scripts/check.js\"]\ngate = 2\n"
+        ),
+    );
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Arreglar el 401",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    // Tier 1 pasa, tier 2 falla; el agente arregla en la misma sesión; vuelven a pasar.
+    assert_eq!(
+        validation_rows(&e, &agent),
+        vec![
+            (1, "PASS".to_string()),
+            (2, "FAIL".to_string()),
+            (1, "PASS".to_string()),
+            (2, "PASS".to_string()),
+        ]
+    );
+    // El fallo se le devolvió al agente con lo que importa, no con toda la salida.
+    let feedback: String = one(
+        &e,
+        &format!(
+            "SELECT content FROM messages WHERE agent_id = '{agent}' AND role = 'SYSTEM' AND content LIKE 'Symphony ejecutó la validación%'"
+        ),
+    );
+    assert!(
+        feedback.contains("FAIL auth.refresh.test.ts expected 200, received 401"),
+        "{feedback}"
+    );
+    assert!(feedback.contains("1 fallaron, 3 pasaron"), "{feedback}");
+    // El resultado quedó guardado con su salida completa como objeto de contexto.
+    let (name, summary, object): (String, String, Option<String>) = {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        conn.query_row(
+            "SELECT name, summary, output_object_id FROM validation_checks
+             WHERE status = 'FAIL' AND validation_run_id IN (SELECT id FROM validation_runs WHERE agent_id = ?1)",
+            [&agent],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(name, "targeted_tests");
+    assert!(summary.contains("expected 200, received 401"));
+    assert!(object.is_some());
+    // Dos runs del mismo agente (la sesión retomada), una sola tarea; nada que recuperar.
+    assert_eq!(run_rows(&e, &agent).len(), 2);
+    assert_eq!(count(&e, "agents"), 1);
+    assert_eq!(count(&e, "recovery_items"), 0);
+    let task: String = one(
+        &e,
+        &format!("SELECT status FROM tasks WHERE id = '{}'", created.task_id),
+    );
+    assert_eq!(task, "DONE");
+    // Cada comando quedó en `tool_calls` (pasan por el scheduler como cualquier otro).
+    let calls: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM tool_calls WHERE agent_id = '{agent}' AND tool_name LIKE 'validation:%'"
+        ),
+    );
+    assert_eq!(calls, 4);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_validation_failures_block_the_task_with_a_decision() {
+    let e = env(WORK, None).await;
+    seed_validation(
+        &e,
+        &format!(
+            "{PROJECT_HEAD}[validation]\ntier1 = [\"node scripts/fail.js\"]\ngate = 1\nmax_attempts = 2\n"
+        ),
+    );
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Nunca pasa", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "BLOCKED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(
+        validation_rows(&e, &agent),
+        vec![(1, "FAIL".to_string()), (1, "FAIL".to_string())]
+    );
+    let why: String = one(
+        &e,
+        &format!("SELECT state_reason FROM agents WHERE id = '{agent}'"),
+    );
+    assert!(
+        why.contains("falló 2 veces") && why.contains("nunca pasa"),
+        "{why}"
+    );
+    let kind: String = one(&e, "SELECT kind FROM recovery_items");
+    assert_eq!(kind, "VALIDATION_FAILED");
+    let task: String = one(
+        &e,
+        &format!("SELECT status FROM tasks WHERE id = '{}'", created.task_id),
+    );
+    assert_eq!(task, "BLOCKED");
+    assert_eq!(run_rows(&e, &agent).len(), 2, "se le devolvió una vez");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_without_validation_completes_as_before_and_a_user_run_reports_it() {
+    let e = env(WORK, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Sin validar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    assert!(validation_rows(&e, &agent).is_empty());
+    let err = e
+        .runtime
+        .validate(created.agent_id, 2, symphony_core::ValidationTrigger::User)
+        .await
+        .unwrap_err();
+    assert!(err.contains("no define comandos de validación"), "{err}");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_user_validation_runs_tiers_in_order_and_stops_after_a_failure() {
+    let e = env(WORK, None).await;
+    seed_validation(
+        &e,
+        &format!(
+            "{PROJECT_HEAD}[validation]\ngate = 0\ntier1 = [\"node scripts/ok.js\"]\ntier2 = [\"node scripts/fail.js\"]\ntier3 = [\"node scripts/ok.js\"]\n"
+        ),
+    );
+    let created = e
+        .runtime
+        .create_agent(req(&e, "A mano", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    wait_state(&e, &created.agent_id.to_string(), "COMPLETED").await;
+    // Con `gate = 0` la tarea no se validó sola; a pedido corre hasta el tier 3 y para en el 2.
+    let v = e
+        .runtime
+        .validate(created.agent_id, 3, symphony_core::ValidationTrigger::User)
+        .await
+        .unwrap();
+    assert!(!v.passed());
+    let tiers: Vec<(u8, &str)> = v
+        .tiers
+        .iter()
+        .map(|t| (t.tier, t.status.as_str()))
+        .collect();
+    assert_eq!(
+        tiers,
+        [(1, "PASS"), (2, "FAIL")],
+        "el tier 3 no se pidió todavía"
+    );
+    assert!(v.headline().contains("nunca pasa"), "{}", v.headline());
+    let trigger: String = one(&e, "SELECT DISTINCT trigger FROM validation_runs");
+    assert_eq!(trigger, "USER");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_worktree_is_prepared_before_the_agent_starts_and_a_failure_creates_nothing() {
+    let e = env(WORK, None).await;
+    seed_validation(
+        &e,
+        &format!("{PROJECT_HEAD}[worktree]\nprepare = [\"node scripts/prepare.js\"]\n"),
+    );
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Preparar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(created.worktree.join("prepared.txt")).unwrap(),
+        "listo"
+    );
+    wait_state(&e, &created.agent_id.to_string(), "COMPLETED").await;
+    e.runtime.wait_executors().await;
+
+    // Una preparación que falla no deja un agente a medias.
+    let before = (count(&e, "agents"), count(&e, "worktrees"));
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        format!("{PROJECT_HEAD}[worktree]\nprepare = [\"node scripts/prepare_fails.js\"]\n"),
+    )
+    .unwrap();
+    let err = e
+        .runtime
+        .create_agent(req(&e, "Falla", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "workspace_failed");
+    let text = err.to_string();
+    assert!(
+        text.contains("node scripts/prepare_fails.js") && text.contains("código 3"),
+        "{text}"
+    );
+    assert!(text.contains("no se pudo instalar"), "{text}");
+    assert_eq!((count(&e, "agents"), count(&e, "worktrees")), before);
+    assert_eq!(git(&e.repo, &["worktree", "list"]).lines().count(), 2);
+    e.writer.shutdown();
+}
+
+// --- P08.S7: integración, conflictos, review agent y lotes ---------------------------
+
+/// Como `writes`, pero el agente tarda: dura más que la creación de los siguientes.
+fn slow_writes(path: &str, content: &str) -> String {
+    format!(
+        "[[step]]\nkind = \"say\"\ntext = \"Trabajando\"\n\n[[step]]\nkind = \"sleep\"\nms = 1500\n\n[[step]]\nkind = \"edit\"\npath = \"{path}\"\ncontent = \"{content}\\n\"\n"
+    )
+}
+
+fn writes(path: &str, content: &str) -> String {
+    format!(
+        "[[step]]\nkind = \"say\"\ntext = \"Trabajando\"\n\n[[step]]\nkind = \"edit\"\npath = \"{path}\"\ncontent = \"{content}\\n\"\n"
+    )
+}
+
+async fn make_chat(e: &Env) -> symphony_daemon::runtime::Created {
+    let mut chat = req(e, "chat", Execution::DecideLater);
+    chat.chat = true;
+    e.runtime.create_agent(chat).await.unwrap()
+}
+
+async fn complete(
+    e: &Env,
+    title: &str,
+    model: &str,
+) -> (symphony_daemon::runtime::Created, String) {
+    let created = e
+        .runtime
+        .create_agent(req(e, title, Execution::Exact(model.into())))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    (created, agent)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_agent_integrates_into_the_chat_branch_only_with_approval_and_never_into_main() {
+    let e = env_with(&[("alpha", &writes("a.txt", "desde A"))], None).await;
+    let chat = make_chat(&e).await;
+    let main_before = git(&e.repo, &["rev-parse", "main"]);
+    let (a, _) = complete(&e, "Agregar a.txt", "alpha/fast").await;
+
+    // El trabajo del agente quedó en un commit de su rama.
+    assert!(
+        git(&a.worktree, &["log", "--oneline", "-1"]).contains("T-"),
+        "commit por tarea"
+    );
+    assert_eq!(git(&a.worktree, &["status", "--porcelain"]), "");
+
+    let pre = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
+    assert!(pre.ready(), "{:?}", pre.checks);
+    assert!(pre.requires_approval && !pre.approved);
+    assert_eq!(pre.target_branch, "symphony/chat");
+    let names: Vec<_> = pre.checks.iter().map(|c| (c.name, c.status)).collect();
+    assert!(
+        names.contains(&("conflicts", "PASS")) && names.contains(&("policy", "WARN")),
+        "{names:?}"
+    );
+
+    // Sin aprobación no se integra.
+    let err = e
+        .runtime
+        .merge_integrate(&pre.merge_request)
+        .await
+        .unwrap_err();
+    assert!(err.contains("aprobación"), "{err}");
+    e.runtime.merge_approve(&pre.merge_request).await.unwrap();
+    let commit = e.runtime.merge_integrate(&pre.merge_request).await.unwrap();
+
+    // Entró a la rama del chat (su worktree la tiene), y `main` no se movió.
+    assert!(chat.worktree.join("a.txt").is_file());
+    assert_eq!(git(&chat.worktree, &["rev-parse", "HEAD"]), commit);
+    assert_eq!(git(&e.repo, &["rev-parse", "main"]), main_before);
+    assert!(!git(&e.repo, &["ls-tree", "-r", "--name-only", "main"]).contains("a.txt"));
+    let status: String = one(
+        &e,
+        &format!(
+            "SELECT status FROM merge_requests WHERE id = '{}'",
+            pre.merge_request
+        ),
+    );
+    assert_eq!(status, "MERGED");
+    // El chat sabe lo que se integró.
+    let note: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM messages WHERE agent_id = '{}' AND role = 'SYSTEM' AND content LIKE 'Integrado T-%'",
+            chat.agent_id
+        ),
+    );
+    assert_eq!(note, 1);
+    // Una segunda vez no repite nada: ya está integrada.
+    let again = e
+        .runtime
+        .merge_integrate(&pre.merge_request)
+        .await
+        .unwrap_err();
+    assert!(again.contains("MERGED"), "{again}");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_agents_on_the_same_file_conflict_and_the_user_can_abort_or_resolve() {
+    // Journey D: A y B crean `shared.txt` con contenido distinto.
+    let e = env_with(
+        &[
+            ("alpha", &writes("shared.txt", "version de A")),
+            ("beta", &writes("shared.txt", "version de B")),
+        ],
+        None,
+    )
+    .await;
+    let chat = make_chat(&e).await;
+    let (a, _) = complete(&e, "A toca shared", "alpha/fast").await;
+    let (b, b_id) = complete(&e, "B toca shared", "beta/fast").await;
+
+    let pre_a = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
+    e.runtime.merge_approve(&pre_a.merge_request).await.unwrap();
+    e.runtime
+        .merge_integrate(&pre_a.merge_request)
+        .await
+        .unwrap();
+
+    // B choca con lo que A ya integró: preflight bloqueado, conflicto y decisión pendiente.
+    let pre_b = e.runtime.merge_prepare(b.agent_id, false).await.unwrap();
+    assert!(!pre_b.ready());
+    assert_eq!(pre_b.conflicts, vec!["shared.txt".to_string()]);
+    let blocked: String = one(
+        &e,
+        &format!(
+            "SELECT status FROM merge_requests WHERE id = '{}'",
+            pre_b.merge_request
+        ),
+    );
+    assert_eq!(blocked, "BLOCKED");
+    let (path, other, resolution): (String, Option<String>, String) = {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        conn.query_row(
+            "SELECT path, other_agent_id, resolution FROM merge_conflicts WHERE merge_request_id = ?1",
+            [&pre_b.merge_request],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        (path.as_str(), resolution.as_str()),
+        ("shared.txt", "PENDING")
+    );
+    assert_eq!(
+        other.as_deref(),
+        Some(a.agent_id.to_string().as_str()),
+        "choca con A"
+    );
+    let kind: String = one(
+        &e,
+        "SELECT kind FROM recovery_items WHERE kind = 'MERGE_CONFLICT'",
+    );
+    assert_eq!(kind, "MERGE_CONFLICT");
+    let err = e
+        .runtime
+        .merge_integrate(&pre_b.merge_request)
+        .await
+        .unwrap_err();
+    assert!(err.contains("BLOCKED"), "{err}");
+
+    // Resolver a mano: el usuario integra la rama del chat en la de B y arregla el archivo.
+    let _ = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&b.worktree)
+        .args(["merge", "--no-edit", "symphony/chat"])
+        .output()
+        .unwrap();
+    std::fs::write(b.worktree.join("shared.txt"), "version de A y de B\n").unwrap();
+    git(&b.worktree, &["add", "."]);
+    git(&b.worktree, &["commit", "-q", "-m", "resuelto a mano"]);
+    let n = e
+        .runtime
+        .merge_mark_resolved(
+            &pre_b.merge_request,
+            symphony_core::ConflictResolution::Manual,
+        )
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let again = e.runtime.merge_prepare(b.agent_id, false).await.unwrap();
+    assert!(again.ready(), "{:?}", again.checks);
+    assert_eq!(again.merge_request, pre_b.merge_request, "misma solicitud");
+    e.runtime.merge_approve(&again.merge_request).await.unwrap();
+    e.runtime
+        .merge_integrate(&again.merge_request)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(chat.worktree.join("shared.txt"))
+            .unwrap()
+            .trim(),
+        "version de A y de B"
+    );
+    let _ = b_id;
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn aborting_leaves_the_branch_untouched_and_closes_the_conflicts() {
+    let e = env_with(
+        &[
+            ("alpha", &writes("shared.txt", "uno")),
+            ("beta", &writes("shared.txt", "dos")),
+        ],
+        None,
+    )
+    .await;
+    let chat = make_chat(&e).await;
+    let (a, _) = complete(&e, "A", "alpha/fast").await;
+    let (b, _) = complete(&e, "B", "beta/fast").await;
+    let pre_a = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
+    e.runtime.merge_approve(&pre_a.merge_request).await.unwrap();
+    e.runtime
+        .merge_integrate(&pre_a.merge_request)
+        .await
+        .unwrap();
+    let head = git(&chat.worktree, &["rev-parse", "HEAD"]);
+
+    let pre_b = e.runtime.merge_prepare(b.agent_id, false).await.unwrap();
+    assert!(!pre_b.ready());
+    e.runtime.merge_abort(&pre_b.merge_request).await.unwrap();
+    let (status, pending): (String, i64) = {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        let s = conn
+            .query_row(
+                "SELECT status FROM merge_requests WHERE id = ?1",
+                [&pre_b.merge_request],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let p = conn
+            .query_row(
+                "SELECT COUNT(*) FROM merge_conflicts WHERE merge_request_id = ?1 AND resolution = 'PENDING'",
+                [&pre_b.merge_request],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (s, p)
+    };
+    assert_eq!((status.as_str(), pending), ("ABORTED", 0));
+    assert_eq!(git(&chat.worktree, &["rev-parse", "HEAD"]), head);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_agent_recommends_and_never_merges() {
+    let reviewer_script = r#"
+[[step]]
+kind = "say"
+text = '''Revisé el diff.
+```review
+{"recommendation":"REQUEST_CHANGES","findings":[{"severity":"high","file":"a.txt","text":"falta el caso de error"}]}
+```'''
+"#;
+    let e = env_with(
+        &[
+            ("alpha", &writes("a.txt", "desde A")),
+            ("rev", reviewer_script),
+        ],
+        None,
+    )
+    .await;
+    let chat = make_chat(&e).await;
+    let main_before = git(&e.repo, &["rev-parse", "main"]);
+    let chat_before = git(&chat.worktree, &["rev-parse", "HEAD"]);
+    let (a, _) = complete(&e, "Para revisar", "alpha/fast").await;
+    // En el daemon real el reactor ve terminar al revisor y guarda su veredicto.
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+
+    let reviewer = e
+        .runtime
+        .review_start(a.agent_id, Some("rev/fast".into()), None)
+        .await
+        .unwrap();
+    wait_state(&e, &reviewer.to_string(), "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    // El veredicto se guarda al terminar el revisor.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let (status, rec, findings) = loop {
+        let row: Option<(String, Option<String>, Option<String>)> = {
+            let conn = symphony_store::open_reader(&e.db).unwrap();
+            conn.query_row(
+                "SELECT status, recommendation, findings_json FROM reviews WHERE reviewer_agent_id = ?1",
+                [reviewer.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok()
+        };
+        if let Some(r) = row.filter(|r| r.0 != "RUNNING") {
+            break r;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el veredicto no llegó"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(status, "DONE");
+    assert_eq!(rec.as_deref(), Some("REQUEST_CHANGES"));
+    assert!(findings.unwrap().contains("falta el caso de error"));
+
+    // Es una tarea de review, no de trabajo, y no integró nada.
+    let kind: String = one(
+        &e,
+        &format!(
+            "SELECT t.kind FROM tasks t JOIN agents a ON a.task_id = t.id WHERE a.id = '{reviewer}'"
+        ),
+    );
+    assert_eq!(kind, "REVIEW");
+    assert_eq!(git(&e.repo, &["rev-parse", "main"]), main_before);
+    assert_eq!(git(&chat.worktree, &["rev-parse", "HEAD"]), chat_before);
+    assert_eq!(count(&e, "merge_requests"), 0);
+    reactor.abort();
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_creates_agents_with_dependencies_and_integrates_what_finished() {
+    let e = env_with(&[("alpha", &slow_writes("fix.txt", "hecho"))], None).await;
+    let chat = make_chat(&e).await;
+    let plan = "# Plan: lote\n## Fase 1: base\n- [ ] [A] Primera\n- [ ] [B] Segunda (needs: A)\n- [ ] [C] Tercera\n";
+    let batch = e
+        .runtime
+        .batch_create(symphony_daemon::batch::BatchRequest {
+            project_root: e.repo.clone(),
+            title: "Lote de prueba".into(),
+            plan: plan.into(),
+            execution: Execution::Exact("alpha/fast".into()),
+            max_parallel: Some(1),
+            failover: FailoverPolicy::Any,
+            context_mode: ContextMode::Balanced,
+        })
+        .await
+        .unwrap();
+    assert_eq!(batch.parallel, 1);
+    let by_id: std::collections::HashMap<_, _> =
+        batch.agents.iter().map(|a| (a.id.as_str(), a)).collect();
+    // B espera a A; con tope 1, C (misma ola que A) espera a A también.
+    assert_eq!(by_id["B"].depends_on, vec![by_id["A"].task_code.clone()]);
+    assert_eq!(by_id["C"].depends_on, vec![by_id["A"].task_code.clone()]);
+    assert_eq!(by_id["B"].state, AgentState::WaitingDependency);
+    assert_ne!(by_id["A"].state, AgentState::WaitingDependency);
+
+    // El chat sabe lo que delegó.
+    let note: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM messages WHERE agent_id = '{}' AND content LIKE 'Delegado «Lote de prueba»%'",
+            chat.agent_id
+        ),
+    );
+    assert_eq!(note, 1);
+
+    // Con la dependencia en marcha, el lote termina solo (el reactor arranca a B y a C).
+    let reactor = symphony_daemon::dependencies::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    for a in &batch.agents {
+        wait_state(&e, &a.agent_id.to_string(), "COMPLETED").await;
+    }
+    e.runtime.wait_executors().await;
+    reactor.abort();
+
+    let status = e.runtime.batch_status(batch.milestone).unwrap();
+    assert_eq!(status["done"], 3);
+    assert_eq!(
+        status["pending_integration"], 3,
+        "terminó y no entró a la rama del chat"
+    );
+    let milestone: String = one(
+        &e,
+        &format!(
+            "SELECT status FROM milestones WHERE id = '{}'",
+            batch.milestone
+        ),
+    );
+    assert_eq!(
+        milestone, "APPROVED",
+        "sin aprobación manual, el gate se cierra solo"
+    );
+
+    // Los tres escriben `fix.txt` con el mismo contenido: entran sin conflicto.
+    let r = e
+        .runtime
+        .batch_integrate(batch.milestone, true)
+        .await
+        .unwrap();
+    let results: Vec<&str> = r["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["result"].as_str().unwrap())
+        .collect();
+    assert_eq!(results, ["integrada", "integrada", "integrada"], "{r}");
+    assert!(chat.worktree.join("fix.txt").is_file());
+    let status = e.runtime.batch_status(batch.milestone).unwrap();
+    assert_eq!(status["merged"], 3);
+    assert_eq!(status["pending_integration"], 0);
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_with_an_unknown_need_or_a_cycle_is_rejected_before_creating_anything() {
+    let e = env(WORK, None).await;
+    for plan in [
+        "# Plan: x\n## Fase 1: a\n- [ ] [A] uno (needs: Z)\n",
+        "# Plan: x\n## Fase 1: a\n- [ ] [A] uno (needs: B)\n- [ ] [B] dos (needs: A)\n",
+        "# Plan: x\n",
+    ] {
+        let err = e
+            .runtime
+            .batch_create(symphony_daemon::batch::BatchRequest {
+                project_root: e.repo.clone(),
+                title: "malo".into(),
+                plan: plan.into(),
+                execution: Execution::Exact("fake/fast".into()),
+                max_parallel: None,
+                failover: FailoverPolicy::Any,
+                context_mode: ContextMode::Balanced,
+            })
+            .await
+            .unwrap_err();
+        assert!(!err.is_empty());
+    }
+    assert_eq!(count(&e, "agents"), 0);
     e.writer.shutdown();
 }

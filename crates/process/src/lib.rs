@@ -142,6 +142,18 @@ pub struct ProcessStats {
     pub cpu_time: Option<Duration>,
 }
 
+/// Un proceso del árbol de un grupo (para la tabla `processes`, P08.S4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcInfo {
+    pub pid: u32,
+    /// `None` si el padre no pertenece al árbol (el proceso raíz).
+    pub parent_pid: Option<u32>,
+    /// Línea de comando (o el nombre si el SO no la da).
+    pub command: String,
+    pub rss_bytes: u64,
+    pub cpu_time_ms: u64,
+}
+
 /// Un proceso raíz con todo su árbol, contenido en su propio grupo.
 /// Al soltarlo, el SO mata el árbol completo.
 pub struct Supervised {
@@ -317,6 +329,51 @@ impl Supervised {
             peak_memory_bytes: from_group.as_ref().and_then(|s| s.peak_memory_bytes),
             cpu_time: from_group.and_then(|s| s.total_cpu_time),
         }
+    }
+
+    /// Foto del árbol: un `ProcInfo` por proceso vivo (raíz, hijos y nietos).
+    pub fn process_tree(&self) -> Vec<ProcInfo> {
+        let tree = self.tree_pids();
+        if tree.is_empty() {
+            return Vec::new();
+        }
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&tree),
+            true,
+            sysinfo::ProcessRefreshKind::nothing()
+                .with_memory()
+                .with_cpu()
+                .with_cmd(sysinfo::UpdateKind::OnlyIfNotSet),
+        );
+        let in_tree: std::collections::HashSet<sysinfo::Pid> = tree.iter().copied().collect();
+        let mut out: Vec<ProcInfo> = tree
+            .iter()
+            .filter_map(|pid| sys.process(*pid).map(|p| (*pid, p)))
+            .map(|(pid, p)| {
+                let cmd: Vec<String> = p
+                    .cmd()
+                    .iter()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect();
+                ProcInfo {
+                    pid: pid.as_u32(),
+                    parent_pid: p
+                        .parent()
+                        .filter(|parent| in_tree.contains(parent))
+                        .map(sysinfo::Pid::as_u32),
+                    command: if cmd.is_empty() {
+                        p.name().to_string_lossy().into_owned()
+                    } else {
+                        cmd.join(" ")
+                    },
+                    rss_bytes: p.memory(),
+                    cpu_time_ms: p.accumulated_cpu_time(),
+                }
+            })
+            .collect();
+        out.sort_by_key(|p| p.pid);
+        out
     }
 
     /// Miembros del grupo más todos los descendientes del proceso raíz (sin hilos ni zombies).

@@ -12,14 +12,17 @@ mod transitions;
 pub use ansi::{AnsiMode, sanitize};
 pub use config::{
     ChatConfig, Config, ConfigError, ContextConfig, DEFAULT_CONFIG, LoggingConfig,
-    PerformanceConfig, ProjectConfig, ProjectInit, ProjectSection, ProviderLimits, ProvidersConfig,
-    RoutingConfig, SymphonyHome, init_project, load_or_create, load_project, project_config_path,
-    set_value,
+    PerformanceConfig, PhaseStart, PlanConfig, ProjectConfig, ProjectInit, ProjectSection,
+    ProviderLimits, ProvidersConfig, RoutingConfig, SymphonyHome, init_project, load_or_create,
+    load_project, project_config_path, set_value,
 };
+pub use config::{MergeConfig, ValidationConfig, WorktreeConfig};
 pub use enums::{
-    AccountAuthStatus, AgentState, ContextMode, ExecutionMode, FailoverPolicy, FailureType,
-    InvalidValue, PerformanceProfile, ProviderState, QuotaCertainty, RejectReason, RoutingTrigger,
-    RunEndReason, RunStatus, SpeedClass, TaskStatus, UsageSource,
+    AccountAuthStatus, AgentState, CheckName, CheckStatus, ConflictResolution, ContextMode,
+    ExecutionMode, FailoverPolicy, FailureType, InvalidValue, MergeStatus, MilestoneStatus,
+    PerformanceProfile, ProviderState, QuotaCertainty, RejectReason, ReviewRecommendation,
+    ReviewStatus, RoutingTrigger, RunEndReason, RunStatus, SpeedClass, TaskStatus, UsageSource,
+    ValidationStatus, ValidationTrigger,
 };
 pub use health::{
     DEGRADED_COOLDOWN_MS, EXHAUSTED_PROBE_MS, Health, HealthEvent, NETWORK_COOLDOWN_MS,
@@ -27,9 +30,9 @@ pub use health::{
 };
 pub use ids::{
     AgentId, CheckpointId, ContextObjectId, ExecutorChangeId, FactId, HandoffId, HandoffItemId,
-    InvalidId, McpServerId, MessageId, ProjectId, ProviderFailureId, ProviderHealthId,
-    RecoveryItemId, RoutingDecisionId, RunId, SessionId, SkillId, TaskId, ToolCallId,
-    UsageRecordId, WorktreeId,
+    InvalidId, McpServerId, MessageId, MilestoneId, ProcessId, ProjectId, ProviderFailureId,
+    ProviderHealthId, RecoveryItemId, RoutingDecisionId, RunId, SessionId, SkillId, TaskId,
+    ToolCallId, UsageRecordId, WorktreeId,
 };
 pub use redact::{REDACTED, redact};
 pub use transitions::InvalidTransition;

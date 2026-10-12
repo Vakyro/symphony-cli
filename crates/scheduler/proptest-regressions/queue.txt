@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc eaa77761806f1f63df1c2df57564ec54974a5d1b725f7e7ad722a6a3bf548d74 # shrinks to max = 3, steps = [Pressure(0, 71), Submit { agent: 0, class: 3, priority: 0 }, Submit { agent: 1, class: 3, priority: 0 }, ReleaseAgent(0), Tick(2700), Abandon(6)]

@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use symphony_git::{FileStatus, MergePreflight, Repo, agent_branch};
+use symphony_git::{FileStatus, MergeOutcome, MergePreflight, Repo, agent_branch};
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -244,4 +244,60 @@ fn commit_all_and_concurrent_readers_do_not_collide_on_the_index() {
         }
     });
     assert_eq!(errors.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+/// P08.S7: `merge_no_ff` integra, no repite, y con conflictos aborta sin ensuciar el worktree.
+#[test]
+fn merge_no_ff_merges_reports_up_to_date_and_aborts_on_conflict() {
+    let (_dir, root) = repo();
+    let r = Repo::at(&root);
+    git(&root, &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(root.join("feature.txt"), "x\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "feature"]);
+    git(&root, &["checkout", "-q", "-b", "choque", "main"]);
+    std::fs::write(root.join("app.js"), "export const a = 2;\n").unwrap();
+    git(&root, &["commit", "-q", "-am", "choque"]);
+    git(&root, &["checkout", "-q", "-b", "otro", "main"]);
+    std::fs::write(root.join("app.js"), "export const a = 3;\n").unwrap();
+    git(&root, &["commit", "-q", "-am", "otro"]);
+
+    assert!(r.branch_exists("feature").unwrap());
+    assert!(!r.branch_exists("no-existe").unwrap());
+
+    git(&root, &["checkout", "-q", "main"]);
+    assert!(r.is_clean().unwrap());
+    let MergeOutcome::Merged { commit } = r.merge_no_ff("feature", "merge: feature").unwrap()
+    else {
+        panic!("tenía que integrar");
+    };
+    assert_eq!(commit, r.head_commit().unwrap());
+    assert!(root.join("feature.txt").is_file());
+    // Repetirlo no crea nada.
+    assert_eq!(
+        r.merge_no_ff("feature", "otra vez").unwrap(),
+        MergeOutcome::UpToDate
+    );
+
+    // `choque` entra; `otro` toca la misma línea de app.js: conflicto, y el worktree queda limpio.
+    assert!(matches!(
+        r.merge_no_ff("choque", "merge: choque").unwrap(),
+        MergeOutcome::Merged { .. }
+    ));
+    let head = r.head_commit().unwrap();
+    assert_eq!(
+        r.merge_no_ff("otro", "merge: otro").unwrap(),
+        MergeOutcome::Conflicts {
+            paths: vec!["app.js".to_string()]
+        }
+    );
+    assert!(r.is_clean().unwrap(), "el merge abortado no deja marcas");
+    assert_eq!(r.head_commit().unwrap(), head);
+    assert_eq!(
+        std::fs::read_to_string(root.join("app.js")).unwrap(),
+        "export const a = 2;\n"
+    );
+    // Un archivo versionado modificado sí ensucia.
+    std::fs::write(root.join("app.js"), "sucio\n").unwrap();
+    assert!(!r.is_clean().unwrap());
 }

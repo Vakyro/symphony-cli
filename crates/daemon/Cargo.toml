@@ -24,6 +24,7 @@ symphony-adapter-kimi = { path = "../adapters/kimi" }
 symphony-adapter-opencode = { path = "../adapters/opencode" }
 symphony-context = { path = "../context" }
 symphony-router = { path = "../router" }
+symphony-scheduler = { path = "../scheduler" }
 symphony-core = { path = "../core" }
 symphony-git = { path = "../git" }
 symphony-object-store = { path = "../object-store" }
@@ -44,6 +45,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 thiserror.workspace = true
+sysinfo.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

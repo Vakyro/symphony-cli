@@ -7,9 +7,14 @@ use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
 pub mod context;
+pub mod deps;
 pub mod health;
+pub mod merge;
+pub mod processes;
 pub mod repo;
+pub mod resources;
 pub mod shared;
+pub mod validation;
 mod writer;
 pub use writer::{
     AgentStateChange, BATCH_MAX, NewEvent, WriteFn, Writer, WriterClosed, WriterHandle,
@@ -22,6 +27,8 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!("../../../migrations/001_core.sql")).foreign_key_check(),
     M::up(include_str!("../../../migrations/002_health.sql")).foreign_key_check(),
     M::up(include_str!("../../../migrations/003_context.sql")).foreign_key_check(),
+    M::up(include_str!("../../../migrations/004_multiagent.sql")).foreign_key_check(),
+    M::up(include_str!("../../../migrations/005_validation.sql")).foreign_key_check(),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);

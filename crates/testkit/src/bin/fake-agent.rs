@@ -145,6 +145,31 @@ impl Agent {
         for step in steps {
             match step {
                 Step::Say { text } => self.say(text),
+                Step::Plan { content } => {
+                    let task = std::env::var("SYMPHONY_TASK_ID").unwrap_or_default();
+                    let full = self
+                        .cwd
+                        .join(".symphony")
+                        .join("plan")
+                        .join(format!("{task}.md"));
+                    let current =
+                        std::fs::read_to_string(&full).unwrap_or_else(|_| content.clone());
+                    let next = complete_first_pending_phase(&current);
+                    let input = json!({"file_path": full, "content": next});
+                    self.tool("Write", input, || {
+                        let r = full
+                            .parent()
+                            .map_or(Ok(()), std::fs::create_dir_all)
+                            .and_then(|()| std::fs::write(&full, &next));
+                        (
+                            r.is_ok(),
+                            json!(
+                                r.map(|()| "ok".to_string())
+                                    .unwrap_or_else(|e| e.to_string())
+                            ),
+                        )
+                    });
+                }
                 Step::Edit { path, content } => {
                     let full = self.cwd.join(path);
                     let input = json!({"file_path": full, "content": content});
@@ -337,4 +362,40 @@ fn main() -> ExitCode {
         }
         _ => usage(),
     }
+}
+
+/// Marca `- [x]` todas las tareas de la primera fase que aún tiene alguna pendiente.
+fn complete_first_pending_phase(plan: &str) -> String {
+    let lines: Vec<&str> = plan.lines().collect();
+    let mut phase_start: Option<usize> = None;
+    let mut target: Option<(usize, usize)> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if line.starts_with("## ") {
+            if let Some(start) = phase_start.filter(|_| target.is_none())
+                && lines[start..i].iter().any(|l| l.starts_with("- [ ]"))
+            {
+                target = Some((start, i));
+            }
+            phase_start = Some(i);
+        }
+    }
+    if target.is_none()
+        && let Some(start) = phase_start
+        && lines[start..].iter().any(|l| l.starts_with("- [ ]"))
+    {
+        target = Some((start, lines.len()));
+    }
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        let in_target = target.is_some_and(|(a, b)| i >= a && i < b);
+        match line.strip_prefix("- [ ]") {
+            Some(rest) if in_target => {
+                out.push_str("- [x]");
+                out.push_str(rest);
+            }
+            _ => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
 }

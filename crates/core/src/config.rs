@@ -89,6 +89,36 @@ pub struct Config {
     pub providers: ProvidersConfig,
     pub logging: LoggingConfig,
     pub chat: ChatConfig,
+    pub plan: PlanConfig,
+}
+
+/// `[plan]`: plan por fases y tareas de cada agente (ADR-0011, ADR-0013).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PlanConfig {
+    /// El agente escribe un plan por fases y Symphony abre una sesión nueva por fase.
+    pub enabled: bool,
+    /// `auto`: la fase siguiente arranca sola; `ask`: Symphony espera la confirmación.
+    pub phase_start: PhaseStart,
+    /// Una fase con menos tareas se junta con la siguiente.
+    pub min_tasks_per_phase: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PhaseStart {
+    Auto,
+    Ask,
+}
+
+impl Default for PlanConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            phase_start: PhaseStart::Auto,
+            min_tasks_per_phase: 2,
+        }
+    }
 }
 
 /// `[chat]`: política opcional de cambio de proveedor por uso de contexto (P07.5.S6).
@@ -104,6 +134,22 @@ pub struct ChatConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct PerformanceConfig {
     pub profile: PerformanceProfile,
+    /// Procesos pesados (clases 3–4) simultáneos; pisa el valor del perfil.
+    pub max_heavy: Option<u32>,
+    /// Techo de CPU (%) por encima del cual los pesados esperan; pisa el del perfil.
+    pub cpu_ceiling_pct: Option<f64>,
+    /// Techo de RAM (%); pisa el del perfil.
+    pub ram_ceiling_pct: Option<f64>,
+    /// Máximo de segundos que un hook retiene una operación pesada en cola antes de
+    /// rechazarla con su razón. Por defecto, el del proveedor (ADR-0003).
+    pub hold_max_secs: Option<u64>,
+    /// Núcleos que puede usar el árbol de procesos de cada agente (límite del SO). Por
+    /// defecto lo da el perfil: `ECO` 1, `BALANCED` 2, `PERFORMANCE` sin límite.
+    pub os_cpu_cores: Option<f64>,
+    /// Memoria máxima del árbol de cada agente, en MB. Sin límite por defecto.
+    pub os_max_memory_mb: Option<u64>,
+    /// Procesos máximos por agente. Sin límite por defecto.
+    pub os_max_processes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -153,6 +199,13 @@ impl Default for PerformanceConfig {
     fn default() -> Self {
         Self {
             profile: PerformanceProfile::Balanced,
+            max_heavy: None,
+            cpu_ceiling_pct: None,
+            ram_ceiling_pct: None,
+            hold_max_secs: None,
+            os_cpu_cores: None,
+            os_max_memory_mb: None,
+            os_max_processes: None,
         }
     }
 }
@@ -197,12 +250,29 @@ pub const DEFAULT_CONFIG: &str = r#"# Configuración de Symphony. Symphony conse
 [performance]
 # ECO · BALANCED · PERFORMANCE · CUSTOM
 profile = "BALANCED"
+# Opcionales: pisan los límites del perfil.
+# max_heavy = 1
+# cpu_ceiling_pct = 70.0
+# ram_ceiling_pct = 70.0
+# hold_max_secs = 60
+# Límites del SO por agente (Job Object en Windows, cgroup v2 en Linux). Sin límite de
+# memoria ni de procesos por defecto; la CPU la da el perfil (ECO 1, BALANCED 2).
+# os_cpu_cores = 2.0
+# os_max_memory_mb = 4096
+# os_max_processes = 512
 
 [routing]
 # Profile o modelo por defecto al crear un agente.
 default_profile = "@code"
 # Qué hacer si el proveedor falla: NONE · SAME_PROVIDER · ANY
 failover = "ANY"
+
+[plan]
+# El agente planifica por fases y tareas (`.symphony/plan/<tarea>.md`, temporal) y cada fase
+# corre en una sesión nueva. phase_start: "auto" (sola) o "ask" (te pregunta antes de cada fase).
+enabled = true
+phase_start = "auto"
+min_tasks_per_phase = 2
 
 [context]
 # Cuánto se comprime el contexto en un handoff: RAW · SAFE · BALANCED · AGGRESSIVE
@@ -253,6 +323,42 @@ impl Config {
                 )));
             }
         }
+        let perf = &self.performance;
+        if perf.max_heavy == Some(0) {
+            return Err(invalid("performance.max_heavy debe ser mayor que 0".into()));
+        }
+        if perf.os_cpu_cores.is_some_and(|c| c.is_nan() || c <= 0.0) {
+            return Err(invalid(
+                "performance.os_cpu_cores debe ser mayor que 0".into(),
+            ));
+        }
+        if perf.os_max_memory_mb == Some(0) || perf.os_max_processes == Some(0) {
+            return Err(invalid(
+                "performance.os_max_memory_mb y os_max_processes deben ser mayores que 0".into(),
+            ));
+        }
+        if perf.hold_max_secs == Some(0) {
+            return Err(invalid(
+                "performance.hold_max_secs debe ser mayor que 0".into(),
+            ));
+        }
+        for (name, v) in [
+            ("cpu_ceiling_pct", perf.cpu_ceiling_pct),
+            ("ram_ceiling_pct", perf.ram_ceiling_pct),
+        ] {
+            if let Some(v) = v
+                && !(1.0..=100.0).contains(&v)
+            {
+                return Err(invalid(format!(
+                    "performance.{name} = {v} debe estar entre 1 y 100"
+                )));
+            }
+        }
+        if self.plan.min_tasks_per_phase == 0 {
+            return Err(invalid(
+                "plan.min_tasks_per_phase debe ser mayor que 0".into(),
+            ));
+        }
         if self.chat.switch_at_tokens == Some(0) {
             return Err(invalid("chat.switch_at_tokens debe ser mayor que 0".into()));
         }
@@ -277,6 +383,94 @@ pub struct ProjectConfig {
     pub context: Option<ContextConfig>,
     #[serde(default)]
     pub performance: Option<PerformanceConfig>,
+    /// Comandos de validación por tier (STACK §23) y gate de la tarea (P08.S6).
+    #[serde(default)]
+    pub validation: Option<ValidationConfig>,
+    /// Preparación del worktree de cada agente (P08.S6, F8).
+    #[serde(default)]
+    pub worktree: Option<WorktreeConfig>,
+    /// Política de integración (P08.S7).
+    #[serde(default)]
+    pub merge: Option<MergeConfig>,
+}
+
+/// `[merge]` de `project.toml`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MergeConfig {
+    /// Integrar a la rama del chat exige aprobación del usuario (por defecto sí:
+    /// «nunca merge sin política explícita», PLAN P08.S7).
+    pub require_approval: bool,
+    /// Al completarse, el agente deja su trabajo en un commit de su rama (F7): sin commit no
+    /// hay nada que integrar. Por defecto sí.
+    pub commit_on_complete: bool,
+}
+
+impl Default for MergeConfig {
+    fn default() -> Self {
+        Self {
+            require_approval: true,
+            commit_on_complete: true,
+        }
+    }
+}
+
+/// `[validation]` de `project.toml`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ValidationConfig {
+    /// Barato y rápido: lint, formato, sintaxis.
+    pub tier1: Vec<String>,
+    /// Typecheck y pruebas dirigidas.
+    pub tier2: Vec<String>,
+    /// Suite completa y build.
+    pub tier3: Vec<String>,
+    /// Hasta qué tier tiene que pasar una tarea para completarse (0 = sin gate). Los tiers
+    /// por encima del gate corren en el merge y en el gate del milestone.
+    pub gate: u8,
+    /// Cuántas validaciones fallidas se le devuelven al agente antes de bloquear la tarea.
+    pub max_attempts: u32,
+    /// Segundos máximos de cada comando.
+    pub timeout_secs: u64,
+}
+
+impl Default for ValidationConfig {
+    fn default() -> Self {
+        Self {
+            tier1: Vec::new(),
+            tier2: Vec::new(),
+            tier3: Vec::new(),
+            gate: 2,
+            max_attempts: 3,
+            timeout_secs: 900,
+        }
+    }
+}
+
+impl ValidationConfig {
+    /// Los comandos del tier 1–3 (vacío para cualquier otro).
+    pub fn tier(&self, n: u8) -> &[String] {
+        match n {
+            1 => &self.tier1,
+            2 => &self.tier2,
+            3 => &self.tier3,
+            _ => &[],
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tier1.is_empty() && self.tier2.is_empty() && self.tier3.is_empty()
+    }
+}
+
+/// `[worktree]` de `project.toml`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorktreeConfig {
+    /// Comandos que corren en el worktree nuevo antes de lanzar al agente (`pnpm install`).
+    pub prepare: Vec<String>,
+    /// Segundos máximos de cada comando.
+    pub prepare_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

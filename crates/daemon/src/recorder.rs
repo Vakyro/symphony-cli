@@ -42,12 +42,11 @@ impl Open {
     }
 }
 
-/// Clase de operación provisional hasta el clasificador del scheduler (P08).
-fn op_class(kind: ToolKind) -> i64 {
-    // ponytail: todo comando es "medio"; P08 clasifica por comando real (test, build, install…).
+/// Clase de operación (IDEA §5.4): por herramienta y, en el shell, por el comando real.
+fn op_class(kind: ToolKind, tool: &str, command: Option<&str>) -> i64 {
     match kind {
-        ToolKind::Command => 2,
-        ToolKind::Edit | ToolKind::Other => 1,
+        ToolKind::Edit => symphony_scheduler::OpClass::Cheap.as_i64(),
+        ToolKind::Command | ToolKind::Other => symphony_scheduler::classify(tool, command).as_i64(),
     }
 }
 
@@ -73,6 +72,22 @@ impl Recorder {
 
     pub fn health_config(&self) -> Arc<HealthConfig> {
         self.health.lock().map(|h| h.clone()).unwrap_or_default()
+    }
+
+    /// El scheduler ya registró esta herramienta (cola, `HOOK_HOLD`): el `ToolRequested` que
+    /// llega después no la vuelve a insertar y el `ToolFinished` la cierra con este id.
+    /// `false` si ya había una con ese `tool_use_id`.
+    pub fn adopt_tool_call(&self, run: RunId, tool_use_id: &str, id: ToolCallId) -> bool {
+        let Ok(mut open) = self.open.lock() else {
+            return false;
+        };
+        match open.by_use_id.entry((run, tool_use_id.to_string())) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(e) => {
+                e.insert((id, false));
+                true
+            }
+        }
     }
 
     /// Suelta el estado en memoria de un run que terminó.
@@ -131,7 +146,7 @@ impl Recorder {
                     command: command
                         .as_deref()
                         .map(|c| symphony_core::redact(c).into_owned()),
-                    op_class: op_class(*kind),
+                    op_class: op_class(*kind, tool, command.as_deref()),
                 };
                 Some(Box::new(move |t| {
                     Ok(repo::insert_tool_call(t, &call, now)?)
@@ -173,7 +188,7 @@ impl Recorder {
                     run_id: run,
                     tool_name: tool.clone(),
                     command: None,
-                    op_class: op_class(*kind),
+                    op_class: op_class(*kind, tool, None),
                 });
                 let (ok, exit_code) = (*ok, *exit_code);
                 Some(Box::new(move |t| {

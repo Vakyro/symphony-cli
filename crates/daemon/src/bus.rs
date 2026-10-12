@@ -175,6 +175,16 @@ impl EventBus {
     }
 
     /// El run terminó: suelta su estado de deduplicación.
+    /// Ver `Recorder::adopt_tool_call`.
+    pub fn adopt_tool_call(
+        &self,
+        run: symphony_core::RunId,
+        tool_use_id: &str,
+        id: symphony_core::ToolCallId,
+    ) -> bool {
+        self.recorder.adopt_tool_call(run, tool_use_id, id)
+    }
+
     pub fn run_ended(&self, run: symphony_core::RunId) {
         self.recorder.run_ended(run);
     }

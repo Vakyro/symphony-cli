@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use symphony_adapter_common::AgentEvent;
 use symphony_protocol::transport::{self, ListenerExt as _, LocalStream};
 use symphony_protocol::{Connection, Event, Message, PROTOCOL_VERSION, Request, Response};
 use symphony_store::{Writer, repo};
@@ -104,6 +105,8 @@ struct State {
     bus: EventBus,
     writer: symphony_store::WriterHandle,
     runtime: crate::runtime::Runtime,
+    /// Cola de operaciones pesadas (P08.S3).
+    scheduling: Arc<crate::scheduling::Scheduling>,
 }
 
 fn now_ms() -> i64 {
@@ -177,9 +180,26 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     );
     runtime.watch_active_projects();
 
+    crate::dependencies::spawn(runtime.clone(), shutdown.clone());
+    let scheduling = Arc::new(crate::scheduling::Scheduling::new(
+        symphony_scheduler::Limits::default(),
+    ));
+    runtime.set_scheduling(scheduling.clone());
+    scheduling.spawn(writer.handle(), shutdown.clone());
+
     match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
         Ok(config) => {
             bus.set_health_config(crate::health::HealthConfig::from_config(&config));
+            scheduling.set_limits(symphony_scheduler::Limits::from_config(&config.performance));
+            scheduling.set_hold_cap(config.performance.hold_max_secs);
+            let pressure = scheduling.clone();
+            crate::resources::spawn(
+                writer.handle(),
+                config.performance.profile,
+                crate::resources::SAMPLE_EVERY,
+                shutdown.clone(),
+                move |cpu, ram| pressure.set_pressure(cpu, ram),
+            );
             // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
             if config.routing.default_profile.starts_with('@') {
                 runtime.set_default_profile(&config.routing.default_profile);
@@ -199,6 +219,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         bus,
         writer: writer.handle(),
         runtime,
+        scheduling,
     });
     let tracker = TaskTracker::new();
 
@@ -353,6 +374,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.stop" => agent_stop(req, state).await,
         "agent.kill" => agent_kill(req, state).await,
         "agent.switch" => agent_switch(req, state).await,
+        "agent.next_phase" => agent_next_phase(req, state).await,
         "agent.diff" => agent_diff(req, state).await,
         "agent.logs" => agent_logs(req, state).await,
         "agent.export" => agent_export(req, state).await,
@@ -391,6 +413,27 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
+        "merge.prepare" => merge_prepare(req, state).await,
+        "merge.approve" | "merge.abort" | "merge.integrate" | "merge.resolve" => {
+            merge_action(req, state).await
+        }
+        "merge.get" => merge_get(req, state),
+        "review.start" => review_start(req, state).await,
+        "batch.create" => batch_create(req, state).await,
+        "batch.status" => batch_status(req, state),
+        "batch.integrate" => batch_integrate(req, state).await,
+        "validation.run" => validation_run(req, state).await,
+        "validation.get" => validation_get(req, state),
+        "task.list" => task_list(req, state),
+        "system.get" => system_get(req, state),
+        "performance.set" => performance_set(req, state).await,
+        "task.depend" | "task.undepend" => task_depend(req, state).await,
+        "task.deps" => task_deps(req, state),
+        "task.resolve_dependency" => task_resolve(req, state).await,
+        "milestone.create" => milestone_create(req, state).await,
+        "milestone.list" => milestone_list(req, state),
+        "milestone.assign" => milestone_assign(req, state).await,
+        "milestone.decide" => milestone_decide(req, state).await,
         "recovery.list" => recovery_list(req, state),
         "recovery.act" => recovery_act(req, state).await,
         other => Response::error(
@@ -433,6 +476,16 @@ async fn agent_create(req: Request, state: &State) -> Response {
         Err(e) => return Response::error(req.id, "invalid_params", e),
     };
     let priority = p.get("priority").and_then(Value::as_i64).unwrap_or(0);
+    let depends_on: Vec<String> = p
+        .get("depends_on")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
 
     let create_req = crate::runtime::CreateAgent {
         project_root,
@@ -443,6 +496,8 @@ async fn agent_create(req: Request, state: &State) -> Response {
         context_mode,
         priority,
         chat: p.get("chat").and_then(Value::as_bool).unwrap_or(false),
+        depends_on,
+        review: false,
     };
 
     // En su propia tarea: si el request vence (REQUEST_TIMEOUT), la creación
@@ -706,6 +761,18 @@ async fn agent_switch(req: Request, state: &State) -> Response {
             req.id,
             json!({ "ok": true, "run_id": run_id.to_string(), "model": model }),
         ),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+/// El usuario confirma la fase siguiente del plan (`[plan] phase_start = "ask"`).
+async fn agent_next_phase(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.start_next_phase(agent_id).await {
+        Ok(run_id) => Response::ok(req.id, json!({ "ok": true, "run_id": run_id.to_string() })),
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }
 }
@@ -1516,7 +1583,31 @@ async fn hook_emit(req: Request, state: &State) -> Response {
     }
     // El esquema de hooks es común a Claude Code y Codex (P01 Test B). Con el
     // registro de adapters (P05.S6) se usa el `parse_hook` del proveedor.
-    let events = symphony_adapter_common::hooks::parse_standard_hook(payload);
+    let mut events = symphony_adapter_common::hooks::parse_standard_hook(payload);
+    // Una operación pesada pasa por el scheduler antes de empezar (P08.S3): puede esperar
+    // su turno aquí mismo y, si el turno no llega, se rechaza con la razón.
+    let denied = match text("run_id") {
+        Some(run) => {
+            gate_heavy_tool(state, &agent_id, &run, text("provider").as_deref(), &events).await
+        }
+        None => None,
+    };
+    if denied.is_some() {
+        // Lo rechazado no empezó: no es un comando pendiente en el checkpoint.
+        events.retain(|e| !matches!(e, AgentEvent::ToolRequested { .. }));
+    }
+    // Las que terminaron liberan su slot.
+    if let Some(run) = text("run_id") {
+        for e in &events {
+            if let AgentEvent::ToolFinished {
+                tool_use_id: Some(u),
+                ..
+            } = e
+            {
+                state.scheduling.release(&format!("{run}:{u}"));
+            }
+        }
+    }
     let n = events.len();
     for event in events {
         let ev = BusEvent {
@@ -1535,7 +1626,154 @@ async fn hook_emit(req: Request, state: &State) -> Response {
             );
         }
     }
-    Response::ok(req.id, json!({ "decision": "allow", "events": n }))
+    match denied {
+        Some(reason) => Response::ok(
+            req.id,
+            json!({ "decision": "deny", "reason": reason, "events": n }),
+        ),
+        None => Response::ok(req.id, json!({ "decision": "allow", "events": n })),
+    }
+}
+
+/// Decisión del scheduler sobre un `PreToolUse`: `None` deja correr; `Some(razón)` rechaza.
+/// Registra la operación en `tool_calls` (`QUEUED`/`RUNNING`, `HOOK_HOLD`) y mientras espera
+/// el agente queda en `WAITING_RESOURCE`.
+async fn gate_heavy_tool(
+    state: &State,
+    agent_id: &str,
+    run_id: &str,
+    provider: Option<&str>,
+    events: &[AgentEvent],
+) -> Option<String> {
+    use crate::scheduling::{Submitted, Waited, denial_text};
+    use symphony_core::{AgentState, ToolCallId};
+
+    let (use_id, tool, command) = events.iter().find_map(|e| match e {
+        AgentEvent::ToolRequested {
+            tool_use_id: Some(u),
+            tool,
+            kind,
+            command,
+        } if *kind != symphony_adapter_common::ToolKind::Edit => {
+            Some((u.clone(), tool.clone(), command.clone()))
+        }
+        _ => None,
+    })?;
+    let class = symphony_scheduler::classify(&tool, command.as_deref());
+    if !class.is_heavy() {
+        return None;
+    }
+    let run: symphony_core::RunId = run_id.parse().ok()?;
+    let agent: symphony_core::AgentId = agent_id.parse().ok()?;
+    let id = ToolCallId::new();
+    // Sin id propio de la herramienta o repetida: pasa sin retención (nunca se rompe al CLI).
+    if !state.bus.adopt_tool_call(run, &use_id, id) {
+        return None;
+    }
+    let (number, priority): (i64, i64) = state
+        .reader
+        .lock()
+        .ok()
+        .and_then(|c| {
+            c.query_row(
+                "SELECT number, priority FROM agents WHERE id = ?1",
+                [agent_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()
+        })
+        .unwrap_or((0, 0));
+    let now = now_ms();
+    let req = symphony_scheduler::Request {
+        id: format!("{run_id}:{use_id}"),
+        tag: id.to_string(),
+        agent: agent_id.to_string(),
+        agent_label: format!("Agent #{number}"),
+        class,
+        priority: i32::try_from(priority).unwrap_or(0),
+        command: command.clone(),
+        now_ms: now,
+    };
+    let call = repo::NewToolCall {
+        id,
+        agent_id: agent,
+        run_id: run,
+        tool_name: tool,
+        command,
+        op_class: class.as_i64(),
+    };
+    // La escritura de un cambio de estado nunca es crítica: si el agente ya no está en el
+    // estado esperado (murió, lo pausaron), se deja como está.
+    let set_state = |from: AgentState, to: AgentState, why: Option<String>| {
+        let writer = state.writer.clone();
+        async move {
+            let _ = writer
+                .write(Box::new(move |t| {
+                    match repo::get_agent(t, agent) {
+                        Ok(a) if a.state == from => {
+                            if let Err(e) =
+                                repo::set_agent_state(t, agent, to, why.as_deref(), now_ms())
+                            {
+                                tracing::warn!(error = %e, "el scheduler no pudo cambiar el estado del agente");
+                            }
+                        }
+                        Ok(a) => tracing::debug!(state = %a.state, "el agente ya no está en el estado esperado"),
+                        Err(e) => tracing::warn!(error = %e, "el scheduler no encontró al agente"),
+                    }
+                    Ok(())
+                }))
+                .await;
+        }
+    };
+
+    match state.scheduling.submit(req) {
+        Submitted::Run { .. } => {
+            let _ = state
+                .writer
+                .write(Box::new(move |t| {
+                    repo::insert_scheduled_tool_call(t, &call, None, now)?;
+                    Ok(())
+                }))
+                .await;
+            None
+        }
+        Submitted::Queued(q) => {
+            let why = symphony_scheduler::explain(&q.reason);
+            let blocker = q
+                .reason
+                .blocker()
+                .and_then(|h| h.tag.parse::<ToolCallId>().ok());
+            let stored = why.clone();
+            let _ = state
+                .writer
+                .write(Box::new(move |t| {
+                    repo::insert_scheduled_tool_call(t, &call, Some((&stored, blocker)), now)?;
+                    Ok(())
+                }))
+                .await;
+            set_state(AgentState::Running, AgentState::WaitingResource, Some(why)).await;
+
+            let hold = state.scheduling.hold_for(provider);
+            let outcome = state.scheduling.wait(q, hold).await;
+            let denial = match &outcome {
+                Waited::Granted { .. } => None,
+                Waited::TimedOut { reason } => Some(denial_text(reason, hold)),
+            };
+            let (ended, text) = (now_ms(), denial.clone());
+            let _ = state
+                .writer
+                .write(Box::new(move |t| {
+                    match &text {
+                        None => repo::start_queued_tool_call(t, id, ended)?,
+                        Some(reason) => repo::deny_queued_tool_call(t, id, reason, ended)?,
+                    }
+                    Ok(())
+                }))
+                .await;
+            set_state(AgentState::WaitingResource, AgentState::Running, None).await;
+            denial
+        }
+    }
 }
 
 fn status(state: &State) -> Value {
@@ -1552,4 +1790,724 @@ fn status(state: &State) -> Value {
         "uptime_ms": u64::try_from(state.started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "home": state.home.display().to_string(),
     })
+}
+
+// --- dependencias y milestones (P08.S5) ---------------------------------------------
+
+/// Raíz git del proyecto del request (`project_root` o el directorio actual).
+fn request_root(p: &Value) -> String {
+    let root = match p.get("project_root").and_then(Value::as_str) {
+        Some(r) => PathBuf::from(r),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    symphony_git::Repo::discover(&root)
+        .map(|r| r.root().display().to_string())
+        .unwrap_or_else(|_| root.display().to_string())
+}
+
+/// Una tarea por id o por código (`T-12`, dentro del proyecto de `project_root`).
+fn resolve_task(state: &State, p: &Value, key: &str) -> Result<symphony_core::TaskId, String> {
+    let reference = p
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("falta `{key}` (id o código de la tarea)"))?;
+    if let Ok(id) = reference.parse() {
+        return Ok(id);
+    }
+    let root = request_root(p);
+    let conn = state
+        .reader
+        .lock()
+        .map_err(|_| "lector de la base no disponible".to_string())?;
+    let project = repo::project_by_root(&conn, &root)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "este proyecto todavía no tiene tareas".to_string())?;
+    repo::task_by_code(&conn, project.id, reference)
+        .map_err(|e| e.to_string())?
+        .map(|t| t.id)
+        .ok_or_else(|| format!("la tarea `{reference}` no existe en este proyecto"))
+}
+
+/// Proyecto del request.
+fn request_project(state: &State, p: &Value) -> Result<symphony_core::ProjectId, String> {
+    let root = request_root(p);
+    let conn = state
+        .reader
+        .lock()
+        .map_err(|_| "lector de la base no disponible".to_string())?;
+    repo::project_by_root(&conn, &root)
+        .map_err(|e| e.to_string())?
+        .map(|p| p.id)
+        .ok_or_else(|| "este proyecto todavía no tiene tareas".to_string())
+}
+
+fn dep_json(d: &symphony_store::deps::DepRow) -> Value {
+    json!({
+        "task_id": d.task_id.to_string(),
+        "code": d.code,
+        "title": d.title,
+        "status": d.status.as_str(),
+    })
+}
+
+type Slot<T> = std::sync::Arc<Mutex<Option<T>>>;
+
+async fn task_depend(req: Request, state: &State) -> Response {
+    let remove = req.method == "task.undepend";
+    let (task, dep) = match (
+        resolve_task(state, &req.params, "task"),
+        resolve_task(state, &req.params, "depends_on"),
+    ) {
+        (Ok(t), Ok(d)) => (t, d),
+        (Err(e), _) | (_, Err(e)) => return Response::error(req.id, "invalid_params", e),
+    };
+    let result: Slot<Result<Value, (&'static str, String)>> = Slot::default();
+    let out = result.clone();
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let r = if remove {
+                symphony_store::deps::remove_dependency(t, task, dep)
+                    .map(|removed| json!({ "removed": removed }))
+                    .map_err(|e| ("store_error", e.to_string()))
+            } else {
+                symphony_store::deps::add_dependency(t, task, dep, now_ms())
+                    .map(|a| json!({ "waiting": a.waiting }))
+                    .map_err(|e| match e {
+                        symphony_store::deps::DepError::Repo(r) => ("store_error", r.to_string()),
+                        other => ("invalid_dependency", other.to_string()),
+                    })
+            };
+            if let Ok(mut o) = out.lock() {
+                *o = Some(r);
+            }
+            Ok(())
+        }))
+        .await;
+    if let Err(e) = written {
+        return Response::error(req.id, "store_error", e.to_string());
+    }
+    match result.lock().ok().and_then(|mut r| r.take()) {
+        Some(Ok(v)) => Response::ok(req.id, v),
+        Some(Err((code, msg))) => Response::error(req.id, code, msg),
+        None => Response::error(req.id, "store_error", "la escritura no devolvió resultado"),
+    }
+}
+
+fn task_deps(req: Request, state: &State) -> Response {
+    let task = match resolve_task(state, &req.params, "task") {
+        Ok(t) => t,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let Ok(conn) = state.reader.lock() else {
+        return Response::error(req.id, "store_error", "lector de la base no disponible");
+    };
+    match symphony_store::deps::dependencies_of(&conn, task) {
+        Ok(rows) => {
+            let unmet: Vec<Value> = rows
+                .iter()
+                .filter(|d| d.status != symphony_core::TaskStatus::Done)
+                .map(dep_json)
+                .collect();
+            Response::ok(
+                req.id,
+                json!({
+                    "task_id": task.to_string(),
+                    "dependencies": rows.iter().map(dep_json).collect::<Vec<_>>(),
+                    "unmet": unmet,
+                }),
+            )
+        }
+        Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+async fn task_resolve(req: Request, state: &State) -> Response {
+    let (task, dep) = match (
+        resolve_task(state, &req.params, "task"),
+        resolve_task(state, &req.params, "dependency"),
+    ) {
+        (Ok(t), Ok(d)) => (t, d),
+        (Err(e), _) | (_, Err(e)) => return Response::error(req.id, "invalid_params", e),
+    };
+    let action = match req
+        .params
+        .get("action")
+        .and_then(Value::as_str)
+        .map(str::parse::<crate::dependencies::Resolution>)
+    {
+        Some(Ok(a)) => a,
+        Some(Err(e)) => return Response::error(req.id, "invalid_params", e),
+        None => {
+            return Response::error(
+                req.id,
+                "invalid_params",
+                "falta `action` (ignore, replan o cancel)",
+            );
+        }
+    };
+    match crate::dependencies::resolve(&state.runtime, task, dep, action).await {
+        Ok(r) => Response::ok(
+            req.id,
+            json!({ "agent_id": r.agent.to_string(), "released": r.released }),
+        ),
+        Err(e) => Response::error(req.id, "resolve_failed", e),
+    }
+}
+
+fn milestone_json(m: &symphony_store::deps::Milestone) -> Value {
+    json!({
+        "id": m.id.to_string(),
+        "name": m.name,
+        "requires_approval": m.requires_approval,
+        "status": m.status.as_str(),
+        "decided_at": m.decided_at,
+        "tasks_total": m.tasks_total,
+        "tasks_done": m.tasks_done,
+    })
+}
+
+async fn milestone_create(req: Request, state: &State) -> Response {
+    let Some(name) = req
+        .params
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+    else {
+        return Response::error(req.id, "invalid_params", "falta `name`");
+    };
+    let project = match request_project(state, &req.params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let requires = req
+        .params
+        .get("requires_approval")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let id: Slot<symphony_core::MilestoneId> = Slot::default();
+    let out = id.clone();
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            let made = symphony_store::deps::create_milestone(t, project, &name, requires)?;
+            if let Ok(mut o) = out.lock() {
+                *o = Some(made);
+            }
+            Ok(())
+        }))
+        .await;
+    match (written, id.lock().ok().and_then(|mut i| i.take())) {
+        (Ok(()), Some(id)) => Response::ok(req.id, json!({ "id": id.to_string() })),
+        (Err(e), _) => Response::error(req.id, "store_error", e.to_string()),
+        (Ok(()), None) => Response::error(req.id, "store_error", "no se creó el milestone"),
+    }
+}
+
+fn milestone_list(req: Request, state: &State) -> Response {
+    let project = match request_project(state, &req.params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let Ok(conn) = state.reader.lock() else {
+        return Response::error(req.id, "store_error", "lector de la base no disponible");
+    };
+    match symphony_store::deps::milestones_of(&conn, project) {
+        Ok(rows) => Response::ok(
+            req.id,
+            json!({ "milestones": rows.iter().map(milestone_json).collect::<Vec<_>>() }),
+        ),
+        Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+async fn milestone_assign(req: Request, state: &State) -> Response {
+    let task = match resolve_task(state, &req.params, "task") {
+        Ok(t) => t,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let milestone: Option<symphony_core::MilestoneId> =
+        match req.params.get("milestone").and_then(Value::as_str) {
+            Some(m) => match m.parse() {
+                Ok(id) => Some(id),
+                Err(_) => {
+                    return Response::error(req.id, "invalid_params", "`milestone` no es un id");
+                }
+            },
+            None => None,
+        };
+    let written = state
+        .writer
+        .write(Box::new(move |t| {
+            symphony_store::deps::assign_task(t, task, milestone, now_ms())?;
+            Ok(())
+        }))
+        .await;
+    match written {
+        Ok(()) => Response::ok(req.id, json!({ "ok": true })),
+        Err(e) => Response::error(req.id, "store_error", e.to_string()),
+    }
+}
+
+async fn milestone_decide(req: Request, state: &State) -> Response {
+    let Some(Ok(id)) = req
+        .params
+        .get("milestone")
+        .and_then(Value::as_str)
+        .map(str::parse::<symphony_core::MilestoneId>)
+    else {
+        return Response::error(req.id, "invalid_params", "falta `milestone` (id)");
+    };
+    let to = match req.params.get("decision").and_then(Value::as_str) {
+        Some("approve") => symphony_core::MilestoneStatus::Approved,
+        Some("request_changes") => symphony_core::MilestoneStatus::ChangesRequested,
+        Some("hold") => symphony_core::MilestoneStatus::Held,
+        _ => {
+            return Response::error(
+                req.id,
+                "invalid_params",
+                "`decision` tiene que ser approve, request_changes o hold",
+            );
+        }
+    };
+    match crate::dependencies::decide_milestone(&state.runtime, id, to).await {
+        Ok(()) => Response::ok(req.id, json!({ "status": to.as_str() })),
+        Err(e) => Response::error(req.id, "decision_rejected", e),
+    }
+}
+
+// --- validación (P08.S6) ----------------------------------------------------------------
+
+fn check_json(c: &crate::validation::CheckResult) -> Value {
+    json!({
+        "command": c.command,
+        "name": c.name.as_str(),
+        "status": c.status.as_str(),
+        "passed": c.passed,
+        "failed": c.failed,
+        "summary": c.summary,
+        "exit_code": c.exit_code,
+        "duration_ms": c.duration_ms,
+    })
+}
+
+/// Valida a pedido del usuario (`USER`): hasta `tier` (por defecto, el gate del proyecto).
+async fn validation_run(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let tier = req
+        .params
+        .get("tier")
+        .and_then(Value::as_u64)
+        .and_then(|t| u8::try_from(t).ok())
+        .unwrap_or(2);
+    match state
+        .runtime
+        .validate(agent_id, tier, symphony_core::ValidationTrigger::User)
+        .await
+    {
+        Ok(v) => Response::ok(
+            req.id,
+            json!({
+                "passed": v.passed(),
+                "tiers": v.tiers.iter().map(|t| json!({
+                    "tier": t.tier,
+                    "status": t.status.as_str(),
+                    "checks": t.checks.iter().map(check_json).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            }),
+        ),
+        Err(e) => Response::error(req.id, "validation_error", e),
+    }
+}
+
+fn validation_get(req: Request, state: &State) -> Response {
+    agent_view(req, state, |c, agent| {
+        let id: symphony_core::AgentId =
+            agent.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let runs = symphony_store::validation::runs_of(c, id, 20).map_err(rusqlite::Error::from)?;
+        Ok(json!({
+            "agent_id": agent,
+            "runs": runs.iter().map(|r| json!({
+                "id": r.id,
+                "tier": r.tier,
+                "trigger": r.trigger,
+                "status": r.status,
+                "started_at": r.started_at,
+                "finished_at": r.finished_at,
+                "checks": r.checks.iter().map(|k| json!({
+                    "name": k.name,
+                    "status": k.status,
+                    "passed": k.passed,
+                    "failed": k.failed,
+                    "summary": k.summary,
+                    "output_object_id": k.output_object_id,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        }))
+    })
+}
+
+// --- integración, revisión y lotes (P08.S7) ---------------------------------------------
+
+/// La solicitud de integración del request: por `merge_request` o la última del `agent`.
+fn mr_of(state: &State, p: &Value) -> Result<String, String> {
+    if let Some(id) = p.get("merge_request").and_then(Value::as_str) {
+        return Ok(id.to_string());
+    }
+    let agent = resolve_agent_id(state, p)?;
+    let conn = state
+        .reader
+        .lock()
+        .map_err(|_| "lector de la base no disponible".to_string())?;
+    symphony_store::merge::latest_mr(&conn, agent)
+        .map_err(|e| e.to_string())?
+        .map(|m| m.id)
+        .ok_or_else(|| {
+            "el agente no tiene una solicitud de integración: corre `merge.prepare`".into()
+        })
+}
+
+async fn merge_prepare(req: Request, state: &State) -> Response {
+    let agent = match resolve_agent_id(state, &req.params) {
+        Ok(a) => a,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let validate = req
+        .params
+        .get("validate")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    match state.runtime.merge_prepare(agent, validate).await {
+        Ok(p) => Response::ok(req.id, p.to_json()),
+        Err(e) => Response::error(req.id, "merge_error", e),
+    }
+}
+
+async fn merge_action(req: Request, state: &State) -> Response {
+    let id = match mr_of(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let result = match req.method.as_str() {
+        "merge.approve" => state
+            .runtime
+            .merge_approve(&id)
+            .await
+            .map(|()| json!({ "merge_request": id, "approved": true })),
+        "merge.abort" => state
+            .runtime
+            .merge_abort(&id)
+            .await
+            .map(|()| json!({ "merge_request": id, "status": "ABORTED" })),
+        "merge.integrate" => state
+            .runtime
+            .merge_integrate(&id)
+            .await
+            .map(|commit| json!({ "merge_request": id, "status": "MERGED", "commit": commit })),
+        _ => {
+            let resolution = match req.params.get("resolution").and_then(Value::as_str) {
+                Some("manual") => symphony_core::ConflictResolution::Manual,
+                Some("reviewer") => symphony_core::ConflictResolution::Reviewer,
+                _ => {
+                    return Response::error(
+                        req.id,
+                        "invalid_params",
+                        "`resolution` tiene que ser manual o reviewer",
+                    );
+                }
+            };
+            state
+                .runtime
+                .merge_mark_resolved(&id, resolution)
+                .await
+                .map(|n| json!({ "merge_request": id, "resolved": n }))
+        }
+    };
+    match result {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "merge_error", e),
+    }
+}
+
+fn merge_get(req: Request, state: &State) -> Response {
+    agent_view(req, state, |c, agent| {
+        let id: symphony_core::AgentId =
+            agent.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let mr = symphony_store::merge::latest_mr(c, id).map_err(rusqlite::Error::from)?;
+        let (conflicts, preflight) = match &mr {
+            Some(m) => (
+                symphony_store::merge::conflicts_of(c, &m.id).map_err(rusqlite::Error::from)?,
+                m.preflight_json
+                    .as_deref()
+                    .and_then(|j| serde_json::from_str::<Value>(j).ok()),
+            ),
+            None => (Vec::new(), None),
+        };
+        let reviews =
+            symphony_store::merge::reviews_of_target(c, id).map_err(rusqlite::Error::from)?;
+        Ok(json!({
+            "agent_id": agent,
+            "merge_request": mr.as_ref().map(|m| json!({
+                "id": m.id,
+                "status": m.status.as_str(),
+                "target_branch": m.target_branch,
+                "requires_approval": m.requires_approval,
+                "approved_at": m.approved_at,
+                "merge_commit": m.merge_commit,
+                "merged_at": m.merged_at,
+                "preflight": preflight,
+            })),
+            "conflicts": conflicts.iter().map(|k| json!({
+                "path": k.path,
+                "other_agent_id": k.other_agent_id.map(|a| a.to_string()),
+                "resolution": k.resolution.as_str(),
+            })).collect::<Vec<_>>(),
+            "reviews": reviews.iter().map(|r| json!({
+                "id": r.id,
+                "reviewer_agent_id": r.reviewer_agent_id.to_string(),
+                "status": r.status.as_str(),
+                "recommendation": r.recommendation.map(|x| x.as_str()),
+                "findings": r.findings_json.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()),
+            })).collect::<Vec<_>>(),
+        }))
+    })
+}
+
+async fn review_start(req: Request, state: &State) -> Response {
+    let agent = match resolve_agent_id(state, &req.params) {
+        Ok(a) => a,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    let model = req
+        .params
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let profile = req
+        .params
+        .get("profile")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let runtime = state.runtime.clone();
+    let started =
+        tokio::spawn(async move { runtime.review_start(agent, model, profile).await }).await;
+    match started {
+        Ok(Ok(reviewer)) => {
+            Response::ok(req.id, json!({ "reviewer_agent_id": reviewer.to_string() }))
+        }
+        Ok(Err(e)) => Response::error(req.id, "review_error", e),
+        Err(e) => Response::error(req.id, "review_error", e.to_string()),
+    }
+}
+
+async fn batch_create(req: Request, state: &State) -> Response {
+    let p = &req.params;
+    let Some(plan) = p
+        .get("plan")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+    else {
+        return Response::error(
+            req.id,
+            "invalid_params",
+            "falta `plan` (el plan en Markdown)",
+        );
+    };
+    let title = p
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .map_or_else(|| "Lote".to_string(), |t| t.trim().to_string());
+    let project_root = match p.get("project_root").and_then(Value::as_str) {
+        Some(r) => PathBuf::from(r),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    let execution = if let Some(m) = p.get("model").and_then(Value::as_str) {
+        crate::runtime::Execution::Exact(m.to_string())
+    } else if let Some(pr) = p.get("profile").and_then(Value::as_str) {
+        crate::runtime::Execution::Profile(pr.to_string())
+    } else {
+        crate::runtime::Execution::DecideLater
+    };
+    let max_parallel = p
+        .get("max_parallel")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok());
+    let request = crate::batch::BatchRequest {
+        project_root,
+        title,
+        plan: plan.to_string(),
+        execution,
+        max_parallel,
+        failover: symphony_core::FailoverPolicy::Any,
+        context_mode: symphony_core::ContextMode::Balanced,
+    };
+    let runtime = state.runtime.clone();
+    let created = tokio::spawn(async move { runtime.batch_create(request).await }).await;
+    match created {
+        Ok(Ok(b)) => Response::ok(
+            req.id,
+            json!({
+                "milestone": b.milestone.to_string(),
+                "parallel": b.parallel,
+                "agents": b.agents.iter().map(|a| json!({
+                    "id": a.id,
+                    "agent_id": a.agent_id.to_string(),
+                    "task_code": a.task_code,
+                    "state": a.state.as_str(),
+                    "depends_on": a.depends_on,
+                })).collect::<Vec<_>>(),
+            }),
+        ),
+        Ok(Err(e)) => Response::error(req.id, "batch_error", e),
+        Err(e) => Response::error(req.id, "batch_error", e.to_string()),
+    }
+}
+
+fn batch_milestone(p: &Value) -> Result<symphony_core::MilestoneId, String> {
+    p.get("milestone")
+        .and_then(Value::as_str)
+        .and_then(|m| m.parse().ok())
+        .ok_or_else(|| "falta `milestone` (el id del lote)".to_string())
+}
+
+fn batch_status(req: Request, state: &State) -> Response {
+    match batch_milestone(&req.params).and_then(|m| state.runtime.batch_status(m)) {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "batch_error", e),
+    }
+}
+
+async fn batch_integrate(req: Request, state: &State) -> Response {
+    let milestone = match batch_milestone(&req.params) {
+        Ok(m) => m,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let approve = req
+        .params
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match state.runtime.batch_integrate(milestone, approve).await {
+        Ok(v) => Response::ok(req.id, v),
+        Err(e) => Response::error(req.id, "batch_error", e),
+    }
+}
+
+// --- vistas de Fase 2 (P08.S8) -------------------------------------------------------
+
+fn task_list(req: Request, state: &State) -> Response {
+    let project = match request_project(state, &req.params) {
+        Ok(p) => p.to_string(),
+        // Un proyecto sin tareas no es un error para la vista.
+        Err(_) => return Response::ok(req.id, json!({ "tasks": [] })),
+    };
+    read_view(req, state, |c| crate::views::tasks(c, &project))
+}
+
+/// System / Resources (18): carga actual, slots pesados y quién espera a quién.
+fn system_get(req: Request, state: &State) -> Response {
+    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(&state.home)).ok();
+    let perf = config
+        .as_ref()
+        .map(|c| c.performance.clone())
+        .unwrap_or_default();
+    let limits = symphony_scheduler::Limits::from_config(&perf);
+    let snapshot = state.scheduling.snapshot();
+    let sample = state.reader.lock().ok().and_then(|c| {
+        c.query_row(
+            "SELECT cpu_pct, ram_pct, process_count, sampled_at FROM resource_samples ORDER BY id DESC LIMIT 1",
+            [],
+            |r| {
+                Ok((
+                    r.get::<_, f64>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .ok()
+    });
+    let holder = |h: &symphony_scheduler::Holder| {
+        json!({
+            "agent": h.agent_label,
+            "command": h.command,
+            "class": h.class.as_i64(),
+        })
+    };
+    let (running, waiting) = match &snapshot {
+        Some(s) => (
+            s.running.iter().map(holder).collect::<Vec<_>>(),
+            s.waiting
+                .iter()
+                .map(|(h, why)| {
+                    let mut v = holder(h);
+                    v["why"] = json!(symphony_scheduler::explain(why));
+                    v
+                })
+                .collect::<Vec<_>>(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    Response::ok(
+        req.id,
+        json!({
+            "profile": perf.profile.as_str(),
+            "cpu_pct": sample.map(|s| s.0),
+            "ram_pct": sample.map(|s| s.1),
+            "process_count": sample.and_then(|s| s.2),
+            "sampled_at": sample.map(|s| s.3),
+            "heavy_slots_used": running.len(),
+            "heavy_slots_total": limits.max_heavy,
+            "cpu_ceiling_pct": limits.cpu_ceiling_pct,
+            "ram_ceiling_pct": limits.ram_ceiling_pct,
+            "running": running,
+            "waiting": waiting,
+        }),
+    )
+}
+
+/// Performance Profile (19): cambia `[performance] profile` y lo aplica al scheduler al instante.
+async fn performance_set(req: Request, state: &State) -> Response {
+    let Some(profile) = req
+        .params
+        .get("profile")
+        .and_then(Value::as_str)
+        .map(str::to_ascii_uppercase)
+        .filter(|p| matches!(p.as_str(), "ECO" | "BALANCED" | "PERFORMANCE" | "CUSTOM"))
+    else {
+        return Response::error(
+            req.id,
+            "invalid_params",
+            "`profile` tiene que ser ECO, BALANCED, PERFORMANCE o CUSTOM",
+        );
+    };
+    let home = symphony_core::SymphonyHome::at(&state.home);
+    match symphony_core::set_value(
+        &home,
+        "performance.profile",
+        toml_edit::Value::from(profile.clone()),
+    ) {
+        Ok(cfg) => {
+            let limits = symphony_scheduler::Limits::from_config(&cfg.performance);
+            state.scheduling.set_limits(limits.clone());
+            Response::ok(
+                req.id,
+                json!({
+                    "profile": profile,
+                    "heavy_slots_total": limits.max_heavy,
+                    "cpu_ceiling_pct": limits.cpu_ceiling_pct,
+                    "ram_ceiling_pct": limits.ram_ceiling_pct,
+                }),
+            )
+        }
+        Err(e) => Response::error(req.id, "config_error", e.to_string()),
+    }
 }

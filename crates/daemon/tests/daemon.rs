@@ -395,3 +395,66 @@ impl Drop for KillOnDrop {
         let _ = self.0.wait();
     }
 }
+
+/// P08.S8: las vistas de sistema y rendimiento responden sin proyecto y el cambio de perfil
+/// llega al scheduler y a `config.toml`.
+#[tokio::test]
+async fn system_view_and_performance_profile_work_without_a_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("symphony-home");
+    let mut daemon = spawn_daemon(&home);
+    wait_ready(&home, &mut daemon).await;
+
+    let Outcome::Ok(sys) = call(&home, "system.get", json!({})).await else {
+        panic!("system.get falló")
+    };
+    assert_eq!(sys["profile"], "BALANCED");
+    assert_eq!(sys["heavy_slots_total"], 1);
+    assert_eq!(sys["running"], json!([]));
+    assert_eq!(sys["waiting"], json!([]));
+
+    let Outcome::Error(e) = call(&home, "performance.set", json!({ "profile": "TURBO" })).await
+    else {
+        panic!("un perfil inventado tenía que fallar")
+    };
+    assert_eq!(e.code, "invalid_params");
+
+    let Outcome::Ok(set) = call(
+        &home,
+        "performance.set",
+        json!({ "profile": "performance" }),
+    )
+    .await
+    else {
+        panic!("performance.set falló")
+    };
+    assert_eq!(set["profile"], "PERFORMANCE");
+    assert_eq!(set["heavy_slots_total"], 3);
+    let Outcome::Ok(sys) = call(&home, "system.get", json!({})).await else {
+        panic!("system.get falló")
+    };
+    assert_eq!(
+        (sys["profile"].as_str(), sys["heavy_slots_total"].as_i64()),
+        (Some("PERFORMANCE"), Some(3))
+    );
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(config.contains("profile = \"PERFORMANCE\""), "{config}");
+
+    // Sin proyecto, la lista de tareas está vacía (no es un error).
+    let Outcome::Ok(tasks) = call(
+        &home,
+        "task.list",
+        json!({ "project_root": dir.path().display().to_string() }),
+    )
+    .await
+    else {
+        panic!("task.list falló")
+    };
+    assert_eq!(tasks["tasks"], json!([]));
+
+    assert_eq!(
+        call(&home, "shutdown", json!({})).await,
+        Outcome::Ok(json!({"stopping": true}))
+    );
+    assert!(wait_exit(&mut daemon).success());
+}

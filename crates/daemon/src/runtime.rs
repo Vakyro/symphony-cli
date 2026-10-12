@@ -45,6 +45,11 @@ pub struct CreateAgent {
     pub priority: i64,
     /// Chat general del proyecto: idempotente, rama `symphony/chat` sobre la principal.
     pub chat: bool,
+    /// Tareas de las que depende (códigos `T-12` o ids). Mientras alguna no esté `DONE`, el
+    /// agente queda en `WAITING_DEPENDENCY` y no arranca (FLOW §9.3).
+    pub depends_on: Vec<String>,
+    /// Es la tarea de un review agent (`kind = REVIEW`): no planifica por fases.
+    pub review: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +103,8 @@ pub enum CreateError {
         "no se pudo preparar el workspace: {detail}. Puedes reintentar o cancelar; no se creó el agente"
     )]
     Workspace { detail: String, task: String },
+    #[error("la tarea `{reference}` de la que depende no existe en este proyecto")]
+    UnknownDependency { reference: String, task: String },
     #[error("base de datos: {0}")]
     Store(String),
 }
@@ -113,6 +120,7 @@ impl CreateError {
             Self::NoEligibleProvider { .. } => "no_eligible_provider",
             Self::ExactModelUnavailable { .. } => "exact_model_unavailable",
             Self::Workspace { .. } => "workspace_failed",
+            Self::UnknownDependency { .. } => "unknown_dependency",
             Self::Store(_) => "store_error",
         }
     }
@@ -155,6 +163,10 @@ pub struct Inner {
     pub(crate) stale_after: Duration,
     /// Última actividad (línea de salida) de cada run vivo, en memoria.
     pub(crate) activity: Mutex<HashMap<RunId, Instant>>,
+    /// Una integración a la rama del chat a la vez (P08.S7).
+    pub(crate) integration: tokio::sync::Mutex<()>,
+    /// Cola de operaciones pesadas (la pone `serve`; los tests sin daemon no la tienen).
+    pub(crate) scheduling: std::sync::OnceLock<Arc<crate::scheduling::Scheduling>>,
     /// Umbral de tokens para rotar el proveedor del chat (P07.5.S6). 0 = apagado.
     pub(crate) chat_switch_tokens: AtomicU64,
     /// Profile con el que se evalúa un failover cuando el agente no tiene uno (`routing.default_profile`).
@@ -231,12 +243,69 @@ impl Runtime {
                 chat_switch_tokens: AtomicU64::new(0),
                 default_profile: Mutex::new("@code".into()),
                 watchers: crate::watcher::Watchers::default(),
+                scheduling: std::sync::OnceLock::new(),
+                integration: tokio::sync::Mutex::new(()),
             }),
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(rt.clone().watchdog());
         }
         rt
+    }
+
+    /// El scheduler compartido con el daemon (validaciones y preparación de worktrees).
+    pub fn set_scheduling(&self, scheduling: Arc<crate::scheduling::Scheduling>) {
+        let _ = self.scheduling.set(scheduling);
+    }
+
+    /// Comandos de `[worktree] prepare` de `project.toml` (F8): corren en el worktree nuevo,
+    /// uno tras otro y por el scheduler, antes de lanzar al agente.
+    async fn prepare_worktree_commands(
+        &self,
+        project_root: &str,
+        wt_path: &Path,
+        number: i64,
+    ) -> Result<(), String> {
+        let Some(cfg) = symphony_core::load_project(Path::new(project_root))
+            .ok()
+            .flatten()
+            .and_then(|p| p.worktree)
+            .filter(|w| !w.prepare.is_empty())
+        else {
+            return Ok(());
+        };
+        let timeout = Duration::from_secs(cfg.prepare_timeout_secs.unwrap_or(1_800).max(1));
+        for (i, command) in cfg.prepare.iter().enumerate() {
+            let key = format!("prep:{}:{i}", wt_path.display());
+            let (exec, _, _) = self
+                .run_scheduled(
+                    key,
+                    format!("Agent #{number}"),
+                    command,
+                    wt_path,
+                    timeout,
+                    symphony_core::ToolCallId::new(),
+                )
+                .await
+                .map_err(|e| format!("`{command}` no pudo correr: {e}"))?;
+            if !exec.success {
+                let tail: Vec<&str> = exec.output.lines().rev().take(5).collect();
+                let tail: Vec<&str> = tail.into_iter().rev().collect();
+                return Err(format!(
+                    "la preparación del worktree falló en `{command}` ({}): {}",
+                    if exec.timed_out {
+                        "tiempo agotado".to_string()
+                    } else {
+                        format!(
+                            "código {}",
+                            exec.exit_code.map_or("?".into(), |c| c.to_string())
+                        )
+                    },
+                    tail.join(" | ")
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Vigila los archivos del proyecto (idempotente; ver `watcher.rs`).
@@ -528,6 +597,49 @@ impl Runtime {
             };
             Ok((project, session, number, code, existing))
         })?;
+        // Dependencias: se resuelven antes de crear el worktree (un `T-99` inexistente no deja nada).
+        let mut dep_ids: Vec<TaskId> = Vec::new();
+        let mut unmet = Vec::new();
+        if !req.depends_on.is_empty() && existing.is_none() {
+            let project_id = project.as_ref().map(|p| p.id);
+            let refs = req.depends_on.clone();
+            let resolved = self.read(|c| {
+                let mut out = Vec::new();
+                for r in &refs {
+                    let found = match (r.parse::<TaskId>(), project_id) {
+                        (Ok(id), _) => repo::get_task(c, id).ok(),
+                        (Err(_), Some(p)) => repo::task_by_code(c, p, r)?,
+                        (Err(_), None) => None,
+                    };
+                    match found {
+                        Some(t) if Some(t.project_id) == project_id => out.push(t),
+                        _ => return Ok(Err(r.clone())),
+                    }
+                }
+                Ok(Ok(out))
+            })?;
+            match resolved {
+                Ok(tasks) => {
+                    for t in tasks {
+                        if t.status != TaskStatus::Done {
+                            unmet.push(symphony_store::deps::DepRow {
+                                task_id: t.id,
+                                code: t.code.clone(),
+                                title: t.title.clone(),
+                                status: t.status,
+                            });
+                        }
+                        dep_ids.push(t.id);
+                    }
+                }
+                Err(reference) => {
+                    return Err(CreateError::UnknownDependency {
+                        reference,
+                        task: task_text,
+                    });
+                }
+            }
+        }
         if let Some(agent) = existing {
             let (wt, task_code) = self.read(|c| {
                 let wt = agent.worktree_id.ok_or_else(|| repo::RepoError::NotFound {
@@ -614,13 +726,32 @@ impl Runtime {
             }
         };
 
+        // 4b. Preparación del worktree (`[worktree] prepare`): si falla, no se creó el agente.
+        if let Err(detail) = self
+            .prepare_worktree_commands(&root_text, &wt_path, number)
+            .await
+        {
+            self.undo_worktree(&repo_root, &wt_path, &branch).await;
+            return Err(CreateError::Workspace {
+                detail,
+                task: task_text,
+            });
+        }
+
         // 5. Una transacción con todo.
-        let (state, task_status) = if executor.is_some() {
+        // Con dependencias sin cumplir el agente espera y no arranca; el modelo exacto o el
+        // profile quedan guardados para cuando se libere (`dependencies.rs`).
+        let waiting_phrase =
+            (!unmet.is_empty()).then(|| symphony_store::deps::waiting_phrase(&unmet));
+        let (state, task_status) = if waiting_phrase.is_some() {
+            (AgentState::WaitingDependency, TaskStatus::Waiting)
+        } else if executor.is_some() {
             (AgentState::Running, TaskStatus::Running)
         } else {
             (AgentState::Ready, TaskStatus::Ready)
         };
-        let run_id = executor.as_ref().map(|_| RunId::new());
+        let launch_now = executor.is_some() && waiting_phrase.is_none();
+        let run_id = launch_now.then(RunId::new);
         let objective = match &req.description {
             Some(d) if !d.trim().is_empty() => format!("{title}\n\n{}", d.trim()),
             _ => title.clone(),
@@ -652,7 +783,7 @@ impl Runtime {
                 title: title.clone(),
                 description: req.description.clone(),
                 status: task_status,
-                status_reason: None,
+                status_reason: waiting_phrase.clone(),
                 priority: req.priority,
             },
             worktree: repo::Worktree {
@@ -672,7 +803,7 @@ impl Runtime {
                 worktree_id: Some(worktree_id),
                 number,
                 state,
-                state_reason: None,
+                state_reason: waiting_phrase.clone(),
                 execution_mode,
                 // Un profile deja el modelo en el run, no en el agente (AGENT ≠ MODEL).
                 requested_model_id: executor
@@ -717,7 +848,9 @@ impl Runtime {
                     items: Vec::new(),
                 }
             }),
-            decision: pending,
+            decision: if launch_now { pending } else { None },
+            deps: dep_ids,
+            review: req.review,
             now,
         };
         if let Err(e) = self.writer.write(Box::new(move |t| tx_data.apply(t))).await {
@@ -735,7 +868,7 @@ impl Runtime {
             worktree: wt_path.clone(),
             branch,
             state,
-            state_reason: None,
+            state_reason: waiting_phrase,
             run: None,
         };
 
@@ -752,7 +885,7 @@ impl Runtime {
                 model_id: model.model_id.clone(),
                 worktree: wt_path,
                 cli_model: model.cli_model_id,
-                prompt: objective,
+                prompt: self.planned_prompt(task_id, req.chat || req.review, &objective),
                 resume_session: None,
             };
             if let Err(reason) = self.launch(launch).await {
@@ -793,6 +926,8 @@ fn prepare_worktree(
     if wt_path.exists() {
         return Err(format!("{} ya existe", wt_path.display()));
     }
+    // El plan por fases es temporal: no entra en `git add -A` ni en el diff (exclusión local).
+    let _ = Repo::at(repo_root).exclude_locally(crate::plan::PLAN_EXCLUDE);
     if let Some(parent) = wt_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -820,6 +955,10 @@ struct TxData {
     handoff: Option<repo::NewHandoff>,
     /// Cómo se eligió el modelo del primer run.
     decision: Option<crate::routing::Pending>,
+    /// Tareas de las que depende (P08.S5).
+    deps: Vec<TaskId>,
+    /// `kind = REVIEW` (P08.S7).
+    review: bool,
     now: i64,
 }
 
@@ -832,7 +971,12 @@ impl TxData {
         if let Some((id, pid)) = self.new_session {
             repo::start_session(t, id, self.task.project_id, pid, now)?;
         }
-        repo::insert_task(t, &self.task, now)?;
+        repo::insert_task_kind(
+            t,
+            &self.task,
+            if self.review { "REVIEW" } else { "WORK" },
+            now,
+        )?;
         repo::insert_worktree(t, &self.worktree, now)?;
         repo::insert_agent(t, &self.agent, now)?;
         if let Some((run_id, (provider, model))) = &self.run {
@@ -845,6 +989,10 @@ impl TxData {
             repo::insert_handoff(t, h, now)?;
         }
         repo::insert_checkpoint(t, &self.checkpoint, now)?;
+        for dep in &self.deps {
+            symphony_store::deps::add_dependency(t, self.task.id, *dep, now)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        }
         Ok(())
     }
 }

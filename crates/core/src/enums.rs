@@ -104,6 +104,103 @@ db_enum!(
         NoHeartbeat => "NO_HEARTBEAT",
         UserSwitch => "USER_SWITCH",
         UserStop => "USER_STOP",
+        PhaseDone => "PHASE_DONE",
+    }
+);
+
+db_enum!(
+    /// `milestones.status` (DB §3.B, FLOW §9.4).
+    MilestoneStatus {
+        Open => "OPEN",
+        InReview => "IN_REVIEW",
+        Approved => "APPROVED",
+        ChangesRequested => "CHANGES_REQUESTED",
+        Held => "HELD",
+    }
+);
+
+db_enum!(
+    /// `validation_runs.status` (DB §3.H).
+    ValidationStatus {
+        Queued => "QUEUED",
+        Running => "RUNNING",
+        Pass => "PASS",
+        Fail => "FAIL",
+        Skipped => "SKIPPED",
+    }
+);
+
+db_enum!(
+    /// `validation_runs.trigger` (DB §3.H).
+    ValidationTrigger {
+        Auto => "AUTO",
+        User => "USER",
+        MergeGate => "MERGE_GATE",
+        MilestoneGate => "MILESTONE_GATE",
+    }
+);
+
+db_enum!(
+    /// `validation_checks.status` (DB §3.H).
+    CheckStatus {
+        Pass => "PASS",
+        Fail => "FAIL",
+        Warn => "WARN",
+        Skipped => "SKIPPED",
+    }
+);
+
+db_enum!(
+    /// `validation_checks.name` (DB §3.H).
+    CheckName {
+        Syntax => "syntax",
+        Format => "format",
+        Lint => "lint",
+        Typecheck => "typecheck",
+        TargetedTests => "targeted_tests",
+        FullTests => "full_tests",
+        Build => "build",
+        Security => "security",
+    }
+);
+
+db_enum!(
+    /// `merge_requests.status` (DB §3.H).
+    MergeStatus {
+        Preflight => "PREFLIGHT",
+        Ready => "READY",
+        Queued => "QUEUED",
+        Merged => "MERGED",
+        Blocked => "BLOCKED",
+        Aborted => "ABORTED",
+    }
+);
+
+db_enum!(
+    /// `merge_conflicts.resolution` (DB §3.H).
+    ConflictResolution {
+        Pending => "PENDING",
+        Manual => "MANUAL",
+        Reviewer => "REVIEWER",
+        Aborted => "ABORTED",
+    }
+);
+
+db_enum!(
+    /// `reviews.status` (DB §3.H).
+    ReviewStatus {
+        Running => "RUNNING",
+        Done => "DONE",
+        Failed => "FAILED",
+    }
+);
+
+db_enum!(
+    /// `reviews.recommendation` (DB §3.H). Un review nunca mergea solo: solo recomienda.
+    ReviewRecommendation {
+        Approve => "APPROVE",
+        RequestChanges => "REQUEST_CHANGES",
+        Reject => "REJECT",
     }
 );
 
@@ -265,6 +362,35 @@ mod tests {
         assert_matches_db(RunStatus::ALL, RunStatus::as_str, "RunStatus");
         assert_matches_db(RunEndReason::ALL, RunEndReason::as_str, "RunEndReason");
         assert_matches_db(ExecutionMode::ALL, ExecutionMode::as_str, "ExecutionMode");
+        assert_matches_db(
+            ValidationStatus::ALL,
+            ValidationStatus::as_str,
+            "ValidationStatus",
+        );
+        assert_matches_db(
+            ValidationTrigger::ALL,
+            ValidationTrigger::as_str,
+            "ValidationTrigger",
+        );
+        assert_matches_db(CheckStatus::ALL, CheckStatus::as_str, "CheckStatus");
+        assert_matches_db(MergeStatus::ALL, MergeStatus::as_str, "MergeStatus");
+        assert_matches_db(
+            ConflictResolution::ALL,
+            ConflictResolution::as_str,
+            "ConflictResolution",
+        );
+        assert_matches_db(ReviewStatus::ALL, ReviewStatus::as_str, "ReviewStatus");
+        assert_matches_db(
+            ReviewRecommendation::ALL,
+            ReviewRecommendation::as_str,
+            "ReviewRecommendation",
+        );
+        assert_matches_db(CheckName::ALL, CheckName::as_str, "CheckName");
+        assert_matches_db(
+            MilestoneStatus::ALL,
+            MilestoneStatus::as_str,
+            "MilestoneStatus",
+        );
         assert_matches_db(
             FailoverPolicy::ALL,
             FailoverPolicy::as_str,
