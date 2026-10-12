@@ -145,6 +145,7 @@ pub enum Req {
     ChatMerge,
     ChatMergeReview,
     ChatMergeIntegrate,
+    MilestoneCreate,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,6 +214,9 @@ pub enum Notice {
     Info(String),
     Error(String),
 }
+
+/// Cuánto dura un aviso del pie (ms).
+const NOTICE_TTL_MS: i64 = 8_000;
 
 pub const PERFORMANCE: [(&str, &str); 4] = [
     ("ECO", "Eco"),
@@ -423,6 +427,10 @@ pub struct App {
     /// Barra de comandos abierta (`:`), con lo escrito.
     pub command: Option<String>,
     pub notice: Option<Notice>,
+    /// Cuándo se puso `notice` (ms), para que caduque solo.
+    notice_at: i64,
+    /// Nuevo milestone en la vista 17: `(nombre, con aprobación)` mientras se escribe.
+    pub milestone_input: Option<(String, bool)>,
     /// El último preflight chat → `main` quedó listo y con revisión aprobada: la siguiente
     /// `Ctrl+G` integra. Cualquier otra tecla lo desarma.
     pub chat_merge_armed: bool,
@@ -499,6 +507,8 @@ impl App {
             frame: 0,
             selection: None,
             copy: None,
+            notice_at: 0,
+            milestone_input: None,
             chat_merge_armed: false,
             mouse: true,
             chat_max: std::cell::Cell::new(u16::MAX),
@@ -845,10 +855,12 @@ impl App {
 
     pub fn info(&mut self, text: impl Into<String>) {
         self.notice = Some(Notice::Info(text.into()));
+        self.notice_at = self.now_ms;
     }
 
     pub fn error(&mut self, text: impl Into<String>) {
         self.notice = Some(Notice::Error(text.into()));
+        self.notice_at = self.now_ms;
     }
 
     // --- mensajes -----------------------------------------------------------
@@ -867,6 +879,11 @@ impl App {
             Msg::Tick(now) => {
                 self.now_ms = now;
                 self.ticks += 1;
+                // Un aviso no se queda hasta la siguiente tecla: caduca solo.
+                if self.notice.is_some() && now - self.notice_at > NOTICE_TTL_MS {
+                    self.notice = None;
+                    self.dirty = true;
+                }
                 let poll = self.ticks.is_multiple_of(POLL_TICKS);
                 if self.loaded() && self.connected && self.inflight == 0 && (self.dirty || poll) {
                     self.dirty = false;
@@ -1040,6 +1057,10 @@ impl App {
             Req::System => self.system = Some(v.clone()),
             Req::MilestoneDecide => {
                 self.info("Decisión registrada.");
+                return self.refresh();
+            }
+            Req::MilestoneCreate => {
+                self.info("Milestone creado.");
                 return self.refresh();
             }
             Req::PerformanceSet => {
@@ -2201,6 +2222,38 @@ impl App {
 
     /// 17: gate de un milestone.
     fn milestones_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        // Escribiendo el nombre de un milestone nuevo.
+        if let Some((name, approval)) = self.milestone_input.as_mut() {
+            match key.code {
+                KeyCode::Esc => self.milestone_input = None,
+                KeyCode::Tab => *approval = !*approval,
+                KeyCode::Backspace => {
+                    name.pop();
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    name.push(c);
+                }
+                KeyCode::Enter => {
+                    let (n, a) = (name.trim().to_string(), *approval);
+                    if n.is_empty() {
+                        self.error("El milestone necesita un nombre.");
+                        return Vec::new();
+                    }
+                    self.milestone_input = None;
+                    return vec![call(
+                        Req::MilestoneCreate,
+                        "milestone.create",
+                        json!({ "project_root": self.root(), "name": n, "requires_approval": a }),
+                    )];
+                }
+                _ => {}
+            }
+            return Vec::new();
+        }
+        if key.code == KeyCode::Char('n') {
+            self.milestone_input = Some((String::new(), true));
+            return Vec::new();
+        }
         if self.move_selection(key.code) {
             return Vec::new();
         }
@@ -2259,8 +2312,58 @@ impl App {
     }
 
     /// 28: validación del agente.
+    /// El fallo de la última validación de cada tier, como mensaje para el agente.
+    fn validation_failure_text(&self) -> Option<String> {
+        let runs = self.validation.as_ref()?["runs"].as_array()?;
+        let mut seen: Vec<i64> = Vec::new();
+        let mut out: Vec<String> = Vec::new();
+        for r in runs {
+            let tier = r["tier"].as_i64().unwrap_or(0);
+            if seen.contains(&tier) {
+                continue;
+            }
+            seen.push(tier);
+            for c in r["checks"].as_array().into_iter().flatten() {
+                let status = c["status"].as_str().unwrap_or("");
+                if status == "PASS" {
+                    continue;
+                }
+                let name = c["name"].as_str().unwrap_or("?");
+                let summary: Vec<&str> = c["summary"]
+                    .as_str()
+                    .unwrap_or("")
+                    .lines()
+                    .take(12)
+                    .collect();
+                out.push(format!(
+                    "- tier {tier} · {name}: {status}\n{}",
+                    summary.join("\n")
+                ));
+            }
+        }
+        (!out.is_empty()).then(|| {
+            format!(
+                "La validación de la tarea falló. Corrígelo y avisa cuando esté listo:\n{}",
+                out.join("\n")
+            )
+        })
+    }
+
     fn validation_key(&mut self, key: KeyEvent) -> Vec<Call> {
         match key.code {
+            // «Enviar al agente» (FLOW §15.1): el fallo vuelve a su sesión.
+            KeyCode::Char('e') => match (&self.flow_agent, self.validation_failure_text()) {
+                (Some(id), Some(text)) => vec![call(
+                    Req::Send,
+                    "agent.send",
+                    json!({ "agent": id, "text": text }),
+                )],
+                (_, None) => {
+                    self.info("No hay fallos de validación que enviar.");
+                    Vec::new()
+                }
+                (None, _) => Vec::new(),
+            },
             KeyCode::Char('r') => match &self.flow_agent {
                 Some(id) => vec![call(
                     Req::ValidationRun,

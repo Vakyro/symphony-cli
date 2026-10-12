@@ -405,7 +405,6 @@ impl Runtime {
             model,
             &reason,
             "RESTART",
-            "phase done",
             None,
             None,
             None,

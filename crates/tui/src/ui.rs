@@ -176,11 +176,13 @@ fn hints(app: &App) -> &'static str {
         }
         Screen::TaskDetail => "a abrir el agente · r releer · Esc volver a tareas",
         Screen::Milestones => {
-            "↑↓ elegir · a aprobar · c pedir cambios · h retener · r releer · Esc volver"
+            "↑↓ elegir · n nuevo · a aprobar · c pedir cambios · h retener · r releer · Esc volver"
         }
         Screen::System => "p cambiar perfil · r releer · Esc volver",
         Screen::PerformanceProfile => "↑↓ elegir · Enter aplicar · Esc volver",
-        Screen::Validation => "r volver a validar · g integración · Esc volver al agente",
+        Screen::Validation => {
+            "r volver a validar · e enviar el fallo al agente · g integración · Esc volver al agente"
+        }
         Screen::MergePreflight => {
             "p preflight · a aprobar · i integrar · x abandonar · c conflictos · w revisar · y veredicto"
         }
@@ -1984,6 +1986,21 @@ fn milestones(app: &App, f: &mut Frame, area: Rect) {
                 "      Gate Review: a aprobar · c pedir cambios · h retener",
             )));
         }
+    }
+    if let Some((name, approval)) = &app.milestone_input {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            bold("Nuevo milestone: "),
+            Span::raw(format!("{name}▏")),
+        ]));
+        lines.push(Line::from(dim(format!(
+            "  Tab: {} · Enter crear · Esc cancelar",
+            if *approval {
+                "con aprobación"
+            } else {
+                "sin aprobación"
+            }
+        ))));
     }
     paragraph(f, area, "Milestones", lines);
 }

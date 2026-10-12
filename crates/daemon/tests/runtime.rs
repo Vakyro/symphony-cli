@@ -1462,8 +1462,8 @@ content = "continued\n"
         &e,
         "SELECT content FROM messages WHERE role = 'EXECUTOR_CHANGE'",
     );
-    assert!(separator.contains("alpha / alpha/fast → beta / beta/fast"));
-    assert!(separator.contains("Agent #1, task and workspace unchanged"));
+    assert!(separator.contains("alpha/fast → beta/fast"));
+    assert!(separator.contains("Agente #1, tarea y workspace sin cambios"));
     assert!(created.worktree.join("from-alpha.txt").is_file());
     assert!(created.worktree.join("from-beta.txt").is_file());
     assert_eq!(

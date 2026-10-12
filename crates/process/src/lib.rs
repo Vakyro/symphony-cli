@@ -391,7 +391,14 @@ impl Supervised {
             std::collections::HashMap::new();
         for (pid, p) in sys.processes() {
             if let Some(parent) = p.parent().filter(|_| alive(p)) {
-                children.entry(parent).or_default().push(*pid);
+                // Windows no actualiza el padre al morir y reutiliza PIDs: un proceso ajeno puede
+                // «colgarse» de un PID nuevo. Un hijo no puede ser más viejo que su padre.
+                let genuine = sys
+                    .process(parent)
+                    .is_some_and(|pp| pp.start_time() <= p.start_time());
+                if genuine {
+                    children.entry(parent).or_default().push(*pid);
+                }
             }
         }
         let mut seen: std::collections::HashSet<sysinfo::Pid> = std::collections::HashSet::new();

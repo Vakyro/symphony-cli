@@ -946,10 +946,10 @@ impl Runtime {
             RunEndReason::QuotaExhausted
         };
         let who = l.adapter.display_name();
-        let (why, why_en) = if auth {
-            (format!("{who} rechazó el login"), "login rejected")
+        let why = if auth {
+            format!("{who} rechazó el login")
         } else {
-            (format!("{who} se quedó sin cuota"), "quota exhausted")
+            format!("{who} se quedó sin cuota")
         };
         let failure_id = ProviderFailureId::new();
         let (failed_provider, failed_model, failed_err) =
@@ -1095,7 +1095,6 @@ impl Runtime {
                 model,
                 &reason,
                 "FAILOVER",
-                why_en,
                 Some(failure_id),
                 None,
                 pending,
@@ -1118,7 +1117,6 @@ impl Runtime {
         model: repo::EligibleModel,
         reason: &str,
         change: &'static str,
-        reason_en: &str,
         failure_id: Option<ProviderFailureId>,
         message: Option<&str>,
         route: Option<crate::routing::Pending>,
@@ -1136,21 +1134,15 @@ impl Runtime {
                     .await
                     .map_err(AgentOpError)?;
                 let old = self.read_op(|c| repo::get_run(c, from))?;
-                let old_name = self
-                    .adapter(&old.provider_id)
-                    .map_or_else(|| old.provider_id.clone(), |a| a.display_name().to_string());
+                // El id del modelo ya lleva al proveedor: no se repite (observación de Leo, Día 2).
                 let separator = format!(
-                    "── Executor changed: {old_name} / {} → {} / {}\nReason: {reason_en}\nAgent #{}, task and workspace unchanged\nHandoff restored from checkpoint #{}",
-                    old.model_id,
-                    adapter.display_name(),
-                    model.model_id,
-                    agent.number,
-                    h.checkpoint_seq
+                    "── Executor cambiado: {} → {}\nMotivo: {reason}\nAgente #{}, tarea y workspace sin cambios\nHandoff restaurado del checkpoint #{}",
+                    old.model_id, model.model_id, agent.number, h.checkpoint_seq
                 );
                 // FLOW §13.3: el checkpoint puede estar atrasado; el código se rehace del worktree.
                 let separator = if h.stale {
                     format!(
-                        "{separator}\nWarning: checkpoint #{} may be stale (there was activity after it); the code state was rebuilt from the workspace",
+                        "{separator}\nAviso: el checkpoint #{} puede estar atrasado (hubo actividad después); el estado del código se reconstruyó del workspace",
                         h.checkpoint_seq
                     )
                 } else {
@@ -1522,7 +1514,6 @@ impl Runtime {
             model,
             &reason,
             "USER_SWITCH",
-            "user switch",
             None,
             message,
             route,
@@ -1754,7 +1745,6 @@ impl Runtime {
                     next,
                     &reason,
                     "FAILOVER",
-                    "context threshold",
                     None,
                     Some(text),
                     route,
@@ -1831,7 +1821,6 @@ impl Runtime {
         change: &'static str,
         resolution: &str,
         reason: &str,
-        reason_en: &str,
     ) -> Result<RunId, AgentOpError> {
         if self.is_live(agent_id) {
             let number = self
@@ -1871,7 +1860,6 @@ impl Runtime {
                 model,
                 reason,
                 change,
-                reason_en,
                 None,
                 None,
                 None,
@@ -1896,7 +1884,6 @@ impl Runtime {
             "RESTART",
             "RESTART",
             "El usuario reinició el agente desde su último checkpoint.",
-            "user restart",
         )
         .await
     }
@@ -1909,7 +1896,6 @@ impl Runtime {
             "RECLAIM",
             "RECLAIM",
             "Se recuperó el agente tras perder el latido del executor.",
-            "reclaim after lost heartbeat",
         )
         .await
     }
