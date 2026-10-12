@@ -1,107 +1,78 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-12 · por claude-code/sonnet-5.5
-**Fase actual:** P09 · Context Engine cerrada (`p09-done`). Orden de ADR-0010: P10 ✅ → P09 ✅ → P08 ✅ (`p08-done`, benchmark aprobado por Leo el 2026-10-12). P11 y P10 cerradas; P07.S10 cerrada por ADR-0010
-**Paso actual:** **P08.S1–S10 ✅ (benchmark aprobado por Leo, merge a `main` y tag `p08-done` hechos)** (S5: DAG, milestones y plan por fases con sesión nueva por fase) (migración 004 + `PHASE_DONE`; clasificador y Resource Manager; scheduler con cola, slots, retención por hook y tope por cuota; límites del SO y tabla `processes`; rama `phase/p08-runtime-multiagente`, bitácora `docs/phases/P08-multiagente.md`); siguiente: P12 en adelante (siguen provisionales; replanificar con Leo). Antes de esto: ninguno en curso. OpenCode integrado (P11.S7, ADR-0012; también se corrigió la detección de Codex 0.160+ en Windows: **reinstala Symphony** con los dos `cargo install --force`). Siguen, en orden: correcciones F5/F6 de Signalia y, con las decisiones de Leo, P08 (ADR-0011). P12–P16 siguen provisionales
-**Cierre de P07.5 (S9):** commit `5c6c6a4`, tabla de coste del handoff por modo (estimación) y coste real medido en vivo (`claude/haiku` + `openai/gpt-5.6-luna`, 10 turnos, n = 1), `ponytail-review` con alcance limitado, `health` no corrido (sin skill). Detalle y decisiones en `docs/phases/P07.5-chat.md` § S9.
-**Estado del paso:** S1 ✅ (un mensaje tras el turno retoma la sesión; live Claude y Codex ✅) · S2 ✅ (instalación global documentada y verificada) · S3 ✅ (el handoff lleva la conversación, recortada por modo; 10 turnos en `raw` ✅) · S4 ✅ (chat idempotente en `symphony/chat`, turno termina en `READY`; L2 ✅, sin live) · S5 ✅ (commit por turno del chat y `AgentStateChanged` en el bus; L2 ✅, sin live) · S6 ✅ (cambio manual con mensaje, failover del chat y umbral de tokens opcional; L1/L2 ✅, sin live) · S8 ✅ (skills nativas de Claude y Codex verificadas en el chat; corregido `/skill` tras cambio de proveedor; live L3 ✅, ver bitácora) · S7 ✅ (vista Chat como inicio, `chat.get`, FLOW + Journey F; snapshots ✅; probado en terminal con live mínimo Claude→Codex ✅, 4 bugs corregidos; opinión de Leo documentada en `docs/research/uso-v0.1.md` § Día 2, pendiente de priorizar). Bitácora: `docs/phases/P07.5-chat.md`.
-**En curso por:** nadie (cola lista para la próxima sesión)
+**Actualizado:** 2026-10-12 · por claude-code/opus-5.5
+**Fase actual:** P11.5 · Pendientes y pulido (rama `phase/p115-pendientes`, por crear desde `main`)
+**Paso actual:** P11.5.S1 · `ctx://` con `@` y caracteres reservados en la ruta
+**Estado del paso:** sin empezar
+**En curso por:** nadie
+
+**Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P13 → P16**. El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: ✅ (443 tests en `phase/p09-context-engine`; los live se omiten sin `SYMPHONY_LIVE=1`). Los tests intermitentes del chat y de cuota (fallaban en Linux en 4 de 5 corridas del CI) tenían dos causas, ya corregidas (LEARNINGS P07.5): choque de git sobre el índice y `EPIPE` al escribir el prompt a un CLI que ya salió.
-- `cargo deny check`: ✅ (solo avisos de duplicados)
-- CI en main: ✅ (ubuntu, windows, macos, msrv, deny). La rama `phase/p07-tui` y el tag `v0.1.0` se pushean en P07.S8.
+- `cargo xtask check`: ✅ en `main` al cierre de P08 (558 tests; los live se omiten sin `SYMPHONY_LIVE=1`).
+- `cargo deny check`: ✅ (solo avisos de duplicados).
+- CI en `main`: ✅ (ubuntu, windows, macos, msrv, deny).
 - Tests conocidos en rojo: ninguno.
 
-## Progreso de la fase
-- [x] P07.S1 Arquitectura TUI (suscripción al bus + métodos IPC de vistas)
-- [x] P07.S2 Launch, First-run y Provider Setup
-- [x] P07.S3 Home
-- [x] P07.S4 New Agent y Model Picker básico
-- [x] P07.S5 Vista de agente (+ «Abrir en el CLI», attach de ADR-0005)
-- [x] P07.S6 Providers y Recovery Center
-- [x] P07.S7 Snapshots y E2E (terminal real ✅ Leo; Journey A live con Claude Code ✅ 17 s)
-- [x] P07.S8 Release v0.1.0 (tag `v0.1.0`, CHANGELOG, build release: daemon idle 16.5 MB)
-- [x] P07.S9 Cierre (revisión de código: 1 hallazgo corregido, `spawn src/main.rs …` ya no se toma como modelo; `health` no corrido)
-- [x] P07.S10 Replanificación (cerrada por ADR-0010: P10 → P09 → P08 completas)
+## Cola de trabajo (en orden)
+Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `docs/phases/`.
 
-## Progreso de P07.5
-- [x] P07.5.S1 Continuar la sesión después del turno (`continue_session`)
-- [x] P07.5.S2 Instalación global mínima
-- [x] P07.5.S3 Handoff conversacional
-- [x] P07.5.S4 Agente «chat general» (worktree `symphony/chat`, `Running → Ready`)
-- [x] P07.5.S5 Commit por turno y estado en el bus
-- [x] P07.5.S6 Cambio de modelo/proveedor
-- [x] P07.5.S7 Vista Chat como inicio
-- [x] P07.5.S8 Skills en el chat
-- [x] P07.5.S9 Cierre (gate)
+**P11.5 · Pendientes y pulido** (`phase/p115-pendientes`, bitácora `docs/phases/P11.5-pendientes.md`)
+- [ ] S1 `ctx://` con `@` y caracteres reservados en la ruta
+- [ ] S2 Permisos de proveedores en `config.toml` (defaults iguales)
+- [ ] S3 Respuesta construyéndose en el chat (deltas de Claude)
+- [ ] S4 Router: `needed_context` y aviso de checkpoint obsoleto
+- [ ] S5 Lote: el tope de simultáneos sigue a la cuota
+- [ ] S6 Merge chat → `main` con review agent (ADR-0006)
+- [ ] S7 Pulido de la TUI (milestones, «Enviar al agente», avisos que caducan)
+- [ ] S8 Medir `resume` y `/compact` con OpenCode gratuito
+- [ ] S9 Live gratuito con OpenCode (broker MCP, handoff, plan por fases, review)
+- [ ] S10 Deuda anotada
+- [ ] S11 Cierre (`p115-done`)
 
-## Próxima acción concreta
-Cola de trabajo, en orden. Base verificada el 2026-10-10: `cargo xtask check` ✅ (427 tests). La rama `phase/p09-context-engine` no está pusheada (13 commits sobre `main`). Cada paso: leer su sección del PLAN o su ADR, bitácora, commit `[PNN.SX]`, STATUS. **Los puntos marcados con ⛔ son de parada:** se documentan y se sigue con el siguiente que no dependa de ellos.
+**P12 · Plugins** (`phase/p12-plugins`): S1 protocolo y manifiesto · S2 plugin host · S3 plugin de ejemplo · S4 cierre (`p12-done`)
 
-1. ~~**P09.S8 · Broker MCP**~~ ✅ hecho (bitácora P09 § S8). **Pendiente:** live (que Claude/Codex llamen `context_search`) y registro en Kimi, Antigravity y Copilot; se hace con el adapter de OpenCode (gratuito, permitido por Leo) o con permiso para gastar cuota.
-2. ~~**P09.S9 · Skills y MCP compartidos**~~ ✅ hecho (bitácora P09 § S9). Codex sin traducción de skills (sin directorio por invocación) y Kimi/Antigravity/Copilot sin traducción: pendientes de su re-validación.
-3. ~~**P09.S11 · Cierre**~~ ✅ hecho: revisión de código (8 hallazgos corregidos, 4 documentados), CI verde en ubuntu, windows, macos, msrv y deny, merge a `main` y tag `p09-done`. **Pendiente (live):** broker MCP, registro en los CLIs y S10 con proveedores reales.
-4. ~~**OpenCode como proveedor**~~ ✅ hecho en `phase/p11-opencode` (ADR-0012, bitácora P11 § S7; live gratuito OK). Detalle original: (ADR-0012, rama `phase/p11-opencode`): agregar el paso `P11.S7 · OpenCode` al PLAN; crate `symphony-adapter-opencode` según ADR-0012 § Decisión (ids `opencode/<modelo>` y `opencode/<proveedor>:<modelo>`, failover automático, `resume` con `-s`); fixtures recapturados con un modelo gratuito y sanitizados; suite de contrato; registro del broker MCP de S8 si OpenCode lo admite; QUICKSTART (permisos: sin sandbox). Lo observado del CLI está en `docs/research/opencode-y-calidad-de-proveedores.md` § 2. Prueba live con modelos gratuitos de OpenCode (`opencode/…-free`, `opencode/big-pickle`): **permitida** por Leo (2026-10-10). No usar la credencial de Copilot dentro de OpenCode sin revisar antes `docs/research/tos.md`.
-5. ~~**Correcciones de Signalia sin ADR**~~ ✅ F5 y F6 hechas en `phase/p10-signalia-fixes` (un run que muere tras un límite se cierra con esa causa; `symphony resume` reabre un agente `FAILED`). Original: **Correcciones de Signalia sin ADR** (`docs/research/uso-signalia.md` § 6, rama `phase/p10-fixes`): **F5** un run que muere poco después de un rate limit o una cuota registrada termina con esa causa y no como `NO_HEARTBEAT`/`CRASH`; **F6** `resume` reanuda un agente `FAILED` con el mismo modelo (la transición `FAILED → READY` ya existe) sin pasar por `switch`. Si alguna exige tocar enums o transiciones del core: ⛔ ADR primero.
-6. ✅ **P08 · Decisiones de Leo recibidas (2026-10-11, ADR-0013 ACEPTADO); sigue P08.S1 en `phase/p08-runtime-multiagente`.** Antes era ⛔: La propuesta está escrita en `docs/adr/0013-p08-agentes-con-plan-y-delegacion.md` (PROPUESTO, con recomendaciones y las 5 preguntas). Texto original: Con lo de arriba hecho, se puede dejar listo, sin código: (a) una propuesta de ADR (estado PROPUESTO) que integre ADR-0011 (plan por fases y tareas, sesión nueva por fase, `/compact` entre tareas, configuración `auto`/`preguntar`, mínimo 2 tareas por fase) en el diseño de P08; (b) qué features candidatas de Signalia entran en P08 (F1 modo delegado del chat, F2 `agent.*` por MCP, F3 plan de lote, F4 concurrencia según cuota, F7 gate y commit por agente, F8 preparación del worktree, F9 capacidades por proveedor, F10 lista de modelos permitidos, F11–F13); (c) la decisión «phase + conditions» frente a los 12 estados (P08.S1); (d) la migración de Fase 2 será la 004, no la 002 que dice el PLAN. P08 no empieza sin la aprobación de Leo.
+**P14 · Sugerencias de modelo** (`phase/p14-sugerencias`): S1 migración **006** · S2 sugerencias por reglas · S3 desempeño aprendido (umbral en ADR) · S4 experimentos ML (ADR; rechazar es válido) · S5 cierre (`p14-done`)
 
-**Requisito de Leo (2026-10-11):** instalación única y global en la computadora, se abre solo con `symphony`, y nada se instala a mano en cada proyecto/carpeta. Documentado en `CONSTRAINTS.md` A12 y `QUICKSTART.md` § 1. P08 y cualquier adapter nuevo deben cumplirlo: hooks, skills y MCP por invocación, sin escribir en el proyecto del usuario.
+**P15 · GUI de escritorio** (`phase/p15-gui`): S1 puente · S2 scaffold · S3 vistas · S4 diseño y QA · S5 bundles en CI · S6 cierre (`p15-done`)
 
-**Permiso de Leo (2026-10-10):** pruebas live (`SYMPHONY_LIVE=1`) **solo con modelos gratuitos** (hoy, los gratuitos de OpenCode). **Siempre ⛔ (necesitan a Leo):** cualquier prueba live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); la re-validación de Kimi, Antigravity y Copilot (criterios en `docs/research/opencode-y-calidad-de-proveedores.md` § 4; Leo: solo Claude Code y Codex le han funcionado bien); ToS de los proveedores de P11; permisos de proveedores en `config.toml`.
+**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): S1 seguridad · S2 fuzzing · S3 recuperación y 4 h · S4 rendimiento y retención · S5 calidad del repo · S6 mdBook (+ guía SSH) · S7 pipeline de release en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
 
-**Datos que siguen sirviendo:** un cambio de proveedor cuesta el arranque del CLI de destino (Claude ~27,5k, Codex ~18k tokens) más el handoff (~2,4k–2,9k), medido el 2026-09-30 con n = 1; falta una conversación larga (≥ 100 mensajes) y entender por qué Codex «continuar» sube a 48k.
+**P16 · Validación final** (`phase/p16-validacion`): S1 checklist · S2 E2E (fake-agents) · S3 benchmark · S4 instalación limpia en CI · S5 docs as-built · S6 release ⛔ · S7 retrospectiva
 
-## Propuesta clave para S10: Chat agentico con failover entre proveedores
+## Permisos vigentes (sin preguntar)
+- Merge `--no-ff` de la rama de fase a `main`, tag `pNN-done`, push de `main` y del tag (memoria «merge a main OK»).
+- Live (`SYMPHONY_LIVE=1`) **solo con modelos gratuitos de OpenCode** (`opencode/…-free`, `opencode/big-pickle`), 2026-10-10.
+- Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
-**Descubierto en pruebas de Leo.** El atractivo principal de Symphony no es orquestar múltiples agentes autónomos complejos, sino ofrecer un **chat simple y agentico (como Claude Code o Codex) que cambia automáticamente entre proveedores cuando uno agota su contexto, sin perder historial**.
-
-| Aspecto | Descripción |
-|---|---|
-| **Experiencia** | Chat familiar: escribe tareas, obtén respuestas con tools/skills. Selecciona proveedores disponibles (ej: Claude Code + Codex). |
-| **Killer feature** | Cuando un proveedor agota tokens/contexto, pasa automáticamente al siguiente con el historial intacto. El usuario puede cambiar manualmente también. |
-| **Contexto en failover** | Historial local en `.symphony/`; al cambiar, resume la sesión con lo acumulado: "aquí está todo hasta ahora, continuemos con...". Cada proveedor adapta a sus límites. |
-| **Skills** | Hereda las skills del proyecto (build, test, review, etc.); se invocan según el proveedor activo. |
-| **Ubicación en plan** | Decisión en S10; implementación en P08 si se aprueba. Recicla event bus, adapters y runtime de P05–P07. |
-
-Véase `docs/research/uso-v0.1.md` § "Recomendación clave" para detalles y validaciones pendientes.
+## Para Leo (⛔ — el agente anota aquí y sigue)
+Formato: paso · qué hace falta · comando exacto si aplica.
+- **Siempre ⛔:** live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); push de ramas que no sean `main`; publicar releases o pushear tags `v*`; cambiar defaults de permisos de proveedores; ToS.
+- P08 · Live de plan por fases y bloque ```review con Claude/Codex (si S9 con OpenCode no basta).
+- P08 · Revisión de fluidez de las vistas 15–19 y 26–28 en una terminal real.
+- P09 · Que Claude y Codex llamen a `context_search` en vivo y que Codex `exec` apruebe herramientas MCP sin preguntar.
+- P11 · Re-validación de Kimi, Antigravity y Copilot (criterios en `docs/research/opencode-y-calidad-de-proveedores.md` § 4); ToS de los tres y de usar la credencial de Copilot dentro de OpenCode; skills de los tres; sondear los modelos habilitados de Copilot; Kimi sin sandbox.
+- P11 · Los 17 pares live de handoff restantes (n = 1 hoy).
+- ADR-0013 D2 · Medir `/compact` con Claude/Codex (si S8 no lo resuelve con OpenCode).
 
 ## Handoff para el siguiente agente
-- **Dónde retomar (2026-09-30):** P07.5 cerrada y fusionada a `main` (tag `p075-done`). Empieza por **P07.S10** (replanificación de P08–P16) en una rama nueva; la bitácora de P07.5 (`docs/phases/P07.5-chat.md`) tiene el cierre, las decisiones de S9 y lo que quedó sin medir. Corre `cargo xtask check` antes de tocar código.
-- **Contexto de esta sesión:** `docs/research/spike-p08-decisiones.md` y `docs/adr/0006-chat-general-y-replanificacion.md` tienen las decisiones y su evidencia; `docs/progress/SESSIONS.md` y `LEARNINGS.md` (sección P07.5) resumen lo hecho y aprendido.
-- **Pistas para S4 (agente «chat general»)** — verificar en el código antes de fiarse:
-  - `runtime.rs` `create_agent` crea task + worktree + branch + checkpoint + run; la rama sale de `symphony_git::agent_branch(...)`. El chat necesita rama fija `symphony/chat` basada en `main` y ser idempotente (uno por proyecto): decidir cómo se identifica (¿`tasks.kind`? revisar los CHECK de DB §3.B y `docs/spec/symphony_database.md`).
-  - `executor.rs` `finish_natural`: con exit 0 hoy pone `Completed` + task `Done`. Para el chat debe dejar `Ready` («esperando mensaje») y la task abierta. Requiere `Running → Ready` en `core/src/transitions.rs` (tabla exacta + tests, sin migración).
-  - `continue_session` ya admite agentes `Ready`; `switch()` ya admite `Ready` pero no `Completed` (S6).
-  - S6: al cambiar de modelo con un mensaje nuevo, guardar ese mensaje como `USER` aparte (el primer `USER` de un run con handoff se descarta al armar la conversación).
-- **Instalación local:** hay una sola copia de `symphony`/`symphonyd` en `~/.cargo/bin` (con S1, sin S3). Para probar lo nuevo: `symphony daemon stop` y los dos `cargo install --path … --locked --force` (QUICKSTART §1).
-- **Ramas remotas:** `spike/p08-decisiones` ya está fusionada en `main` y puede borrarse.
-- La TUI está en `crates/tui`: `app.rs` tiene el estado y la lógica pura, `ui.rs` el render, `io.rs` el IPC y `lib.rs` el loop de terminal. Lee «Decisiones tomadas» en la bitácora P07.
-- Para regenerar los snapshots: `INSTA_UPDATE=always cargo nextest run -p symphony-tui`. Revísalos antes de commitear.
-- Si un test deja un `symphonyd.exe` huérfano, el build falla con «Acceso denegado» (LEARNINGS P07).
+- Empieza por PLAN § P11.5 y ADR-0014. Corre `cargo xtask check` en `main` antes de crear la rama.
+- La TUI está en `crates/tui`: `app.rs` estado y lógica pura, `ui.rs` render, `io.rs` IPC, `lib.rs` loop. Snapshots: `INSTA_UPDATE=always cargo nextest run -p symphony-tui` y revisar el diff.
+- Si un test deja un `symphonyd.exe` huérfano, el build falla con «Acceso denegado»: mátalo antes.
+- Reinstalar para que Leo use lo nuevo: `symphony daemon stop` y los dos `cargo install --path … --locked --force` (QUICKSTART §1).
+- Mapa del código: `graphify-smart-out/GRAPH_REPORT.md` (rebuild con `python graphify-smart-out/build.py <trigger>`).
 
-## Bloqueos y preguntas para Leo
+## Bloqueos
 - (ninguno)
-
-## Pendientes arrastrados
-- P06–P07: repositorios de executor_changes, messages, provider_failures, tool_calls, checkpoints, checkpoint_refs, handoffs y recovery_items (bitácora P03.S3).
-- Config de proveedores: `--permission-mode` de Claude (default `acceptEdits`) y sandbox de Codex (default `workspace-write`) deberían salir de `config.toml`.
-- (Resuelto en P07.5.S1: mensajes a Claude después de su turno, `resume`.) Decisión del 2026-09-30: los dos pendientes de arriba se **difieren**; ningún criterio de salida de P07.5 depende de ellos.
 
 ## Fases
 | Fase | Estado | Tag |
 |---|---|---|
-| P00 | ✅ | p00-done |
-| P01 | ✅ | p01-done |
-| P02 | ✅ | p02-done |
-| P03 | ✅ | p03-done |
-| P04 | ✅ | p04-done |
-| P05 | ✅ | p05-done |
-| P06 | ✅ | p06-done |
-| P07 | ✅ (S10 pendiente, diferido por Leo) | p07-done, v0.1.0 |
+| P00–P07 | ✅ | p00-done … p07-done, v0.1.0 |
 | P07.5 | ✅ | p075-done |
-| P11 (adelantada por ADR-0008) | ✅ | p11-done |
+| P11 | ✅ | p11-done |
 | P10 | ✅ | p10-done, v0.5.0 |
-| P09 | ✅ | p09-done |
-| P08 | ✅ cerrada (`p08-done`; S1–S10; ADR-0011 y ADR-0013) | |
-| P12–P16 | ⏳ (provisionales) | |
+| P09 | ✅ (live pendientes → P11.5.S9) | p09-done |
+| P08 | ✅ | p08-done |
+| P11.5 | ⏳ siguiente | |
+| P12, P14, P15, P13, P16 | ⏳ en ese orden (ADR-0014) | |
