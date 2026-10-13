@@ -3250,8 +3250,13 @@ async fn handoff_evaluation_forced_kill_by_context_mode() {
     let [raw, safe, balanced, aggressive] = sent[..] else {
         panic!("cuatro modos")
     };
+    // RAW y SAFE mandan lo mismo con un diff chico: cada modo corre con su propio agente y los
+    // hechos del proyecto se consolidan en segundo plano, así que entre corridas puede variar
+    // una veintena de tokens (visto en el CI de Windows: 21 492 frente a 21 512). El orden que
+    // importa es el de los modos que recortan de verdad.
+    const NOISE: i64 = 64;
     assert!(
-        raw >= safe && safe >= balanced && balanced >= aggressive,
+        raw + NOISE >= safe && safe >= balanced && balanced >= aggressive,
         "{sent:?}"
     );
     assert!(
