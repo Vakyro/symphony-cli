@@ -1,0 +1,27 @@
+[package]
+name = "symphony-gui"
+version = "0.1.0"
+description = "GUI de escritorio de Symphony (P15): otra representación del mismo estado, sin lógica de negocio"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+
+# Workspace propio: Tauri trae cientos de dependencias y no deben entrar al gate de Rust
+# (`cargo xtask check`) ni a `cargo deny` del repo principal. CI lo construye en un job aparte.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+symphony-gui-bridge = { path = "../../../crates/gui-bridge" }
+symphony-core = { path = "../../../crates/core" }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
