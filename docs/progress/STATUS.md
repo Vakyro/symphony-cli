@@ -2,7 +2,7 @@
 
 **Actualizado:** 2026-10-12 · por claude-code/sonnet-5.5
 **Fase actual:** P12 · Plugins (rama `phase/p12-plugins`, por crear desde `main`). P11.5 cerrada (`p115-done`)
-**Paso actual:** P12.S1 · Protocolo y manifiesto
+**Paso actual:** P12.S4 · Cierre (revisión de código, merge a `main`, tag `p12-done`)
 **Estado del paso:** sin empezar
 **En curso por:** nadie
 
@@ -30,7 +30,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 - [x] S10 Deuda anotada
 - [x] S11 Cierre (`p115-done`)
 
-**P12 · Plugins** (`phase/p12-plugins`): S1 protocolo y manifiesto · S2 plugin host · S3 plugin de ejemplo · S4 cierre (`p12-done`)
+**P12 · Plugins** (`phase/p12-plugins`, `docs/phases/P12-plugins.md`): ✅ S1 protocolo y manifiesto · ✅ S2 plugin host · ✅ S3 plugin de ejemplo · S4 cierre (`p12-done`)
 
 **P14 · Sugerencias de modelo** (`phase/p14-sugerencias`): S1 migración **007** · S2 sugerencias por reglas · S3 desempeño aprendido (umbral en ADR) · S4 experimentos ML (ADR; rechazar es válido) · S5 cierre (`p14-done`)
 
@@ -49,6 +49,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
+- **Basura que dejé yo:** por un typo de ruta se creó el archivo `C:\LATITU~1\x` (y su carpeta `C:\LATITU~1`) en la raíz del disco. No pude borrarlo: la comprobación de seguridad bloqueó el `rmdir` de una carpeta en la raíz. Es seguro quitarlo con `rmdir /s /q C:\LATITU~1`.
 Formato: paso · qué hace falta · comando exacto si aplica.
 - **Siempre ⛔:** live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); push de ramas que no sean `main`; publicar releases o pushear tags `v*`; cambiar defaults de permisos de proveedores; ToS.
 - **2026-10-12 · cuota gastada sin permiso (error del agente):** la sesión arrancó con `SYMPHONY_LIVE=1` en el entorno y el `cargo xtask check` de baseline de P11.5 corrió los 6 tests live con CLIs reales (`live_benchmark`, `live_handoff`, `live_cost`, `live_resume`, `live_sessions`, `live` de la TUI; ~9 min, 557 pasaron). **Falló `symphony-tui::live live_journey_a_with_claude_code`** (47 s): no se investigó; no es un cambio de P11.5, pero conviene que Leo lo revise (¿Claude Code, auth o cambio de CLI?). Corrección: `unset SYMPHONY_LIVE` antes de todo comando de cargo. Leo: revisa tu terminal de lanzamiento (`echo $SYMPHONY_LIVE`) para que no vuelva a heredarse.
