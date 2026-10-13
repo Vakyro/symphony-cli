@@ -188,6 +188,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     runtime.watch_active_projects();
 
     crate::dependencies::spawn(runtime.clone(), shutdown.clone());
+    crate::suggestions::spawn(runtime.clone(), shutdown.clone());
     let scheduling = Arc::new(crate::scheduling::Scheduling::new(
         symphony_scheduler::Limits::default(),
     ));
@@ -430,6 +431,35 @@ async fn dispatch(req: Request, state: &State) -> Response {
         }
         "merge.get" => merge_get(req, state),
         "review.start" => review_start(req, state).await,
+        "suggestion.list" => {
+            let project = resolve_project(state, &req.params);
+            match project {
+                Ok(p) => match state.runtime.suggestion_list(p.id) {
+                    Ok(v) => Response::ok(req.id, v),
+                    Err(e) => Response::error(req.id, "suggestion_error", e),
+                },
+                Err(e) => Response::error(req.id, "invalid_params", e),
+            }
+        }
+        "suggestion.resolve" => {
+            let id = req.params.get("id").and_then(Value::as_str);
+            let action = req.params.get("action").and_then(Value::as_str);
+            match (id, action) {
+                (Some(id), Some(action)) => {
+                    let runtime = state.runtime.clone();
+                    let (id, action) = (id.to_string(), action.to_string());
+                    let done =
+                        tokio::spawn(async move { runtime.suggestion_resolve(&id, &action).await })
+                            .await;
+                    match done {
+                        Ok(Ok(v)) => Response::ok(req.id, v),
+                        Ok(Err(e)) => Response::error(req.id, "suggestion_error", e),
+                        Err(e) => Response::error(req.id, "suggestion_error", e.to_string()),
+                    }
+                }
+                _ => Response::error(req.id, "invalid_params", "faltan `id` y `action`"),
+            }
+        }
         "plugin.list" => {
             let root = req
                 .params

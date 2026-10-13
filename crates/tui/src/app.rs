@@ -146,6 +146,8 @@ pub enum Req {
     ChatMergeReview,
     ChatMergeIntegrate,
     MilestoneCreate,
+    /// Resolver la sugerencia de modelo pendiente (cambiar, mantener, no sugerir).
+    SuggestionResolve,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -344,6 +346,22 @@ impl AgentView {
 
     pub fn state(&self) -> &str {
         self.inspect["agent"]["state"].as_str().unwrap_or("")
+    }
+
+    /// La sugerencia de modelo pendiente (FLOW §8.5), si hay.
+    pub fn suggestion(&self) -> Option<&Value> {
+        let s = &self.inspect["suggestion"];
+        (!s.is_null()).then_some(s)
+    }
+
+    /// La llamada que resuelve la sugerencia pendiente con `action` (`switch`, `keep`, `mute`).
+    fn resolve_suggestion(&self, action: &str) -> Option<Call> {
+        let id = self.suggestion()?["id"].as_str()?;
+        Some(call(
+            Req::SuggestionResolve,
+            "suggestion.resolve",
+            json!({ "id": id, "action": action }),
+        ))
     }
 
     /// Modelo del run abierto o, si no hay, del último que tuvo.
@@ -1076,6 +1094,15 @@ impl App {
                 self.info("Milestone creado.");
                 return self.refresh();
             }
+            Req::SuggestionResolve => {
+                self.info(match v["status"].as_str() {
+                    Some("ACCEPTED") => "Cambiado al modelo sugerido.",
+                    Some("KEPT") => "Sigues con el modelo actual.",
+                    Some("MUTED") => "No te sugeriré más cambios en este agente.",
+                    _ => "Sugerencia resuelta.",
+                });
+                return self.refresh();
+            }
             Req::PerformanceSet => {
                 self.info(format!(
                     "Perfil {} aplicado: {} proceso(s) pesados a la vez.",
@@ -1490,6 +1517,18 @@ impl App {
                         json!({ "project_root": root }),
                     )
                 }];
+            }
+            for (c, action) in [('t', "switch"), ('k', "keep"), ('n', "mute")] {
+                if key.code == KeyCode::Char(c) {
+                    let call = self
+                        .chat
+                        .as_ref()
+                        .and_then(|v| v.resolve_suggestion(action));
+                    if call.is_none() {
+                        self.info("No hay una sugerencia de modelo pendiente.");
+                    }
+                    return call.into_iter().collect();
+                }
             }
             if key.code == KeyCode::Char('r') {
                 return vec![call(
@@ -1980,6 +2019,18 @@ impl App {
             KeyCode::PageDown => {
                 scroll_view(a, 10);
                 return Vec::new();
+            }
+            KeyCode::Char(c @ ('S' | 'K' | 'N')) => {
+                let action = match c {
+                    'S' => "switch",
+                    'K' => "keep",
+                    _ => "mute",
+                };
+                let call = a.resolve_suggestion(action);
+                if call.is_none() {
+                    self.info("No hay una sugerencia de modelo pendiente.");
+                }
+                return call.into_iter().collect();
             }
             KeyCode::Char('?') => return self.open_explain(),
             KeyCode::Char('v') => return self.open_flow(Screen::Validation),

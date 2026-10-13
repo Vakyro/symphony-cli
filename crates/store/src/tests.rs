@@ -49,6 +49,10 @@ const PHASE3_TABLES: [&str; 7] = [
 ];
 
 /// Tablas que añade la migración 004 (runtime multiagente).
+/// Tablas que añade la migración 007 (sugerencias de modelo y las muestras de aprendizaje, una
+/// por run).
+const PHASE6_TABLES: [&str; 2] = ["model_suggestions", "learning_samples"];
+
 const PHASE2_TABLES: [&str; 9] = [
     "milestones",
     "task_dependencies",
@@ -130,6 +134,7 @@ fn file_db_has_the_schema_and_pragmas() {
         .chain(PHASE4_TABLES.iter())
         .chain(PHASE3_TABLES.iter())
         .chain(PHASE2_TABLES.iter())
+        .chain(PHASE6_TABLES.iter())
         .map(|s| s.to_string())
         .collect();
     tables.sort();
@@ -147,7 +152,7 @@ fn file_db_has_the_schema_and_pragmas() {
         })
         .unwrap()
     };
-    assert_eq!(pragma("user_version"), "6");
+    assert_eq!(pragma("user_version"), "7");
     assert_eq!(pragma("journal_mode"), "wal");
     assert_eq!(pragma("foreign_keys"), "1");
     assert_eq!(pragma("synchronous"), "1"); // NORMAL
@@ -165,7 +170,7 @@ fn file_db_has_the_schema_and_pragmas() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        6
+        7
     );
 }
 

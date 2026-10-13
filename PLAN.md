@@ -1210,11 +1210,11 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **Verifica:** tests de heurísticas; vista en TUI.
 
 ### P14.S3 · Desempeño aprendido
-- **Qué:** ajuste por `(modelo, características de la tarea)` con un mínimo de muestras antes de influir (IDEA §5.7); el umbral queda definido en un ADR.
+- **Qué:** ajuste por `(modelo, características de la tarea)` con un mínimo de muestras antes de influir (IDEA §5.7); el umbral queda definido en un ADR. **Hecho (ADR-0016):** por (profile, modelo), mínimo de 10 muestras, tope ±0,10.
 
 ### P14.S4 · Experimentos ML (opcional, con gate)
 - **Qué:** solo si P10 y P13 muestran que las reglas se quedan cortas: decision model local, compresión ML o embeddings, cada uno detrás de la feature `experimental-ml` y **medido** contra las reglas (latencia, RAM, acierto).
-- **Salida:** ADR que acepta o rechaza cada uno. **Rechazar es un resultado válido.** Primero se revisa la evidencia (benchmarks de P10 y P08, aciertos de S2–S3): si no muestra que las reglas se quedan cortas, el ADR rechaza sin construir nada. CONSTRAINTS prohíbe embeddings en v1: si alguno se aceptara, queda para v1.1.
+- **Salida:** ADR que acepta o rechaza cada uno. **Rechazar es un resultado válido.** **Hecho: ADR-0017 los rechaza para v1.** Primero se revisa la evidencia (benchmarks de P10 y P08, aciertos de S2–S3): si no muestra que las reglas se quedan cortas, el ADR rechaza sin construir nada. CONSTRAINTS prohíbe embeddings en v1: si alguno se aceptara, queda para v1.1.
 
 ### P14.S5 · Cierre
 - Protocolo §4.6. Tag `p14-done`.

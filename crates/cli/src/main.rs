@@ -125,6 +125,11 @@ enum Cmd {
         #[command(subcommand)]
         action: FactCmd,
     },
+    /// Sugerencias de cambio de modelo (nunca se aplican solas).
+    Suggestion {
+        #[command(subcommand)]
+        action: SuggestionCmd,
+    },
     /// Plugins instalados en `~/.symphony/plugins` (validators y context transformers).
     Plugin {
         #[command(subcommand)]
@@ -194,6 +199,27 @@ enum Cmd {
 enum ProvidersCmd {
     /// Vuelve a detectar los CLIs instalados.
     Refresh,
+}
+
+#[derive(Subcommand)]
+enum SuggestionCmd {
+    /// Las sugerencias pendientes de este proyecto.
+    List,
+    /// Cambia al modelo sugerido.
+    Switch {
+        /// Id de la sugerencia (ver `symphony suggestion list`).
+        id: String,
+    },
+    /// Sigue con el modelo actual y descarta la sugerencia.
+    Keep {
+        /// Id de la sugerencia.
+        id: String,
+    },
+    /// Descarta la sugerencia y no vuelve a sugerir cambios para ese agente.
+    Mute {
+        /// Id de la sugerencia.
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -664,6 +690,50 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                 .await?;
                 print_chat_merge(&res);
             }
+        }
+        Some(Cmd::Suggestion { action }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            let (id, verb) = match action {
+                SuggestionCmd::List => {
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .display()
+                        .to_string();
+                    let res =
+                        client::call(&mut conn, "suggestion.list", json!({ "project_root": cwd }))
+                            .await?;
+                    let empty = Vec::new();
+                    let rows = res["suggestions"].as_array().unwrap_or(&empty);
+                    if rows.is_empty() {
+                        println!("No hay sugerencias pendientes.");
+                    }
+                    for s in rows {
+                        println!(
+                            "{}  {} → {}  ({:.0} %)\n    {}",
+                            s["id"].as_str().unwrap_or("?"),
+                            s["current_model_id"].as_str().unwrap_or("?"),
+                            s["suggested_model_id"].as_str().unwrap_or("?"),
+                            s["confidence"].as_f64().unwrap_or(0.0) * 100.0,
+                            s["reason"].as_str().unwrap_or("")
+                        );
+                    }
+                    return Ok(());
+                }
+                SuggestionCmd::Switch { id } => (id, "switch"),
+                SuggestionCmd::Keep { id } => (id, "keep"),
+                SuggestionCmd::Mute { id } => (id, "mute"),
+            };
+            let res = client::call(
+                &mut conn,
+                "suggestion.resolve",
+                json!({ "id": id, "action": verb }),
+            )
+            .await?;
+            println!(
+                "Sugerencia {}: {}",
+                id,
+                res["status"].as_str().unwrap_or("?")
+            );
         }
         Some(Cmd::Plugin { action }) => {
             let mut conn = client::connect_or_start(home).await?;

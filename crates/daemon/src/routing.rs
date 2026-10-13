@@ -60,7 +60,8 @@ pub fn candidates(
 ) -> Result<Vec<Candidate>, RepoError> {
     let mut stmt = conn.prepare(
         "SELECT m.id, m.provider_id, m.display_name, m.enabled, m.supports_tools, m.context_window,
-                m.speed_class, p.setup_state, p.enabled, COALESCE(pm.base_score, 0.5)
+                m.speed_class, p.setup_state, p.enabled, COALESCE(pm.base_score, 0.5),
+                COALESCE(pm.sample_count, 0), COALESCE(pm.outcome_score_sum, 0.0)
          FROM models m
          JOIN providers p ON p.id = m.provider_id
          LEFT JOIN profile_models pm ON pm.model_id = m.id AND pm.profile_id = ?1
@@ -77,6 +78,8 @@ pub fn candidates(
         String,
         bool,
         f64,
+        i64,
+        f64,
     );
     let rows: Vec<Row> = stmt
         .query_map([profile], |r| {
@@ -91,6 +94,8 @@ pub fn candidates(
                 r.get(7)?,
                 r.get::<_, i64>(8)? == 1,
                 r.get(9)?,
+                r.get(10)?,
+                r.get(11)?,
             ))
         })?
         .collect::<Result<_, _>>()?;
@@ -117,7 +122,9 @@ pub fn candidates(
     let mut provider_health: HashMap<String, Health> = HashMap::new();
 
     let mut out = Vec::with_capacity(rows.len());
-    for (id, provider, name, model_on, tools, window, speed, setup, provider_on, base) in rows {
+    for (id, provider, name, model_on, tools, window, speed, setup, provider_on, base, n, sum) in
+        rows
+    {
         let unavailable = if !model_on || !provider_on {
             Some(RejectReason::Disabled)
         } else {
@@ -142,7 +149,8 @@ pub fn candidates(
             supports_tools: tools,
             context_window: window.and_then(|w| u64::try_from(w).ok()),
             speed: speed.as_deref().and_then(|s| s.parse::<SpeedClass>().ok()),
-            base_score: base,
+            // El puntaje base, corregido por lo aprendido solo con las muestras mínimas (ADR-0016).
+            base_score: symphony_core::learning::effective_score(base, n, sum),
             health,
             reserve: cfg.reserve_for(&provider),
             recent_failures: by_model.get(&id).copied().unwrap_or(0)

@@ -103,6 +103,8 @@ pub struct EventBus {
     checkpoints: Checkpointer,
     tui: broadcast::Sender<Arc<BusEvent>>,
     state: Arc<watch::Sender<BusState>>,
+    /// Agentes cuyo checkpoint acaba de tomarse (lo escucha el evaluador de sugerencias).
+    taken: broadcast::Sender<symphony_core::AgentId>,
     /// Texto que el agente va escribiendo en el turno (P11.5.S3), por id de agente. Solo en
     /// memoria: nunca se persiste.
     partial: Arc<std::sync::Mutex<HashMap<String, String>>>,
@@ -117,8 +119,13 @@ impl EventBus {
     pub fn new(writer: WriterHandle, tui_capacity: usize, objects: ObjectStore) -> Self {
         let (tui, _) = broadcast::channel(tui_capacity.max(1));
         let (state, _) = watch::channel(BusState::new());
-        let checkpoints =
-            Checkpointer::start(writer.clone(), objects.clone(), crate::checkpoint::KEEP);
+        let (taken, _) = broadcast::channel(64);
+        let checkpoints = Checkpointer::start(
+            writer.clone(),
+            objects.clone(),
+            crate::checkpoint::KEEP,
+            taken.clone(),
+        );
         forward_state_changes(writer.state_changes(), &tui);
         Self {
             writer,
@@ -126,8 +133,14 @@ impl EventBus {
             checkpoints,
             tui,
             state: Arc::new(state),
+            taken,
             partial: Arc::default(),
         }
+    }
+
+    /// Avisos de «se tomó un checkpoint de este agente».
+    pub fn checkpoints_taken(&self) -> broadcast::Receiver<symphony_core::AgentId> {
+        self.taken.subscribe()
     }
 
     /// Lo que el agente lleva escrito del mensaje en curso (vacío si no hay).

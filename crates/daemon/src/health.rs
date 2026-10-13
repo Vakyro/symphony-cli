@@ -239,6 +239,8 @@ pub fn on_run_finished(
     now: i64,
 ) -> Result<(), RepoError> {
     finish_usage(conn, run, now)?;
+    // Desempeño aprendido (ADR-0016): el resultado del run aporta una muestra.
+    crate::learning::on_run_finished(conn, run)?;
     let (provider, _) = db::run_scope(conn, run)?;
     refresh_estimate(conn, &provider, cfg, now)
 }

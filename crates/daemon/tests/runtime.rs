@@ -5491,3 +5491,324 @@ async fn a_validator_plugin_sees_untracked_new_files() {
     assert!(summary.contains("TODO sin issue"), "{summary}");
     e.writer.shutdown();
 }
+
+// --- P14: desempeño aprendido (ADR-0016) -------------------------------------------------
+
+/// Cada run que termina con un profile aporta una muestra, y con las mínimas el ajuste sube el
+/// puntaje con que compite el modelo (con menos, no influye).
+#[tokio::test(flavor = "multi_thread")]
+async fn learned_performance_counts_each_finished_run_and_raises_the_score_only_with_enough_samples()
+ {
+    let e = env_with(&[("alpha", SAY), ("beta", SAY)], None).await;
+    // El puntaje de `beta/fast` en la decisión de un agente.
+    let score_of = |agent: &str| -> f64 {
+        one(
+            &e,
+            &format!(
+                "SELECT c.score FROM routing_candidates c JOIN routing_decisions d ON d.id = c.decision_id
+                 WHERE d.agent_id = '{agent}' AND c.model_id = 'beta/fast'"
+            ),
+        )
+    };
+    let spawn = |title: &'static str| {
+        let e = &e;
+        async move {
+            let created = e
+                .runtime
+                .create_agent(req(e, title, Execution::Profile("@code".into())))
+                .await
+                .unwrap();
+            e.runtime.wait_executors().await;
+            e.writer.handle().flush().await.unwrap();
+            created.agent_id.to_string()
+        }
+    };
+    let set_beta = |n: i64| {
+        let e = &e;
+        async move {
+            e.writer
+                .handle()
+                .write(Box::new(move |t| {
+                    t.execute(
+                        "UPDATE profile_models SET sample_count = ?1, outcome_score_sum = ?1
+                         WHERE profile_id = '@code' AND model_id = 'beta/fast'",
+                        [n],
+                    )?;
+                    Ok(())
+                }))
+                .await
+                .unwrap();
+        }
+    };
+
+    let first = spawn("uno").await;
+    let baseline = score_of(&first);
+    // El run terminado dejó una muestra para el modelo elegido (@code), todavía sin ajuste.
+    let chosen: String = one(
+        &e,
+        &format!("SELECT model_id FROM agent_runs WHERE agent_id = '{first}' ORDER BY seq LIMIT 1"),
+    );
+    let (n, sum, adj): (i64, f64, Option<f64>) = {
+        let conn = symphony_store::open_reader(&e.db).unwrap();
+        conn.query_row(
+            "SELECT sample_count, outcome_score_sum, learned_adjustment FROM profile_models
+             WHERE profile_id = '@code' AND model_id = ?1",
+            [&chosen],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        (n, sum, adj),
+        (1, 1.0, None),
+        "{chosen}: una muestra, sin ajuste todavía"
+    );
+
+    // Con 9 muestras limpias (menos del mínimo) no influye…
+    set_beta(9).await;
+    let nine = spawn("dos").await;
+    assert!(
+        (score_of(&nine) - baseline).abs() < 1e-9,
+        "{} vs {baseline}",
+        score_of(&nine)
+    );
+    // …y con 10 sube su puntaje.
+    set_beta(10).await;
+    let ten = spawn("tres").await;
+    assert!(
+        score_of(&ten) > baseline + 1e-6,
+        "{} no supera a {baseline}",
+        score_of(&ten)
+    );
+    e.writer.shutdown();
+}
+
+// --- P14.S2: sugerencias de modelo por reglas ----------------------------------------------
+
+/// Una tarea que empieza en documentación y termina tocando código en varias carpetas.
+fn docs_then_refactor() -> String {
+    let edit = |path: &str| {
+        format!("[[step]]\nkind = \"edit\"\npath = \"{path}\"\ncontent = \"x\\n\"\n\n")
+    };
+    // La pausa deja que el checkpoint de la documentación se tome antes del código (sin ella,
+    // los cinco cambios caen en un solo checkpoint y no hay «cómo empezó»).
+    let pause = "[[step]]
+kind = \"sleep\"
+ms = 1500
+
+";
+    format!(
+        "{}{pause}{}{}{}{}",
+        edit("docs/guia.md"),
+        edit("src/a/uno.rs"),
+        edit("src/b/dos.rs"),
+        edit("src/c/tres.rs"),
+        edit("src/c/cuatro.rs"),
+    )
+}
+
+/// Espera (hasta 20 s) a que el agente tenga una sugerencia pendiente.
+async fn pending_suggestion(e: &Env, agent: &str) -> Option<(String, String, String)> {
+    pending_suggestion_for(e, agent, 20).await
+}
+
+async fn pending_suggestion_for(
+    e: &Env,
+    agent: &str,
+    secs: u64,
+) -> Option<(String, String, String)> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    loop {
+        e.writer.handle().flush().await.unwrap();
+        let row: Option<(String, String, String)> = symphony_store::open_reader(&e.db)
+            .unwrap()
+            .query_row(
+                "SELECT id, suggested_model_id, reason FROM model_suggestions
+                 WHERE agent_id = ?1 AND status = 'PENDING'",
+                [agent],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok();
+        if row.is_some() {
+            return row;
+        }
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Fija el puntaje base de un modelo para `@code` (los de fábrica dependen de heurísticas).
+async fn set_code_score(e: &Env, model: &str, score: f64) {
+    let model = model.to_string();
+    e.writer
+        .handle()
+        .write(Box::new(move |t| {
+            t.execute(
+                "UPDATE profile_models SET base_score = ?2 WHERE profile_id = '@code' AND model_id = ?1",
+                rusqlite::params![model, score],
+            )?;
+            Ok(())
+        }))
+        .await
+        .unwrap();
+}
+
+fn suggestion_env_script() -> String {
+    format!(
+        "[[step]]\nkind = \"say\"\ntext = \"Empiezo\"\n\n{}",
+        docs_then_refactor()
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_docs_task_that_becomes_a_refactor_gets_a_suggestion_the_user_can_accept() {
+    let e = env_with(&[("alpha", SAY), ("beta", &suggestion_env_script())], None).await;
+    // `beta/smart` es el modelo más flojo para `@code`: hay uno claramente mejor.
+    set_code_score(&e, "beta/smart", 0.2).await;
+    set_code_score(&e, "alpha/fast", 0.9).await;
+    // Como en el daemon: el evaluador escucha los checkpoints que se van tomando.
+    let evaluator = symphony_daemon::suggestions::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let mut r = req(
+        &e,
+        "Documentar y refactorizar",
+        Execution::Exact("beta/smart".into()),
+    );
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    let agent = created.agent_id.to_string();
+    e.runtime.wait_executors().await;
+
+    let (id, suggested, reason) = pending_suggestion(&e, &agent)
+        .await
+        .expect("debería haber una sugerencia pendiente");
+    assert_ne!(suggested, "beta/smart");
+    assert!(
+        reason.contains("documentación") && reason.contains("varios archivos"),
+        "{reason}"
+    );
+    // Nada cambió por su cuenta: el run sigue siendo el de `beta/smart`.
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT model_id FROM agent_runs WHERE agent_id = '{agent}' ORDER BY seq DESC LIMIT 1"
+            )
+        ),
+        "beta/smart"
+    );
+    // La sugerencia sale en `inspect`.
+    let inspected = e.runtime.inspect(created.agent_id).await.unwrap();
+    assert_eq!(inspected["suggestion"]["id"], id);
+
+    // Aceptarla cambia al modelo sugerido (un run nuevo) y la deja `ACCEPTED`.
+    let done = e.runtime.suggestion_resolve(&id, "switch").await.unwrap();
+    assert_eq!(done["status"], "ACCEPTED");
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT model_id FROM agent_runs WHERE agent_id = '{agent}' ORDER BY seq DESC LIMIT 1"
+            )
+        ),
+        suggested
+    );
+    assert_eq!(
+        one::<String>(
+            &e,
+            &format!("SELECT status FROM model_suggestions WHERE id = '{id}'")
+        ),
+        "ACCEPTED"
+    );
+    // Ya resuelta: no se resuelve dos veces.
+    assert!(e.runtime.suggestion_resolve(&id, "keep").await.is_err());
+    evaluator.abort();
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keeping_clears_the_suggestion_and_muting_stops_the_next_ones() {
+    let e = env_with(&[("alpha", SAY), ("beta", &suggestion_env_script())], None).await;
+    set_code_score(&e, "beta/smart", 0.2).await;
+    set_code_score(&e, "alpha/fast", 0.9).await;
+    // Como en el daemon: el evaluador escucha los checkpoints que se van tomando.
+    let evaluator = symphony_daemon::suggestions::spawn(
+        e.runtime.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let mut r = req(
+        &e,
+        "Documentar y refactorizar",
+        Execution::Exact("beta/smart".into()),
+    );
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    let agent = created.agent_id.to_string();
+    e.runtime.wait_executors().await;
+    let (id, _, _) = pending_suggestion(&e, &agent).await.unwrap();
+
+    // «No sugerir más»: queda `MUTED` y, aunque el agente siga trabajando, no vuelven.
+    let done = e.runtime.suggestion_resolve(&id, "mute").await.unwrap();
+    assert_eq!(done["status"], "MUTED");
+    assert!(
+        !e.runtime
+            .evaluate_suggestion(created.agent_id)
+            .await
+            .unwrap()
+    );
+    assert!(pending_suggestion_for(&e, &agent, 2).await.is_none());
+    assert_eq!(
+        one::<i64>(
+            &e,
+            &format!("SELECT COUNT(*) FROM model_suggestions WHERE agent_id = '{agent}'")
+        ),
+        1
+    );
+    assert!(e.runtime.suggestion_resolve("nada", "keep").await.is_err());
+    evaluator.abort();
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_suggestion_when_the_task_does_not_change_type_or_the_model_is_already_the_best() {
+    // Solo documentación de principio a fin: nada que sugerir.
+    let docs = "[[step]]\nkind = \"edit\"\npath = \"docs/a.md\"\ncontent = \"x\\n\"\n\n[[step]]\nkind = \"edit\"\npath = \"docs/b.md\"\ncontent = \"y\\n\"\n";
+    let e = env_with(&[("alpha", SAY), ("beta", docs)], None).await;
+    let mut r = req(&e, "Solo docs", Execution::Exact("beta/smart".into()));
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    assert!(
+        !e.runtime
+            .evaluate_suggestion(created.agent_id)
+            .await
+            .unwrap()
+    );
+    assert_eq!(count(&e, "model_suggestions"), 0);
+    e.writer.shutdown();
+
+    // Docs → refactor, pero con el mejor modelo ya elegido: tampoco.
+    let e = env_with(&[("alpha", &suggestion_env_script()), ("beta", SAY)], None).await;
+    set_code_score(&e, "alpha/fast", 0.9).await;
+    for m in ["alpha/smart", "beta/fast", "beta/smart"] {
+        set_code_score(&e, m, 0.3).await;
+    }
+    let mut r = req(&e, "Ya con el mejor", Execution::Exact("alpha/fast".into()));
+    r.chat = true;
+    let created = e.runtime.create_agent(r).await.unwrap();
+    e.runtime.wait_executors().await;
+    assert!(
+        !e.runtime
+            .evaluate_suggestion(created.agent_id)
+            .await
+            .unwrap()
+    );
+    assert_eq!(count(&e, "model_suggestions"), 0);
+    e.writer.shutdown();
+}

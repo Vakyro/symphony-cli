@@ -1,15 +1,15 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-12 · por claude-code/sonnet-5.5
-**Fase actual:** P14 · Sugerencias de modelo (rama `phase/p14-sugerencias`, por crear desde `main`). P12 cerrada (`p12-done`)
-**Paso actual:** P14.S1 · Migración 007 (`model_suggestions`)
+**Fase actual:** P15 · GUI de escritorio (rama `phase/p15-gui`, por crear desde `main`). P14 cerrada (`p14-done`)
+**Paso actual:** P15.S1 · Puente (cliente IPC en Rust)
 **Estado del paso:** sin empezar
 **En curso por:** nadie
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P13 → P16**. El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: ✅ al cierre de P11.5 (588 tests; el gate quita `SYMPHONY_LIVE`, nunca corre live).
+- `cargo xtask check`: ✅ al cierre de P14 (634 tests; el gate quita `SYMPHONY_LIVE`, nunca corre live).
 - `cargo deny check`: ✅ (solo avisos de duplicados).
 - CI en `main`: ✅ (ubuntu, windows, macos, msrv, deny).
 - Tests conocidos en rojo: ninguno.
@@ -32,7 +32,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P12 · Plugins** (`phase/p12-plugins`, `docs/phases/P12-plugins.md`): ✅ S1 · ✅ S2 · ✅ S3 · ✅ S4 cierre (`p12-done`)
 
-**P14 · Sugerencias de modelo** (`phase/p14-sugerencias`): S1 migración **007** · S2 sugerencias por reglas · S3 desempeño aprendido (umbral en ADR) · S4 experimentos ML (ADR; rechazar es válido) · S5 cierre (`p14-done`)
+**P14 · Sugerencias de modelo** (`phase/p14-sugerencias`, `docs/phases/P14-sugerencias.md`): ✅ S1 · ✅ S2 · ✅ S3 · ✅ S4 (ML rechazado, ADR-0017) · ✅ S5 cierre (`p14-done`)
 
 **P15 · GUI de escritorio** (`phase/p15-gui`): S1 puente · S2 scaffold · S3 vistas · S4 diseño y QA · S5 bundles en CI · S6 cierre (`p15-done`)
 
@@ -42,6 +42,8 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 ## Para usar lo nuevo (Leo)
 `symphony daemon stop` y luego `cargo install --path crates/cli --locked --force` y `cargo install --path crates/daemon --locked --force` (no lo hice yo: puede haber un daemon tuyo en uso). Novedades: `symphony chat merge`, `symphony review`, `[providers.permissions]`, texto del chat en vivo con Claude, `Ctrl+G`/`Ctrl+R` en el chat.
+
+Novedades de P14: `symphony suggestion list|switch|keep|mute`, banner de sugerencia de modelo en el chat (`Ctrl+T/K/N`) y en la vista del agente (`S/K/N`); el router aprende de los runs (ADR-0016).
 
 Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y el ejemplo `examples/plugins/validator-todo-check` (QUICKSTART § Plugins).
 
@@ -86,4 +88,5 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P08 | ✅ | p08-done |
 | P11.5 | ✅ (live de pago pendientes → Para Leo) | p115-done |
 | P12 | ✅ | p12-done |
-| P14, P15, P13, P16 | ⏳ en ese orden (ADR-0014) | |
+| P14 | ✅ | p14-done |
+| P15, P13, P16 | ⏳ en ese orden (ADR-0014) | |

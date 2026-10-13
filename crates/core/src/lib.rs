@@ -6,6 +6,7 @@ mod config;
 mod enums;
 mod health;
 mod ids;
+pub mod learning;
 mod redact;
 mod transitions;
 
@@ -21,8 +22,8 @@ pub use enums::{
     AccountAuthStatus, AgentState, CheckName, CheckStatus, ConflictResolution, ContextMode,
     ExecutionMode, FailoverPolicy, FailureType, InvalidValue, MergeStatus, MilestoneStatus,
     PerformanceProfile, ProviderState, QuotaCertainty, RejectReason, ReviewRecommendation,
-    ReviewStatus, RoutingTrigger, RunEndReason, RunStatus, SpeedClass, TaskStatus, UsageSource,
-    ValidationStatus, ValidationTrigger,
+    ReviewStatus, RoutingTrigger, RunEndReason, RunStatus, SpeedClass, SuggestionStatus,
+    TaskStatus, UsageSource, ValidationStatus, ValidationTrigger,
 };
 pub use health::{
     DEGRADED_COOLDOWN_MS, EXHAUSTED_PROBE_MS, Health, HealthEvent, NETWORK_COOLDOWN_MS,
