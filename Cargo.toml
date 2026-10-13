@@ -9,6 +9,7 @@ members = [
     "crates/daemon",
     "crates/cli",
     "crates/tui",
+    "crates/gui-bridge",
     "crates/store",
     "crates/object-store",
     "crates/git",
