@@ -55,7 +55,7 @@ pub struct NewSuggestion {
 /// Registra una sugerencia pendiente. `false` si no entró: ya hay una pendiente para el agente
 /// o el usuario apagó las sugerencias de ese agente.
 pub fn insert(conn: &Connection, s: &NewSuggestion, now: i64) -> Result<bool, RepoError> {
-    if is_muted(conn, s.agent_id)? {
+    if is_muted(conn, s.agent_id)? || was_kept(conn, s.agent_id, &s.suggested_model_id)? {
         return Ok(false);
     }
     let n = conn.execute(
@@ -73,6 +73,21 @@ pub fn insert(conn: &Connection, s: &NewSuggestion, now: i64) -> Result<bool, Re
         ],
     )?;
     Ok(n == 1)
+}
+
+/// ¿El usuario ya dijo «mantener» ante esta misma sugerencia (mismo modelo) para este agente?
+/// Entonces no se le vuelve a proponer lo mismo en cada checkpoint.
+pub fn was_kept(
+    conn: &Connection,
+    agent: AgentId,
+    suggested_model: &str,
+) -> Result<bool, RepoError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM model_suggestions
+         WHERE agent_id = ?1 AND suggested_model_id = ?2 AND status = 'KEPT')",
+        params![agent.to_string(), suggested_model],
+        |r| r.get(0),
+    )?)
 }
 
 /// ¿El usuario pidió no recibir más sugerencias para este agente?
@@ -145,10 +160,19 @@ pub fn resolve(
 /// (que solo existe con las muestras mínimas; antes queda `NULL`).
 pub fn record_outcome(
     conn: &Connection,
+    run: &str,
     profile: &str,
     model: &str,
     outcome: learning::Outcome,
 ) -> Result<(), RepoError> {
+    // Idempotente por run: solo la primera vez que se anota cuenta.
+    let first = conn.execute(
+        "INSERT OR IGNORE INTO learning_samples (run_id) VALUES (?1)",
+        [run],
+    )?;
+    if first == 0 {
+        return Ok(());
+    }
     conn.execute(
         "UPDATE profile_models
          SET sample_count = sample_count + 1, outcome_score_sum = outcome_score_sum + ?3

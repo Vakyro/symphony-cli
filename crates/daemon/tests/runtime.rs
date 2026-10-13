@@ -5756,7 +5756,12 @@ async fn keeping_clears_the_suggestion_and_muting_stops_the_next_ones() {
     // «No sugerir más»: queda `MUTED` y, aunque el agente siga trabajando, no vuelven.
     let done = e.runtime.suggestion_resolve(&id, "mute").await.unwrap();
     assert_eq!(done["status"], "MUTED");
-    assert!(!e.runtime.evaluate_suggestion(created.agent_id).unwrap());
+    assert!(
+        !e.runtime
+            .evaluate_suggestion(created.agent_id)
+            .await
+            .unwrap()
+    );
     assert!(pending_suggestion_for(&e, &agent, 2).await.is_none());
     assert_eq!(
         one::<i64>(
@@ -5779,7 +5784,12 @@ async fn no_suggestion_when_the_task_does_not_change_type_or_the_model_is_alread
     r.chat = true;
     let created = e.runtime.create_agent(r).await.unwrap();
     e.runtime.wait_executors().await;
-    assert!(!e.runtime.evaluate_suggestion(created.agent_id).unwrap());
+    assert!(
+        !e.runtime
+            .evaluate_suggestion(created.agent_id)
+            .await
+            .unwrap()
+    );
     assert_eq!(count(&e, "model_suggestions"), 0);
     e.writer.shutdown();
 
@@ -5793,7 +5803,12 @@ async fn no_suggestion_when_the_task_does_not_change_type_or_the_model_is_alread
     r.chat = true;
     let created = e.runtime.create_agent(r).await.unwrap();
     e.runtime.wait_executors().await;
-    assert!(!e.runtime.evaluate_suggestion(created.agent_id).unwrap());
+    assert!(
+        !e.runtime
+            .evaluate_suggestion(created.agent_id)
+            .await
+            .unwrap()
+    );
     assert_eq!(count(&e, "model_suggestions"), 0);
     e.writer.shutdown();
 }

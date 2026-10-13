@@ -1723,6 +1723,10 @@ fn chat_shows_the_model_suggestion_and_resolves_it_with_three_keys() {
     // Sin sugerencia: Ctrl+T/K/N no llaman a nada.
     for c in ['t', 'k', 'n'] {
         assert!(ctrl(&mut app, c).is_empty());
+        // No se calla: dice que no hay nada que resolver.
+        assert!(
+            matches!(&app.notice, Some(Notice::Info(m)) if m.contains("No hay una sugerencia"))
+        );
     }
     app.chat.as_mut().unwrap().inspect = json!({
         "agent": { "state": "READY" },

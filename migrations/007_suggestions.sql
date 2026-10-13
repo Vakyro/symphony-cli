@@ -20,3 +20,8 @@ CREATE INDEX model_suggestions_agent ON model_suggestions(agent_id, status);
 CREATE UNIQUE INDEX model_suggestions_one_pending ON model_suggestions(agent_id) WHERE status = 'PENDING';
 
 ALTER TABLE profile_models ADD COLUMN outcome_score_sum REAL NOT NULL DEFAULT 0;
+
+-- Una muestra por run: si un camino de cierre llama dos veces, la segunda no cuenta.
+CREATE TABLE learning_samples (
+    run_id  TEXT PRIMARY KEY
+) STRICT;

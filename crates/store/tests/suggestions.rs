@@ -58,8 +58,11 @@ fn a_suggestion_is_pending_until_the_user_resolves_it_and_there_is_only_one_at_a
         (SuggestionStatus::Kept, Some(20))
     );
     assert!(pending_of(&conn, agent).unwrap().is_none());
-    // Con la anterior resuelta, entra otra.
-    assert!(insert(&conn, &new(agent, "s3"), 30).unwrap());
+    // Con la anterior resuelta entra otra, si es otra sugerencia (no la misma que se mantuvo).
+    let mut s3 = new(agent, "s3");
+    s3.suggested_model_id = "claude/haiku".into();
+    s3.current_model_id = "claude/sonnet".into();
+    assert!(insert(&conn, &s3, 30).unwrap());
 }
 
 #[test]
@@ -90,7 +93,14 @@ fn a_learned_adjustment_appears_only_after_the_minimum_of_samples() {
         .unwrap()
     };
     for i in 1..learning::MIN_SAMPLES {
-        record_outcome(&conn, "@code", "claude/haiku", learning::Outcome::Clean).unwrap();
+        record_outcome(
+            &conn,
+            &format!("run{i}"),
+            "@code",
+            "claude/haiku",
+            learning::Outcome::Clean,
+        )
+        .unwrap();
         let (n, sum, adj) = state(&conn);
         assert_eq!(
             (n, sum, adj),
@@ -98,18 +108,64 @@ fn a_learned_adjustment_appears_only_after_the_minimum_of_samples() {
             "antes del mínimo no hay ajuste"
         );
     }
-    record_outcome(&conn, "@code", "claude/haiku", learning::Outcome::Clean).unwrap();
+    record_outcome(
+        &conn,
+        "run-10",
+        "@code",
+        "claude/haiku",
+        learning::Outcome::Clean,
+    )
+    .unwrap();
     let (n, _, adj) = state(&conn);
     assert_eq!(n, learning::MIN_SAMPLES);
     let adj = adj.expect("con las muestras mínimas ya hay ajuste");
     assert!(adj > 0.0 && adj <= learning::MAX_ADJUSTMENT, "{adj}");
 
     // Malos resultados lo bajan, sin pasar del tope.
-    for _ in 0..200 {
-        record_outcome(&conn, "@code", "claude/haiku", learning::Outcome::Failed).unwrap();
+    for i in 0..200 {
+        record_outcome(
+            &conn,
+            &format!("fail{i}"),
+            "@code",
+            "claude/haiku",
+            learning::Outcome::Failed,
+        )
+        .unwrap();
     }
     let (_, _, adj) = state(&conn);
     assert_eq!(adj, Some(-learning::MAX_ADJUSTMENT));
     // Un par (profile, modelo) que no existe no hace nada ni falla.
-    record_outcome(&conn, "@nada", "claude/haiku", learning::Outcome::Clean).unwrap();
+    record_outcome(
+        &conn,
+        "run-x",
+        "@nada",
+        "claude/haiku",
+        learning::Outcome::Clean,
+    )
+    .unwrap();
+    // El mismo run no suma dos veces.
+    let before = state(&conn);
+    record_outcome(
+        &conn,
+        "fail0",
+        "@code",
+        "claude/haiku",
+        learning::Outcome::Failed,
+    )
+    .unwrap();
+    assert_eq!(state(&conn), before, "una muestra por run");
+}
+
+#[test]
+fn keeping_a_suggestion_stops_the_same_one_from_coming_back() {
+    let (conn, agent, _) = seeded();
+    insert(&conn, &new(agent, "s1"), 10).unwrap();
+    resolve(&conn, "s1", SuggestionStatus::Kept, 11).unwrap();
+    // El mismo modelo sugerido no vuelve...
+    assert!(!insert(&conn, &new(agent, "s2"), 12).unwrap());
+    // ...pero otro modelo sugerido sí puede (no es la misma sugerencia).
+    let mut other = new(agent, "s3");
+    other.suggested_model_id = "claude/haiku".into();
+    other.current_model_id = "claude/sonnet".into();
+    assert!(insert(&conn, &other, 13).unwrap());
 }

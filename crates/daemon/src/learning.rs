@@ -26,8 +26,9 @@ pub fn on_run_finished(conn: &Connection, run: RunId) -> Result<(), RepoError> {
     let outcome = match end.as_str() {
         "COMPLETED" => {
             let retries: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM validation_runs WHERE agent_id = ?1 AND status = 'FAIL'",
-                [&agent],
+                "SELECT COUNT(*) FROM validation_runs WHERE agent_id = ?1 AND run_id = ?2
+                 AND status = 'FAIL'",
+                params![agent, run.to_string()],
                 |r| r.get(0),
             )?;
             if retries > 0 {
@@ -36,8 +37,9 @@ pub fn on_run_finished(conn: &Connection, run: RunId) -> Result<(), RepoError> {
                 Outcome::Clean
             }
         }
-        "CRASH" | "NO_HEARTBEAT" => Outcome::Failed,
+        // `NO_HEARTBEAT` (una laptop dormida, la red) habla más del entorno que del modelo.
+        "CRASH" => Outcome::Failed,
         _ => return Ok(()),
     };
-    suggestions::record_outcome(conn, &profile, &model, outcome)
+    suggestions::record_outcome(conn, &run.to_string(), &profile, &model, outcome)
 }

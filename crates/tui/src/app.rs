@@ -1520,12 +1520,14 @@ impl App {
             }
             for (c, action) in [('t', "switch"), ('k', "keep"), ('n', "mute")] {
                 if key.code == KeyCode::Char(c) {
-                    return self
+                    let call = self
                         .chat
                         .as_ref()
-                        .and_then(|v| v.resolve_suggestion(action))
-                        .into_iter()
-                        .collect();
+                        .and_then(|v| v.resolve_suggestion(action));
+                    if call.is_none() {
+                        self.info("No hay una sugerencia de modelo pendiente.");
+                    }
+                    return call.into_iter().collect();
                 }
             }
             if key.code == KeyCode::Char('r') {
@@ -2024,7 +2026,11 @@ impl App {
                     'K' => "keep",
                     _ => "mute",
                 };
-                return a.resolve_suggestion(action).into_iter().collect();
+                let call = a.resolve_suggestion(action);
+                if call.is_none() {
+                    self.info("No hay una sugerencia de modelo pendiente.");
+                }
+                return call.into_iter().collect();
             }
             KeyCode::Char('?') => return self.open_explain(),
             KeyCode::Char('v') => return self.open_flow(Screen::Validation),

@@ -70,6 +70,9 @@ pub fn classify(files: &[String]) -> Option<TaskKind> {
     if files.is_empty() {
         return None;
     }
+    // Las rutas de Windows llegan con `\`.
+    let files: Vec<String> = files.iter().map(|f| f.replace('\\', "/")).collect();
+    let files = files.as_slice();
     let code: Vec<&String> = files
         .iter()
         .filter(|f| !is_docs(f) && !is_config(f))
@@ -111,11 +114,12 @@ pub fn change_reason(start: TaskKind, now: TaskKind) -> Option<&'static str> {
 /// Un modelo mejor que `current` para este tipo de trabajo: el elegible de mayor puntaje cuya
 /// ventaja sobre el actual alcanza [`MIN_GAIN`]. Devuelve `(modelo, ventaja, confianza)`.
 pub fn better_model(current: &str, evaluated: &[Evaluated]) -> Option<(String, f64, f64)> {
+    // Si el actual no es elegible ahora (cooldown, cuota, offline) es un asunto de disponibilidad:
+    // lo resuelve el failover, no una sugerencia de «mejor modelo».
     let current_score = evaluated
         .iter()
         .find(|e| e.model_id == current)
-        .and_then(|e| e.score)
-        .unwrap_or(0.0);
+        .and_then(|e| e.score)?;
     let best = evaluated
         .iter()
         .filter(|e| e.eligible && e.model_id != current)
@@ -205,6 +209,9 @@ mod tests {
         assert!(better_model("g/flash", &close).is_none());
         // El actual ya es el mejor.
         assert!(better_model("c/sonnet", &e).is_none());
+        // El actual no es elegible ahora: eso es del failover, no una sugerencia.
+        assert!(better_model("c/opus", &e).is_none());
+        assert!(better_model("no/existe", &e).is_none());
         // Un modelo no elegible nunca se sugiere.
         let only_ineligible = [ev("g/flash", Some(0.1)), ev("c/opus", None)];
         assert!(better_model("g/flash", &only_ineligible).is_none());

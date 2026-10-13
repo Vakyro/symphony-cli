@@ -16,7 +16,7 @@ IDEA §5.7: el model registry puede guardar «desempeño aprendido (futuro): con
 ## Decisión
 Opción 2.
 
-- **Qué es una muestra.** Un run que termina bajo un profile (su decisión de routing lo nombra): `COMPLETED` sin validaciones fallidas del agente → **1,0**; `COMPLETED` con validaciones fallidas → **0,5**; `CRASH`/`NO_HEARTBEAT` → **0,0**. Cuota, rate limit, auth, cambio o parada del usuario y fase terminada **no** son muestras: no hablan del modelo. Un modelo elegido a mano (sin profile) tampoco.
+- **Qué es una muestra.** Un run que termina bajo un profile (su decisión de routing lo nombra): `COMPLETED` sin validaciones fallidas del agente → **1,0**; `COMPLETED` con validaciones fallidas → **0,5**; `CRASH` → **0,0**; `NO_HEARTBEAT` no cuenta (habla del entorno: laptop dormida, red). Cuota, rate limit, auth, cambio o parada del usuario y fase terminada **no** son muestras: no hablan del modelo. Un modelo elegido a mano (sin profile) tampoco.
 - **Dónde.** `profile_models.sample_count` (+1) y `outcome_score_sum` (+ resultado), dentro de la transacción que cierra el run (una consulta y una actualización; A11).
 - **Ajuste.** `ajuste = clamp((media − 0,75) · 0,4, ±0,10)` y **solo con `sample_count` ≥ 10**; antes queda `NULL` y el router usa el puntaje base.
 - **Cómo influye.** El router compite con `base_score + ajuste` (acotado a 0–1). No cambia filtros de disponibilidad, salud ni cuota: solo el desempate fino entre modelos elegibles.
@@ -30,3 +30,7 @@ Tests de `learning` (nada antes del mínimo, el tope vale con cualquier cantidad
 - Explicabilidad: el puntaje que muestra `/explain-route` ya incluye el ajuste; el detalle (muestras y media) queda en `profile_models`.
 - Sin cambios de comportamiento hasta que un (profile, modelo) junte 10 runs.
 - No se aprende de proyectos distintos por separado: el registro de modelos es global (v1).
+- **Una muestra por run** (tabla de apoyo `learning_samples`, clave `run_id`): si dos caminos de cierre llaman, la segunda no cuenta.
+- **Sesgo de supervivencia:** solo `COMPLETED` y `CRASH` son muestras; los runs que se cortan por cuota o por el usuario no entran, así que la media describe a los que llegaron al final.
+- `MUTED` es permanente por agente y no hay comando para quitarlo en v1.
+- `better_model` compara puntajes de routing completos del profile `@code` (la disponibilidad se resuelve aparte, por failover) y no considera `needed_context`.

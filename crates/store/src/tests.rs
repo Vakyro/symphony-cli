@@ -49,8 +49,9 @@ const PHASE3_TABLES: [&str; 7] = [
 ];
 
 /// Tablas que añade la migración 004 (runtime multiagente).
-/// Tablas que añade la migración 007 (sugerencias de modelo).
-const PHASE6_TABLES: [&str; 1] = ["model_suggestions"];
+/// Tablas que añade la migración 007 (sugerencias de modelo y las muestras de aprendizaje, una
+/// por run).
+const PHASE6_TABLES: [&str; 2] = ["model_suggestions", "learning_samples"];
 
 const PHASE2_TABLES: [&str; 9] = [
     "milestones",
