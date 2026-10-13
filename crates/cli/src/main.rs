@@ -125,6 +125,17 @@ enum Cmd {
         #[command(subcommand)]
         action: FactCmd,
     },
+    /// Pide a un review agent que revise el trabajo de un agente (solo recomienda; no integra).
+    Review {
+        /// ID o número del agente a revisar.
+        agent: String,
+        /// Modelo exacto del revisor (ej. `claude/sonnet`).
+        #[arg(long)]
+        model: Option<String>,
+        /// Profile del revisor (por defecto `@review`).
+        #[arg(long, conflicts_with = "model")]
+        profile: Option<String>,
+    },
     /// El chat general del proyecto (la rama `symphony/chat`).
     Chat {
         #[command(subcommand)]
@@ -637,6 +648,24 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                 .await?;
                 print_chat_merge(&res);
             }
+        }
+        Some(Cmd::Review {
+            agent,
+            model,
+            profile,
+        }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            let res = client::call(
+                &mut conn,
+                "review.start",
+                json!({ "agent": agent, "model": model, "profile": profile }),
+            )
+            .await?;
+            println!(
+                "Revisión pedida al agente {}. Su veredicto queda guardado al terminar \
+                 (aparece en la vista del agente y en `symphony chat merge`).",
+                res["reviewer_agent_id"].as_str().unwrap_or("?")
+            );
         }
         Some(Cmd::Fact { action }) => {
             let cwd_str = std::env::current_dir()

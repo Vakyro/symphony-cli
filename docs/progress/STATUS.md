@@ -2,8 +2,8 @@
 
 **Actualizado:** 2026-10-12 · por claude-code/opus-5.5
 **Fase actual:** P11.5 · Pendientes y pulido (rama `phase/p115-pendientes`)
-**Paso actual:** P11.5.S8 · Medir `resume` y `/compact` con OpenCode gratuito
-**Estado del paso:** sin empezar (S1–S7 hechos)
+**Paso actual:** P11.5.S10 · Deuda anotada
+**Estado del paso:** sin empezar (S1–S9 hechos)
 **En curso por:** nadie
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P13 → P16**. El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
@@ -25,8 +25,8 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 - [x] S5 Lote: el tope de simultáneos sigue a la cuota
 - [x] S6 Merge chat → `main` con review agent (ADR-0006)
 - [x] S7 Pulido de la TUI (milestones, «Enviar al agente», avisos que caducan)
-- [ ] S8 Medir `resume` y `/compact` con OpenCode gratuito
-- [ ] S9 Live gratuito con OpenCode (broker MCP, handoff, plan por fases, review)
+- [x] S8 Medir `resume` y `/compact` con OpenCode gratuito
+- [x] S9 Live (S9.2 inconcluso: 429 del plan gratuito) gratuito con OpenCode (broker MCP, handoff, plan por fases, review)
 - [ ] S10 Deuda anotada
 - [ ] S11 Cierre (`p115-done`)
 
@@ -55,7 +55,8 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 - P09 · Que Claude y Codex llamen a `context_search` en vivo y que Codex `exec` apruebe herramientas MCP sin preguntar.
 - P11 · Re-validación de Kimi, Antigravity y Copilot (criterios en `docs/research/opencode-y-calidad-de-proveedores.md` § 4); ToS de los tres y de usar la credencial de Copilot dentro de OpenCode; skills de los tres; sondear los modelos habilitados de Copilot; Kimi sin sandbox.
 - P11 · Los 17 pares live de handoff restantes (n = 1 hoy).
-- ADR-0013 D2 · Medir `/compact` con Claude/Codex (si S8 no lo resuelve con OpenCode).
+- ADR-0013 D2 · Medir `/compact` con Claude/Codex: con OpenCode no existe en modo no interactivo (P11.5.S8), así que solo queda Claude Code (`claude -p "/compact"`) y Codex.
+- P11.5.S9.2 · Handoff entre modelos a media tarea en los cuatro modos de contexto con proveedores reales (Claude/Codex): con OpenCode gratuito dio 429 en 3 corridas. Comando: `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_handoff` (ya existe para otros pares).
 
 ## Handoff para el siguiente agente
 - Empieza por PLAN § P11.5 y ADR-0014. Corre `cargo xtask check` en `main` antes de crear la rama.
