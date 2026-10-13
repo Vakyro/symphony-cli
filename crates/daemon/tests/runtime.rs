@@ -5124,3 +5124,76 @@ async fn chat_to_main_is_blocked_by_requested_changes_a_dirty_repo_or_conflicts(
     reactor.abort();
     e.writer.shutdown();
 }
+
+/// P11.5.S10: si el reactor se atrasa y pierde cambios de estado (`Lagged`), el barrido libera
+/// a quien esperaba una tarea terminada y bloquea (con decisión) a quien esperaba una fallida.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sweep_after_a_lagged_reactor_releases_and_blocks_the_waiting_agents() {
+    let e = env_with(&[("alpha", &writes("a.txt", "hecho"))], None).await;
+    let (a, _) = complete(&e, "Primera", "alpha/fast").await;
+    let waiting_on = |dep_task: String, number_title: &str| {
+        let e = &e;
+        let title = number_title.to_string();
+        async move {
+            let b = e
+                .runtime
+                .create_agent(req(e, &title, Execution::DecideLater))
+                .await
+                .unwrap();
+            let (task_b, agent_b) = (b.task_id.to_string(), b.agent_id.to_string());
+            e.writer
+                .handle()
+                .write(Box::new(move |t| {
+                    t.execute(
+                        "INSERT INTO task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, 0)",
+                        [&task_b, &dep_task],
+                    )?;
+                    t.execute(
+                        "UPDATE agents SET state = 'WAITING_DEPENDENCY', state_reason = 'espera' WHERE id = ?1",
+                        [&agent_b],
+                    )?;
+                    t.execute("UPDATE tasks SET status = 'WAITING' WHERE id = ?1", [&task_b])?;
+                    Ok(())
+                }))
+                .await
+                .unwrap();
+            b.agent_id.to_string()
+        }
+    };
+    let on_done = waiting_on(a.task_id.to_string(), "Espera a la hecha").await;
+    // Otra tarea que ya falló.
+    let (failed, _) = complete(&e, "Segunda", "alpha/fast").await;
+    let failed_task = failed.task_id.to_string();
+    let failed_agent = failed.agent_id.to_string();
+    e.writer
+        .handle()
+        .write(Box::new(move |t| {
+            t.execute(
+                "UPDATE tasks SET status = 'FAILED' WHERE id = ?1",
+                [&failed_task],
+            )?;
+            t.execute(
+                "UPDATE agents SET state = 'FAILED' WHERE id = ?1",
+                [&failed_agent],
+            )?;
+            Ok(())
+        }))
+        .await
+        .unwrap();
+    let on_failed = waiting_on(failed.task_id.to_string(), "Espera a la fallida").await;
+
+    symphony_daemon::dependencies::recheck_waiting(&e.runtime).await;
+    let state = |agent: &str| -> String {
+        one(
+            &e,
+            &format!("SELECT state FROM agents WHERE id = '{agent}'"),
+        )
+    };
+    assert_eq!(state(&on_done), "READY", "la dependencia terminó bien");
+    assert_eq!(
+        state(&on_failed),
+        "BLOCKED",
+        "la dependencia falló: decide el usuario"
+    );
+    e.writer.shutdown();
+}

@@ -64,7 +64,11 @@ pub fn spawn(runtime: Runtime, shutdown: CancellationToken) -> tokio::task::Join
                             runtime.fill_batches().await;
                         }
                     }
-                    Err(RecvError::Lagged(_)) => {}
+                    // Se perdieron cambios de estado: nadie sabe cuáles, se revisa a todos.
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(perdidos = n, "el reactor de dependencias se atrasó");
+                        recheck_waiting(&runtime).await;
+                    }
                     Err(RecvError::Closed) => break,
                 }
             }
@@ -92,20 +96,52 @@ async fn react(rt: &Runtime, agent: AgentId, outcome: Finished) {
 /// reactor ya había pasado): queda `WAITING_DEPENDENCY` para siempre. Se reevalúa con las
 /// dependencias que ya están hechas. Es idempotente.
 pub async fn recheck_new(rt: &Runtime, task: TaskId) {
-    let done: Vec<TaskId> = rt
+    let finished: Vec<(TaskId, Finished)> = rt
         .reader
         .lock()
         .ok()
         .and_then(|c| deps::dependencies_of(&c, task).ok())
         .map(|rows| {
             rows.into_iter()
-                .filter(|d| d.status == TaskStatus::Done)
-                .map(|d| d.task_id)
+                .filter_map(|d| {
+                    let outcome = match d.status {
+                        TaskStatus::Done => Finished::Done,
+                        TaskStatus::Failed => Finished::Failed,
+                        TaskStatus::Cancelled => Finished::Cancelled,
+                        _ => return None,
+                    };
+                    Some((d.task_id, outcome))
+                })
                 .collect()
         })
         .unwrap_or_default();
-    for dep in done {
-        reconcile_and_start(rt, dep, Finished::Done).await;
+    for (dep, outcome) in finished {
+        reconcile_and_start(rt, dep, outcome).await;
+    }
+}
+
+/// Reevalúa a todos los agentes que esperan una dependencia. Lo usa el reactor cuando se atrasa
+/// en el canal de cambios de estado (`Lagged`): sin esto, una tarea terminada en ese hueco dejaba
+/// a sus dependientes esperando para siempre. Es idempotente.
+pub async fn recheck_waiting(rt: &Runtime) {
+    let waiting: Vec<TaskId> = rt
+        .reader
+        .lock()
+        .ok()
+        .and_then(|c| {
+            let mut stmt = c
+                .prepare("SELECT task_id FROM agents WHERE state = 'WAITING_DEPENDENCY'")
+                .ok()?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
+            Some(
+                rows.flatten()
+                    .filter_map(|id| id.parse::<TaskId>().ok())
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+    for task in waiting {
+        recheck_new(rt, task).await;
     }
 }
 

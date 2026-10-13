@@ -2,8 +2,8 @@
 
 **Actualizado:** 2026-10-12 · por claude-code/opus-5.5
 **Fase actual:** P11.5 · Pendientes y pulido (rama `phase/p115-pendientes`)
-**Paso actual:** P11.5.S10 · Deuda anotada
-**Estado del paso:** sin empezar (S1–S9 hechos)
+**Paso actual:** P11.5.S11 · Cierre (revisión de código, merge a `main`, tag `p115-done`)
+**Estado del paso:** sin empezar (S1–S10 hechos)
 **En curso por:** nadie
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P13 → P16**. El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
@@ -27,7 +27,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 - [x] S7 Pulido de la TUI (milestones, «Enviar al agente», avisos que caducan)
 - [x] S8 Medir `resume` y `/compact` con OpenCode gratuito
 - [x] S9 Live (S9.2 inconcluso: 429 del plan gratuito) gratuito con OpenCode (broker MCP, handoff, plan por fases, review)
-- [ ] S10 Deuda anotada
+- [x] S10 Deuda anotada
 - [ ] S11 Cierre (`p115-done`)
 
 **P12 · Plugins** (`phase/p12-plugins`): S1 protocolo y manifiesto · S2 plugin host · S3 plugin de ejemplo · S4 cierre (`p12-done`)
