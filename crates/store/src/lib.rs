@@ -29,6 +29,7 @@ const MIGRATION_LIST: &[M<'static>] = &[
     M::up(include_str!("../../../migrations/003_context.sql")).foreign_key_check(),
     M::up(include_str!("../../../migrations/004_multiagent.sql")).foreign_key_check(),
     M::up(include_str!("../../../migrations/005_validation.sql")).foreign_key_check(),
+    M::up(include_str!("../../../migrations/006_plugins.sql")).foreign_key_check(),
 ];
 
 pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_LIST);

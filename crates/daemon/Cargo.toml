@@ -28,6 +28,7 @@ symphony-scheduler = { path = "../scheduler" }
 symphony-core = { path = "../core" }
 symphony-git = { path = "../git" }
 symphony-object-store = { path = "../object-store" }
+symphony-plugins = { path = "../plugins" }
 symphony-process = { path = "../process" }
 symphony-protocol = { path = "../protocol" }
 symphony-store = { path = "../store" }

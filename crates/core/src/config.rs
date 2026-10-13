@@ -75,6 +75,11 @@ impl SymphonyHome {
         self.0.join("objects")
     }
 
+    /// Plugins instalados (`<home>/plugins/<nombre>/plugin.toml`, ADR-0015): instalación global.
+    pub fn plugins_dir(&self) -> PathBuf {
+        self.0.join("plugins")
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.0.join("logs")
     }
@@ -450,6 +455,36 @@ pub struct ProjectConfig {
     /// Política de integración (P08.S7).
     #[serde(default)]
     pub merge: Option<MergeConfig>,
+    /// Plugins instalados que este proyecto activa (P12, ADR-0015).
+    #[serde(default)]
+    pub plugins: Option<PluginsConfig>,
+}
+
+/// `[plugins]` de `project.toml`: nombres de plugins ya instalados en `~/.symphony/plugins`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginsConfig {
+    /// Validators: corren en el tier 2 de la validación.
+    pub validators: Vec<String>,
+    /// Context transformers: se aplican al handoff, en este orden.
+    pub context_transformers: Vec<String>,
+}
+
+impl ProjectConfig {
+    /// La validación efectiva: la del proyecto o, si solo activa validators de plugin, una
+    /// por defecto (gate en el tier 2). `None` si no hay nada que validar.
+    pub fn effective_validation(&self) -> Option<ValidationConfig> {
+        let own = self.validation.clone().filter(|v| !v.is_empty());
+        let has_plugins = self
+            .plugins
+            .as_ref()
+            .is_some_and(|p| !p.validators.is_empty());
+        match (own, has_plugins) {
+            (Some(v), _) => Some(v),
+            (None, true) => Some(self.validation.clone().unwrap_or_default()),
+            (None, false) => None,
+        }
+    }
 }
 
 /// `[merge]` de `project.toml`.

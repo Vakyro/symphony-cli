@@ -22,6 +22,7 @@ members = [
     "crates/adapters/copilot",
     "crates/adapters/opencode",
     "crates/testkit",
+    "examples/plugins/validator-todo-check",
     "xtask",
 ]
 

@@ -5197,3 +5197,248 @@ async fn a_sweep_after_a_lagged_reactor_releases_and_blocks_the_waiting_agents()
     );
     e.writer.shutdown();
 }
+
+// --- P12: plugins en el gate de validación y en el handoff -----------------------------
+
+fn fake_plugin() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            let ok = Command::new(env!("CARGO"))
+                .args([
+                    "build",
+                    "-q",
+                    "-p",
+                    "symphony-testkit",
+                    "--bin",
+                    "fake-plugin",
+                ])
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "no se pudo construir fake-plugin");
+            symphony_testkit::pinned_bin(
+                &PathBuf::from(env!("CARGO_BIN_EXE_symphonyd"))
+                    .with_file_name(format!("fake-plugin{}", std::env::consts::EXE_SUFFIX)),
+            )
+        })
+        .clone()
+}
+
+/// Instala `fake-plugin` como plugin `todo-check` (instalación global en `<home>/plugins`) y lo
+/// activa en el proyecto.
+fn install_plugin(e: &Env, mode: &str, kind: &str, section: &str) {
+    let dir = e.home.join("plugins/todo-check");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = format!("fake-plugin{}", std::env::consts::EXE_SUFFIX);
+    std::fs::copy(fake_plugin(), dir.join(&exe)).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        format!(
+            "name = \"todo-check\"\nversion = \"0.1.0\"\nplugin_api = 1\nkind = \"{kind}\"\n\
+             exec = [\"./fake-plugin\", \"{mode}\", \"todo-check\", \"{kind}\"]\ntimeout_secs = 20\n"
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        format!("{PROJECT_HEAD}{section}"),
+    )
+    .unwrap();
+}
+
+fn plugin_checks(e: &Env, agent: &str) -> Vec<(String, String, Option<String>)> {
+    let conn = symphony_store::open_reader(&e.db).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, status, summary FROM validation_checks
+             WHERE validation_run_id IN (SELECT id FROM validation_runs WHERE agent_id = ?1)
+             ORDER BY rowid",
+        )
+        .unwrap();
+    stmt.query_map([agent], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+const PLUGIN_GATE: &str =
+    "[plugins]\nvalidators = [\"todo-check\"]\n\n[validation]\nmax_attempts = 1\n";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_validator_plugin_that_finds_a_problem_fails_the_gate_with_its_findings() {
+    let e = env(&writes("a.txt", "// TODO sin issue"), None).await;
+    install_plugin(&e, "validate-fail", "validator", PLUGIN_GATE);
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Agregar a.txt",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let checks = plugin_checks(&e, &agent);
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(
+        (checks[0].0.as_str(), checks[0].1.as_str()),
+        ("plugin", "FAIL")
+    );
+    let summary = checks[0].2.clone().unwrap();
+    assert!(summary.contains("TODO sin issue"), "{summary}");
+    assert_eq!(validation_rows(&e, &agent), vec![(2, "FAIL".to_string())]);
+    // El daemon sigue vivo: otro agente se crea sin problema.
+    assert!(
+        e.runtime
+            .create_agent(req(&e, "Otro", Execution::Exact("fake/fast".into())))
+            .await
+            .is_ok()
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_validator_plugin_that_passes_lets_the_task_complete() {
+    let e = env(&writes("a.txt", "limpio"), None).await;
+    install_plugin(&e, "validate-ok", "validator", PLUGIN_GATE);
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Agregar a.txt",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let checks = plugin_checks(&e, &agent);
+    assert_eq!(
+        checks.iter().map(|c| c.1.as_str()).collect::<Vec<_>>(),
+        ["PASS"],
+        "{checks:?}"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_validator_plugin_that_dies_or_is_missing_is_skipped_never_passed_off_as_ok() {
+    let e = env(&writes("a.txt", "x"), None).await;
+    install_plugin(&e, "crash", "validator", PLUGIN_GATE);
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Con plugin roto",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let checks = plugin_checks(&e, &agent);
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(checks[0].1, "SKIPPED");
+    assert!(
+        checks[0].2.clone().unwrap().contains("no se ejecutó"),
+        "{checks:?}"
+    );
+
+    // Un plugin activado que no está instalado: también SKIPPED, con el motivo.
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        format!("{PROJECT_HEAD}[plugins]\nvalidators = [\"no-esta\"]\n\n[validation]\nmax_attempts = 1\n"),
+    )
+    .unwrap();
+    let second = e
+        .runtime
+        .create_agent(req(&e, "Sin plugin", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let agent2 = second.agent_id.to_string();
+    wait_state(&e, &agent2, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let checks = plugin_checks(&e, &agent2);
+    assert_eq!(checks[0].1, "SKIPPED");
+    assert!(
+        checks[0].2.clone().unwrap().contains("no está instalado"),
+        "{checks:?}"
+    );
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_list_and_check_report_what_is_installed_and_whether_it_runs() {
+    let e = env(&writes("a.txt", "x"), None).await;
+    install_plugin(&e, "validate-ok", "validator", PLUGIN_GATE);
+    let root = e.repo.display().to_string();
+    let list = e.runtime.plugin_list(Some(&root));
+    let plugins = list["plugins"].as_array().unwrap();
+    assert_eq!(plugins.len(), 1);
+    assert_eq!(plugins[0]["name"], "todo-check");
+    assert_eq!(plugins[0]["enabled"], true);
+    assert_eq!(plugins[0]["supported"], true);
+    assert_eq!(list["problems"].as_array().unwrap().len(), 0);
+
+    let ok = e.runtime.plugin_check("todo-check").await.unwrap();
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert!(e.runtime.plugin_check("nada").await.is_err());
+
+    // Un plugin que no arranca bien se reporta, no tira nada.
+    install_plugin(&e, "crash", "validator", PLUGIN_GATE);
+    let bad = e.runtime.plugin_check("todo-check").await.unwrap();
+    assert_eq!(bad["ok"], false);
+    assert!(bad["error"].as_str().unwrap().contains("134"), "{bad}");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored() {
+    let e = env_with(&[("alpha", &writes("a.txt", "hecho")), ("beta", SAY)], None).await;
+    install_plugin(
+        &e,
+        "transform-upper",
+        "context-transformer",
+        "[plugins]\ncontext_transformers = [\"todo-check\"]\n",
+    );
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Trabajo", Execution::Exact("alpha/fast".into())))
+        .await
+        .unwrap();
+    wait_state(&e, &created.agent_id.to_string(), "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "prueba")
+        .await
+        .unwrap();
+    // El transformer del plugin puso todo en mayúsculas.
+    assert_eq!(h.prompt, h.prompt.to_uppercase(), "{}", h.prompt);
+    assert!(h.prompt.contains("TRABAJO"), "{}", h.prompt);
+
+    // Si el plugin muere, el handoff sale igual, sin transformar.
+    install_plugin(
+        &e,
+        "crash",
+        "context-transformer",
+        "[plugins]\ncontext_transformers = [\"todo-check\"]\n",
+    );
+    let h = e
+        .runtime
+        .prepare_handoff(created.agent_id, "prueba")
+        .await
+        .unwrap();
+    assert!(h.prompt.contains("Trabajo"), "{}", h.prompt);
+    e.writer.shutdown();
+}

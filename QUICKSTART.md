@@ -260,6 +260,36 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 - Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.
 - **OpenCode** toma como raíz del proyecto el repo principal, no el worktree del agente: Symphony le avisa en el prompt cuál es su directorio, pero un modelo puede escribir en el repo con una ruta absoluta (`docs/research/cli-opencode.md`). La lista de modelos de OpenCode se pide en segundo plano la primera vez (tarda ~7 s): al principio solo aparece `opencode/default`; haz `symphony providers refresh` unos segundos después. Sus modelos gratuitos son inestables; Claude y Codex siguen siendo los que mejor funcionan (`docs/research/opencode-y-calidad-de-proveedores.md`).
 
+### Plugins
+
+Un plugin es un programa aparte que Symphony lanza para una tarea concreta. Hoy hay dos tipos: **validator** (revisa lo que cambió una tarea y corre en el tier 2 de la validación) y **context-transformer** (reescribe el handoff). No abre tu base ni pide a Symphony que ejecute nada: recibe un JSON por stdin y contesta un JSON por stdout.
+
+```bash
+symphony plugin list           # lo instalado en ~/.symphony/plugins, qué activa este proyecto y lo roto
+symphony plugin check <nombre> # lo lanza, le pide `describe` y verifica que es quien dice ser
+```
+
+Instalación (global, una vez): una carpeta `~/.symphony/plugins/<nombre>/` con un `plugin.toml` y el ejecutable. Activación (por proyecto), en `.symphony/project.toml`:
+
+```toml
+[plugins]
+validators = ["validator-todo-check"]   # corren en el tier 2; el gate usa [validation] gate (2 por defecto)
+context_transformers = []               # se aplican al handoff, en orden
+```
+
+Hay un ejemplo completo en `examples/plugins/validator-todo-check` (falla si el diff agrega un `TODO` sin issue): `cargo build -p validator-todo-check`, copia el binario y su `plugin.toml` a `~/.symphony/plugins/validator-todo-check/`. Para escribir el tuyo, el protocolo (v1) es:
+
+```text
+{"plugin_api":1,"kind":"validator","method":"describe","params":{}}
+→ {"plugin_api":1,"ok":true,"result":{"name":"…","version":"…","plugin_api":1,"kind":"validator"}}
+{"plugin_api":1,"kind":"validator","method":"validate","params":{"task_code","task_title","diff","files"}}
+→ {"plugin_api":1,"ok":true,"result":{"passed":false,"summary":"…","findings":[{"severity","file","text"}]}}
+{"plugin_api":1,"kind":"context-transformer","method":"transform","params":{"stage":"handoff","text":"…"}}
+→ {"plugin_api":1,"ok":true,"result":{"text":"…"}}
+```
+
+Reglas: stdout es solo la respuesta (los registros, a stderr); tiempo máximo `timeout_secs` (10 s por defecto, 300 máx.); un plugin que muere o se cuelga queda como check `SKIPPED` con el motivo (no se da por bueno); lo que devuelve pasa por el redactor de secretos. Un plugin es código tuyo con tus permisos: el aislamiento protege a Symphony de sus fallos, no te protege de un plugin malicioso. Los tipos `tool` y `provider-adapter` se reservan para v1.1.
+
 ### Skills en el chat
 Las skills que ya tienes instaladas en cada CLI funcionan en el chat (las de usuario y las de plugins; las de proyecto solo si están commiteadas en la rama base del chat):
 - Con un modelo de **Claude**: escribe `/nombre-de-la-skill lo que quieras` al inicio del mensaje.

@@ -288,8 +288,8 @@ impl Runtime {
         let has_validation = symphony_core::load_project(Path::new(&project_root))
             .ok()
             .flatten()
-            .and_then(|p| p.validation)
-            .is_some_and(|v| !v.is_empty());
+            .and_then(|p| p.effective_validation())
+            .is_some();
         if !has_validation {
             checks.push(check(
                 "validation",

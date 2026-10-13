@@ -1,0 +1,7 @@
+name = "validator-todo-check"
+version = "0.1.0"
+plugin_api = 1
+kind = "validator"
+exec = ["./validator-todo-check"]
+description = "Falla si el diff agrega un TODO sin issue (TODO(#123), TODO #123 o TODO(ABC-12))"
+timeout_secs = 10
