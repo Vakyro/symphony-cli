@@ -215,6 +215,17 @@ pub enum Notice {
     Error(String),
 }
 
+/// `ctx://file/<ruta>` con los escapes de `symphony_context::uri` (la TUI no depende de ese
+/// crate; un test de integración compara las dos).
+pub fn ctx_file_uri(path: &str) -> String {
+    let esc = path
+        .replace('%', "%25")
+        .replace('@', "%40")
+        .replace('?', "%3F")
+        .replace('#', "%23");
+    format!("ctx://file/{esc}")
+}
+
 /// Cuánto dura un aviso del pie (ms).
 const NOTICE_TTL_MS: i64 = 8_000;
 
@@ -882,6 +893,8 @@ impl App {
                 // Un aviso no se queda hasta la siguiente tecla: caduca solo.
                 if self.notice.is_some() && now - self.notice_at > NOTICE_TTL_MS {
                     self.notice = None;
+                    // Ya no se ve la frase que pedía confirmar: la confirmación caduca con ella.
+                    self.chat_merge_armed = false;
                     self.dirty = true;
                 }
                 let poll = self.ticks.is_multiple_of(POLL_TICKS);
@@ -1253,6 +1266,10 @@ impl App {
         }
         // Una tecla nueva reemplaza el aviso anterior.
         self.notice = None;
+        // «Ctrl+G otra vez integra» solo vale dentro del chat y sin otra tecla en medio.
+        if self.screen != Screen::Chat {
+            self.chat_merge_armed = false;
+        }
         match self.screen {
             Screen::Launch => self.launch_key(key),
             Screen::NotARepo => {
@@ -2046,13 +2063,7 @@ impl App {
                         if p.starts_with("ctx://") {
                             p
                         } else {
-                            // Mismos escapes que `symphony_context::uri` (la TUI no depende de ese crate).
-                            let esc = p
-                                .replace('%', "%25")
-                                .replace('@', "%40")
-                                .replace('?', "%3F")
-                                .replace('#', "%23");
-                            format!("ctx://file/{esc}")
+                            ctx_file_uri(&p)
                         }
                     });
                 match uri {

@@ -1,15 +1,15 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-12 · por claude-code/opus-5.5
-**Fase actual:** P11.5 · Pendientes y pulido (rama `phase/p115-pendientes`)
-**Paso actual:** P11.5.S11 · Cierre (revisión de código, merge a `main`, tag `p115-done`)
-**Estado del paso:** sin empezar (S1–S10 hechos)
+**Actualizado:** 2026-10-12 · por claude-code/sonnet-5.5
+**Fase actual:** P12 · Plugins (rama `phase/p12-plugins`, por crear desde `main`). P11.5 cerrada (`p115-done`)
+**Paso actual:** P12.S1 · Protocolo y manifiesto
+**Estado del paso:** sin empezar
 **En curso por:** nadie
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P13 → P16**. El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: ✅ en `main` al cierre de P08 (558 tests; los live se omiten sin `SYMPHONY_LIVE=1`).
+- `cargo xtask check`: ✅ al cierre de P11.5 (588 tests; el gate quita `SYMPHONY_LIVE`, nunca corre live).
 - `cargo deny check`: ✅ (solo avisos de duplicados).
 - CI en `main`: ✅ (ubuntu, windows, macos, msrv, deny).
 - Tests conocidos en rojo: ninguno.
@@ -28,7 +28,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 - [x] S8 Medir `resume` y `/compact` con OpenCode gratuito
 - [x] S9 Live (S9.2 inconcluso: 429 del plan gratuito) gratuito con OpenCode (broker MCP, handoff, plan por fases, review)
 - [x] S10 Deuda anotada
-- [ ] S11 Cierre (`p115-done`)
+- [x] S11 Cierre (`p115-done`)
 
 **P12 · Plugins** (`phase/p12-plugins`): S1 protocolo y manifiesto · S2 plugin host · S3 plugin de ejemplo · S4 cierre (`p12-done`)
 
@@ -39,6 +39,9 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): S1 seguridad · S2 fuzzing · S3 recuperación y 4 h · S4 rendimiento y retención · S5 calidad del repo · S6 mdBook (+ guía SSH) · S7 pipeline de release en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
 
 **P16 · Validación final** (`phase/p16-validacion`): S1 checklist · S2 E2E (fake-agents) · S3 benchmark · S4 instalación limpia en CI · S5 docs as-built · S6 release ⛔ · S7 retrospectiva
+
+## Para usar lo nuevo (Leo)
+`symphony daemon stop` y luego `cargo install --path crates/cli --locked --force` y `cargo install --path crates/daemon --locked --force` (no lo hice yo: puede haber un daemon tuyo en uso). Novedades: `symphony chat merge`, `symphony review`, `[providers.permissions]`, texto del chat en vivo con Claude, `Ctrl+G`/`Ctrl+R` en el chat.
 
 ## Permisos vigentes (sin preguntar)
 - Merge `--no-ff` de la rama de fase a `main`, tag `pNN-done`, push de `main` y del tag (memoria «merge a main OK»).
@@ -78,5 +81,5 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P10 | ✅ | p10-done, v0.5.0 |
 | P09 | ✅ (live pendientes → P11.5.S9) | p09-done |
 | P08 | ✅ | p08-done |
-| P11.5 | ⏳ siguiente | |
+| P11.5 | ✅ (live de pago pendientes → Para Leo) | p115-done |
 | P12, P14, P15, P13, P16 | ⏳ en ese orden (ADR-0014) | |

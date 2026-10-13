@@ -636,7 +636,7 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                 )
                 .await?;
                 println!(
-                    "Revisión pedida al agente {}. Cuando termine, corre `symphony chat merge`                      para ver su veredicto.",
+                    "Revisión pedida al agente {}. Cuando termine, corre `symphony chat merge` para ver su veredicto.",
                     res["reviewer_agent_id"].as_str().unwrap_or("?")
                 );
             } else {
@@ -984,7 +984,7 @@ fn print_chat_merge(v: &Value) {
     println!();
     if v["ready"].as_bool().unwrap_or(false) {
         println!(
-            "Listo. Pide la revisión con `symphony chat merge --review` e integra con              `symphony chat merge --yes`."
+            "Listo. Pide la revisión con `symphony chat merge --review` e integra con `symphony chat merge --yes`."
         );
     } else {
         println!("Hay comprobaciones en ✗: corrígelas y vuelve a correr `symphony chat merge`.");

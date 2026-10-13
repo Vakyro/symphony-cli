@@ -176,6 +176,8 @@ pub struct Inner {
     /// Lotes vivos (P11.5.S5): milestone → tope de simultáneos pedido. En memoria: tras reiniciar
     /// el daemon, un lote sigue con las dependencias que ya tiene, sin el ajuste por cuota.
     pub(crate) batches: Mutex<HashMap<MilestoneId, usize>>,
+    /// Una sola pasada de `fill_batches` a la vez.
+    pub(crate) batch_fill: tokio::sync::Mutex<()>,
 }
 
 /// Persistencia del latido por defecto (producción).
@@ -247,6 +249,7 @@ impl Runtime {
                 default_profile: Mutex::new("@code".into()),
                 watchers: crate::watcher::Watchers::default(),
                 batches: Mutex::default(),
+                batch_fill: tokio::sync::Mutex::new(()),
                 scheduling: std::sync::OnceLock::new(),
                 integration: tokio::sync::Mutex::new(()),
             }),

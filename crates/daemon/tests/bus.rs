@@ -166,3 +166,35 @@ async fn partial_text_is_ephemeral_and_replaced_by_the_full_message() {
     drop(bus);
     writer.shutdown();
 }
+
+/// P11.5.S3 (revisión): al llegar al tope el texto parcial se corta con una marca y deja de
+/// acumular: ningún trozo posterior, por chico que sea, entra y deja huecos.
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_text_stops_for_good_at_the_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("s.db");
+    symphony_store::open(&db).unwrap();
+    let writer = Writer::start(&db).unwrap();
+    let bus = EventBus::new(
+        writer.handle(),
+        16,
+        symphony_object_store::ObjectStore::new(dir.path().join("objects")),
+    );
+    let delta = |text: String| BusEvent {
+        project_id: "p1".into(),
+        agent_id: Some("a1".into()),
+        run_id: None,
+        source: EventSource::JsonStream,
+        event: AgentEvent::AssistantDelta { text },
+        occurred_at: 1,
+    };
+    bus.publish(delta("a".repeat(65_000))).await.unwrap();
+    bus.publish(delta("b".repeat(5_000))).await.unwrap();
+    bus.publish(delta("c".into())).await.unwrap();
+    let partial = bus.partial("a1");
+    assert!(partial.ends_with('…'), "marca de corte");
+    assert!(!partial.contains('c'), "nada después del tope");
+    assert!(partial.len() <= 64 * 1024 + 3);
+    drop(bus);
+    writer.shutdown();
+}

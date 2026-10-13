@@ -144,6 +144,8 @@ impl Runtime {
     /// Arranca, mientras haya cupo, a los agentes de cada lote que quedaron esperándolo, en el
     /// orden del plan. Olvida los lotes sin agentes vivos. Lo llama el reactor de dependencias.
     pub async fn fill_batches(&self) {
+        // Una pasada a la vez: dos en paralelo calcularían el mismo cupo y arrancarían de más.
+        let _one_at_a_time = self.batch_fill.lock().await;
         let milestones: Vec<MilestoneId> = match self.batches.lock() {
             Ok(b) if !b.is_empty() => b.keys().copied().collect(),
             _ => return,
@@ -190,8 +192,9 @@ impl Runtime {
                 if room == 0 {
                     break;
                 }
-                crate::dependencies::start_now(self, agent).await;
-                room -= 1;
+                if crate::dependencies::start_now(self, agent).await {
+                    room -= 1;
+                }
             }
         }
     }

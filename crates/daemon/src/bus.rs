@@ -153,8 +153,19 @@ impl EventBus {
         if let (AgentEvent::AssistantDelta { text }, Some(agent)) = (&ev.event, &ev.agent_id) {
             if let Ok(mut m) = self.partial.lock() {
                 let acc = m.entry(agent.clone()).or_default();
-                if acc.len() + text.len() <= PARTIAL_MAX {
-                    acc.push_str(text);
+                if acc.len() < PARTIAL_MAX {
+                    // Un trozo que no cabe se corta y se marca: nada de huecos en medio.
+                    let room = PARTIAL_MAX - acc.len();
+                    if text.len() <= room {
+                        acc.push_str(text);
+                    } else {
+                        let mut cut = room;
+                        while !text.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        acc.push_str(&text[..cut]);
+                        acc.push('…');
+                    }
                 }
             }
             let _ = self.tui.send(Arc::new(ev));

@@ -28,6 +28,8 @@ pub struct ChatMerge {
     pub target: String,
     /// Commits que la rama del chat tiene y `main` no.
     pub ahead: u32,
+    /// Punta de la rama del chat que se comprobó: el merge solo la integra si sigue siendo ésta.
+    pub head: String,
     pub checks: Vec<Check>,
     pub conflicts: Vec<String>,
     /// La última revisión del chat (`status`, `recommendation`, `findings`), si hay.
@@ -45,6 +47,7 @@ impl ChatMerge {
             "source": self.source,
             "target": self.target,
             "ahead": self.ahead,
+            "head": self.head,
             "ready": self.ready(),
             "conflicts": self.conflicts,
             "review": self.review,
@@ -212,11 +215,12 @@ impl Runtime {
             let pre = main_repo.merge_preflight(&tgt, CHAT_BRANCH);
             // Hora (s) del último commit del chat, para saber si la revisión quedó vieja.
             let head_time = main_repo.commit_time(CHAT_BRANCH).ok();
-            (on, main_clean, chat_clean, ahead, pre, head_time)
+            let head = chat_repo.head_commit().unwrap_or_default();
+            (on, main_clean, chat_clean, ahead, pre, head_time, head)
         })
         .await
         .map_err(|e| e.to_string())?;
-        let (on, main_clean, chat_clean, ahead, pre, head_time) = git;
+        let (on, main_clean, chat_clean, ahead, pre, head_time, head) = git;
 
         checks.push(if on.as_deref() == Some(target.as_str()) {
             check("main_checked_out", "PASS", format!("`{target}` está extraída en el repo principal"))
@@ -320,6 +324,7 @@ impl Runtime {
             source: CHAT_BRANCH.to_string(),
             target,
             ahead,
+            head,
             checks,
             conflicts,
             review,
@@ -376,10 +381,24 @@ impl Runtime {
             ));
         }
         let ctx = self.chat_merge_ctx(root)?;
+        // La validación pudo tardar minutos: si el chat volvió a trabajar, lo nuevo no se revisó.
+        if self.is_live(ctx.chat.id) {
+            return Err(
+                "el chat volvió a trabajar mientras se validaba: vuelve a revisarlo".into(),
+            );
+        }
         let (pr, target) = (ctx.project.root_path.clone(), pre.target.clone());
+        let (wt, head) = (ctx.worktree.clone(), pre.head.clone());
         let message = format!("merge: {CHAT_BRANCH} → {target} (Symphony)");
         let outcome = tokio::task::spawn_blocking(move || {
             let r = Repo::at(&pr);
+            if Repo::at(&wt).head_commit().ok().as_deref() != Some(head.as_str()) {
+                return Err(symphony_git::GitError::Failed {
+                    args: "merge".into(),
+                    code: "head".into(),
+                    stderr: "el chat cambió después del preflight: vuelve a revisarlo".into(),
+                });
+            }
             // Otra vez, dentro del hilo: entre el preflight y el merge pudo cambiar algo.
             if r.current_branch().ok().flatten().as_deref() != Some(target.as_str()) {
                 return Err(symphony_git::GitError::Failed {
@@ -402,7 +421,11 @@ impl Runtime {
         .map_err(|e| e.to_string())?;
         match outcome {
             MergeOutcome::Merged { commit } => {
-                self.record_chat_merge(&ctx, &pre.target, &commit).await?;
+                // El merge ya está en `main`: un fallo al dejar constancia no lo deshace ni debe
+                // presentarse como si no hubiera pasado.
+                if let Err(e) = self.record_chat_merge(&ctx, &pre.target, &commit).await {
+                    tracing::warn!(error = %e, "se integró el chat pero no se pudo registrar");
+                }
                 Ok(commit)
             }
             MergeOutcome::UpToDate => Err(format!("`{}` ya incluye al chat", pre.target)),

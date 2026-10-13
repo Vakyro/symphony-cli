@@ -1672,3 +1672,44 @@ fn a_footer_notice_expires_on_its_own() {
     app.update(Msg::Tick(NOW + 20_000));
     assert!(app.notice.is_none(), "caducó");
 }
+
+/// P11.5.S6 (revisión): la confirmación de «Ctrl+G otra vez» no sobrevive a salir del chat.
+#[test]
+fn chat_merge_confirmation_does_not_survive_leaving_the_chat() {
+    let mut app = chat_app();
+    ok(
+        &mut app,
+        Req::ChatMerge,
+        json!({ "ahead": 1, "checks": [{ "name": "review", "status": "PASS", "detail": "ok" }] }),
+    );
+    assert!(app.chat_merge_armed);
+    // A otra pantalla y de vuelta.
+    press(&mut app, KeyCode::Esc);
+    assert_ne!(app.screen, Screen::Chat);
+    assert!(!app.chat_merge_armed || press(&mut app, KeyCode::Char('x')).is_empty());
+    assert!(!app.chat_merge_armed, "salir del chat lo desarma");
+}
+
+/// P11.5.S6 (revisión): la URI de un archivo que arma la TUI es la misma que el parser del
+/// daemon acepta y devuelve igual.
+#[test]
+fn the_tui_builds_file_uris_the_context_parser_accepts() {
+    use symphony_context::uri::CtxUri;
+    for p in [
+        "src/a.rs",
+        "packages/@scope/x.ts",
+        "a?b#c%d.txt",
+        "dir/sub dir/a b.txt",
+    ] {
+        let uri = symphony_tui::app::ctx_file_uri(p);
+        let parsed = CtxUri::parse(&uri).unwrap_or_else(|e| panic!("{uri}: {e}"));
+        assert_eq!(
+            parsed,
+            CtxUri::File {
+                path: p.into(),
+                rev: None
+            }
+        );
+        assert_eq!(parsed.to_string(), uri);
+    }
+}
