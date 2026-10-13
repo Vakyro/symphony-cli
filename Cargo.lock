@@ -2918,6 +2918,7 @@ dependencies = [
  "symphony-core",
  "symphony-git",
  "symphony-object-store",
+ "symphony-plugins",
  "symphony-process",
  "symphony-protocol",
  "symphony-router",
@@ -2954,6 +2955,22 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "zstd",
+]
+
+[[package]]
+name = "symphony-plugins"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "symphony-core",
+ "symphony-process",
+ "symphony-testkit",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml_edit",
 ]
 
 [[package]]
@@ -3626,6 +3643,16 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "validator-todo-check"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "symphony-plugins",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

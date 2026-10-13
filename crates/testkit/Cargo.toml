@@ -27,3 +27,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 [[bin]]
 name = "fake-agent"
 path = "src/bin/fake-agent.rs"
+
+[[bin]]
+name = "fake-plugin"
+path = "src/bin/fake-plugin.rs"

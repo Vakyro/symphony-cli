@@ -59,6 +59,15 @@ impl Validation {
             .all(|t| t.status != ValidationStatus::Fail)
     }
 
+    /// Algún check no pudo correr (un plugin que murió o no está instalado): la validación
+    /// «pasó» sin que ese check opinara.
+    pub fn has_skipped(&self) -> bool {
+        self.tiers
+            .iter()
+            .flat_map(|t| &t.checks)
+            .any(|c| c.status == CheckStatus::Skipped)
+    }
+
     /// El texto que recibe el agente cuando falla (FLOW §15.2).
     pub fn feedback(&self) -> String {
         let mut out = String::from(
@@ -66,12 +75,14 @@ impl Validation {
         );
         for t in &self.tiers {
             for c in t.checks.iter().filter(|c| c.status == CheckStatus::Fail) {
+                let code = c
+                    .exit_code
+                    .map_or(String::new(), |e| format!(" → código {e}"));
                 out.push_str(&format!(
-                    "\n[tier {} · {}] `{}` → código {}\n",
+                    "\n[tier {} · {}] `{}`{code}\n",
                     t.tier,
                     c.name.as_str(),
                     c.command,
-                    c.exit_code.map_or("?".into(), |e| e.to_string())
                 ));
                 if let (Some(p), Some(f)) = (c.passed, c.failed) {
                     out.push_str(&format!("{f} fallaron, {p} pasaron\n"));
@@ -180,8 +191,7 @@ impl Runtime {
         symphony_core::load_project(Path::new(project_root))
             .ok()
             .flatten()
-            .and_then(|p| p.validation)
-            .filter(|v| !v.is_empty())
+            .and_then(|p| p.effective_validation())
     }
 
     fn project_root_of(&self, project: symphony_core::ProjectId) -> Option<String> {
@@ -257,7 +267,7 @@ impl Runtime {
         up_to: u8,
         trigger: ValidationTrigger,
     ) -> Result<Validation, String> {
-        let (agent, worktree, root, run) = {
+        let (agent, worktree, base_ref, root, run) = {
             let c = self
                 .reader
                 .lock()
@@ -266,7 +276,8 @@ impl Runtime {
             let wt = agent
                 .worktree_id
                 .ok_or_else(|| "el agente no tiene worktree".to_string())?;
-            let worktree = repo::get_worktree(&c, wt).map_err(|e| e.to_string())?.path;
+            let wt = repo::get_worktree(&c, wt).map_err(|e| e.to_string())?;
+            let (worktree, base_ref) = (wt.path, wt.base_ref);
             let root = repo::get_project(&c, agent.project_id)
                 .map_err(|e| e.to_string())?
                 .root_path;
@@ -274,7 +285,7 @@ impl Runtime {
                 .map_err(|e| e.to_string())?
                 .pop()
                 .map(|r| r.id);
-            (agent, worktree, root, run)
+            (agent, worktree, base_ref, root, run)
         };
         let Some(cfg) = self.project_validation(&root) else {
             return Err(
@@ -286,9 +297,16 @@ impl Runtime {
         let timeout = Duration::from_secs(cfg.timeout_secs.max(1));
         let label = format!("Agent #{}", agent.number);
         let mut result = Validation::default();
+        // Los validators de plugin corren en el tier 2 (ADR-0015).
+        let validators = self.active_plugins(&root).validators;
         for tier in 1..=up_to {
             let commands = cfg.tier(tier);
-            if commands.is_empty() {
+            let plugin_validators = if tier == 2 {
+                validators.clone()
+            } else {
+                Vec::new()
+            };
+            if commands.is_empty() && plugin_validators.is_empty() {
                 continue;
             }
             let vrun = ulid_string();
@@ -322,6 +340,18 @@ impl Runtime {
                     )
                     .await?;
                 checks.push(check);
+            }
+            if !plugin_validators.is_empty() {
+                let more = self
+                    .run_plugin_checks(
+                        &agent,
+                        &vrun,
+                        Path::new(&worktree),
+                        &base_ref,
+                        &plugin_validators,
+                    )
+                    .await?;
+                checks.extend(more);
             }
             let status = if checks.iter().any(|c| c.status == CheckStatus::Fail) {
                 ValidationStatus::Fail
@@ -687,6 +717,6 @@ impl Runtime {
 }
 
 /// Id textual (ULID) para filas que no tienen tipo propio en `core`.
-fn ulid_string() -> String {
+pub(crate) fn ulid_string() -> String {
     ToolCallId::new().to_string()
 }

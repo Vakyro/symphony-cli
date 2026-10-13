@@ -147,7 +147,7 @@ fn file_db_has_the_schema_and_pragmas() {
         })
         .unwrap()
     };
-    assert_eq!(pragma("user_version"), "5");
+    assert_eq!(pragma("user_version"), "6");
     assert_eq!(pragma("journal_mode"), "wal");
     assert_eq!(pragma("foreign_keys"), "1");
     assert_eq!(pragma("synchronous"), "1"); // NORMAL
@@ -165,7 +165,7 @@ fn file_db_has_the_schema_and_pragmas() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
 }
 

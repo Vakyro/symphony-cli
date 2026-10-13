@@ -161,6 +161,7 @@ db_enum!(
         FullTests => "full_tests",
         Build => "build",
         Security => "security",
+        Plugin => "plugin",
     }
 );
 

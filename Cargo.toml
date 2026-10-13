@@ -13,6 +13,7 @@ members = [
     "crates/object-store",
     "crates/git",
     "crates/process",
+    "crates/plugins",
     "crates/adapters/common",
     "crates/adapters/claude",
     "crates/adapters/codex",
@@ -21,6 +22,7 @@ members = [
     "crates/adapters/copilot",
     "crates/adapters/opencode",
     "crates/testkit",
+    "examples/plugins/validator-todo-check",
     "xtask",
 ]
 

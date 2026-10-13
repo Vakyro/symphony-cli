@@ -125,6 +125,11 @@ enum Cmd {
         #[command(subcommand)]
         action: FactCmd,
     },
+    /// Plugins instalados en `~/.symphony/plugins` (validators y context transformers).
+    Plugin {
+        #[command(subcommand)]
+        action: PluginCmd,
+    },
     /// Pide a un review agent que revise el trabajo de un agente (solo recomienda; no integra).
     Review {
         /// ID o número del agente a revisar.
@@ -189,6 +194,17 @@ enum Cmd {
 enum ProvidersCmd {
     /// Vuelve a detectar los CLIs instalados.
     Refresh,
+}
+
+#[derive(Subcommand)]
+enum PluginCmd {
+    /// Lista lo instalado, qué activa este proyecto y lo que no sirve (con el motivo).
+    List,
+    /// Lanza un plugin y le pide `describe`: comprueba que arranca y que es quien dice ser.
+    Check {
+        /// Nombre del plugin (la carpeta en `~/.symphony/plugins`).
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -649,6 +665,41 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                 print_chat_merge(&res);
             }
         }
+        Some(Cmd::Plugin { action }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            match action {
+                PluginCmd::List => {
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .display()
+                        .to_string();
+                    let res =
+                        client::call(&mut conn, "plugin.list", json!({ "project_root": cwd }))
+                            .await?;
+                    print_plugins(&res);
+                }
+                PluginCmd::Check { name } => {
+                    let res =
+                        client::call(&mut conn, "plugin.check", json!({ "name": name })).await?;
+                    if res["ok"].as_bool().unwrap_or(false) {
+                        println!(
+                            "✓ {} responde (tipo {}, plugin_api {}, {} ms)",
+                            res["name"].as_str().unwrap_or("?"),
+                            res["kind"].as_str().unwrap_or("?"),
+                            res["plugin_api"],
+                            res["elapsed_ms"]
+                        );
+                    } else {
+                        println!(
+                            "✗ {}: {}",
+                            res["name"].as_str().unwrap_or("?"),
+                            res["error"].as_str().unwrap_or("falló")
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
         Some(Cmd::Review {
             agent,
             model,
@@ -956,6 +1007,54 @@ fn print_providers(v: &Value) {
             text("cli_version"),
             p["models"],
             text("cli_path")
+        );
+    }
+}
+
+fn print_plugins(v: &Value) {
+    let empty = Vec::new();
+    let plugins = v["plugins"].as_array().unwrap_or(&empty);
+    if plugins.is_empty() {
+        println!(
+            "No hay plugins instalados en {}.",
+            v["installed_dir"].as_str().unwrap_or("~/.symphony/plugins")
+        );
+    } else {
+        println!(
+            "{:<26} {:<20} {:<9} {:<8} DESCRIPCIÓN",
+            "PLUGIN", "TIPO", "VERSIÓN", "ACTIVO"
+        );
+        for p in plugins {
+            let note = if p["supported"].as_bool().unwrap_or(true) {
+                ""
+            } else {
+                " (tipo no soportado todavía)"
+            };
+            println!(
+                "{:<26} {:<20} {:<9} {:<8} {}{note}",
+                p["name"].as_str().unwrap_or("?"),
+                p["kind"].as_str().unwrap_or("?"),
+                p["version"].as_str().unwrap_or("?"),
+                if p["enabled"].as_bool().unwrap_or(false) {
+                    "sí"
+                } else {
+                    "no"
+                },
+                p["description"].as_str().unwrap_or("")
+            );
+        }
+    }
+    for p in v["problems"].as_array().unwrap_or(&empty) {
+        println!(
+            "✗ {}: {}",
+            p["dir"].as_str().unwrap_or("?"),
+            p["problem"].as_str().unwrap_or("?")
+        );
+    }
+    for n in v["enabled_but_missing"].as_array().unwrap_or(&empty) {
+        println!(
+            "! `{}` está activado en project.toml pero no está instalado",
+            n.as_str().unwrap_or("?")
         );
     }
 }

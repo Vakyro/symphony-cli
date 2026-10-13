@@ -430,6 +430,21 @@ async fn dispatch(req: Request, state: &State) -> Response {
         }
         "merge.get" => merge_get(req, state),
         "review.start" => review_start(req, state).await,
+        "plugin.list" => {
+            let root = req
+                .params
+                .get("project_root")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            Response::ok(req.id, state.runtime.plugin_list(root.as_deref()))
+        }
+        "plugin.check" => match req.params.get("name").and_then(Value::as_str) {
+            Some(name) => match state.runtime.plugin_check(name).await {
+                Ok(v) => Response::ok(req.id, v),
+                Err(e) => Response::error(req.id, "plugin_not_found", e),
+            },
+            None => Response::error(req.id, "invalid_params", "falta `name`"),
+        },
         "chat.merge.prepare" | "chat.merge.review" | "chat.merge.integrate" => {
             chat_merge(req, state).await
         }

@@ -12,9 +12,9 @@ mod transitions;
 pub use ansi::{AnsiMode, sanitize};
 pub use config::{
     ChatConfig, Config, ConfigError, ContextConfig, DEFAULT_CONFIG, LoggingConfig,
-    PerformanceConfig, PhaseStart, PlanConfig, ProjectConfig, ProjectInit, ProjectSection,
-    ProviderLimits, ProviderPermissions, ProvidersConfig, RoutingConfig, SymphonyHome,
-    init_project, load_or_create, load_project, project_config_path, set_value,
+    PerformanceConfig, PhaseStart, PlanConfig, PluginsConfig, ProjectConfig, ProjectInit,
+    ProjectSection, ProviderLimits, ProviderPermissions, ProvidersConfig, RoutingConfig,
+    SymphonyHome, init_project, load_or_create, load_project, project_config_path, set_value,
 };
 pub use config::{MergeConfig, ValidationConfig, WorktreeConfig};
 pub use enums::{

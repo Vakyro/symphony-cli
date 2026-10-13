@@ -288,8 +288,8 @@ impl Runtime {
         let has_validation = symphony_core::load_project(Path::new(&project_root))
             .ok()
             .flatten()
-            .and_then(|p| p.validation)
-            .is_some_and(|v| !v.is_empty());
+            .and_then(|p| p.effective_validation())
+            .is_some();
         if !has_validation {
             checks.push(check(
                 "validation",
@@ -301,6 +301,11 @@ impl Runtime {
                 .validate(ctx.chat.id, 3, ValidationTrigger::MergeGate)
                 .await
             {
+                Ok(v) if v.passed() && v.has_skipped() => checks.push(check(
+                    "validation",
+                    "WARN",
+                    "pasó, pero un check no pudo correr (¿un plugin caído?)",
+                )),
                 Ok(v) if v.passed() => checks.push(check(
                     "validation",
                     "PASS",

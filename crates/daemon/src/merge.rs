@@ -183,8 +183,8 @@ impl Runtime {
         let has_validation = symphony_core::load_project(Path::new(&root))
             .ok()
             .flatten()
-            .and_then(|p| p.validation)
-            .is_some_and(|v| !v.is_empty());
+            .and_then(|p| p.effective_validation())
+            .is_some();
         if !has_validation {
             checks.push(Check {
                 name: "validation",
@@ -196,6 +196,11 @@ impl Runtime {
                 .validate(agent_id, 3, ValidationTrigger::MergeGate)
                 .await
             {
+                Ok(v) if v.passed() && v.has_skipped() => checks.push(Check {
+                    name: "validation",
+                    status: "WARN",
+                    detail: "pasó, pero un check no pudo correr (¿un plugin caído?): revisa la vista de validación".into(),
+                }),
                 Ok(v) if v.passed() => checks.push(Check {
                     name: "validation",
                     status: "PASS",

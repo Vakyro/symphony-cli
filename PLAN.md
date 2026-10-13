@@ -14,6 +14,7 @@
 | 2026-09-28 | Nueva fase **P07.5 · Chat general** antes de P08 (ADR-0006, aceptado): chat agéntico en la vista inicial, con worktree propio pre-main y cambio de proveedor sin perder contexto. P08–P10 quedan diferidas y pendientes de rediseño | El uso real de v0.1 mostró que el valor está en un chat simple con continuidad entre proveedores, no en orquestar varios agentes. El chat reutiliza casi todo P05–P07 |
 | 2026-10-01 | **P11 se adelanta** tras P07.S10; P09 y P10 se recortan al chat (ADR-0008, aceptado). Orden: P07.S10 → P11 → P10 recortada → P09 recortada → P08 | El core ya es genérico y los 3 CLIs están instalados; el chat no usa P08–P10 |
 | 2026-10-01 | **P07.S10 cerrada por ADR-0010:** P08–P10 dejan de ser provisionales y se ejecutan completas en el orden **P10 → P09 → P08**; se levanta el gate de tiempo de ADR-0007 §3 por instrucción de Leo | P11 ya cerró con cinco proveedores; Leo pidió hacer lo diferido. Cada fase empieza con un párrafo de diseño en su bitácora y cierra con revisión, CI, merge y tag |
+| 2026-10-12 | **ADR-0015** (P12): plugins como procesos aislados con protocolo JSON de una vuelta; `validator` y `context-transformer` en v1, `tool` y `provider-adapter` diferidos; un check de plugin entra en `validation_checks` con nombre `plugin` (**migración 006**) y la de sugerencias de P14 pasa a la **007** | El gate de validación necesita un nombre de check que no existe y el CHECK de la tabla no se amplía sin migración |
 | 2026-10-12 | **ADR-0014:** nueva fase **P11.5 · Pendientes y pulido**; P12–P16 dejan de ser provisionales y se ejecutan en el orden **P11.5 → P12 → P14 → P15 → P13 → P16**; P14.S1 pasa a migración 006; el empaquetado de la GUI (P15.S5) entra en P13.S7 | P08 cerrada; quedaban pendientes sin dueño en P07.5–P11 y Leo delegó el orden. Endurecer al final cubre plugins, sugerencias y GUI |
 
 ---
@@ -1140,15 +1141,18 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 
 **Orden (ADR-0014):** segunda, tras P11.5. Rama `phase/p12-plugins`. Los plugins se instalan en `~/.symphony/plugins/<nombre>/` (CONSTRAINTS A12: nada por proyecto); un proyecto solo puede **activar** plugins ya instalados desde `project.toml`. Un plugin nunca abre la DB (A10): todo lo que necesita lo pide por el protocolo.
 
+**Decisiones:** ADR-0015 (modelo de confianza, protocolo v1, alcance). **Bitácora:** `docs/phases/P12-plugins.md`.
+
 ### P12.S1 · Protocolo y manifiesto
-- **Qué:** `plugin.toml` (nombre, versión, `plugin_api`, tipo: `validator`/`context-transformer`/`tool`/`provider-adapter`, ejecutable), protocolo JSON versionado por stdin/stdout. Empezar por `validator` y `context-transformer` (los que tienen un punto de enganche claro: el gate de validación de P08 y el ensamblador de handoff de P09); `tool` y `provider-adapter` se diseñan en el protocolo pero solo se implementan si el ejemplo de S3 o un caso real lo pide (si no, ADR corto que los difiere a v1.1).
+- **Qué:** crate `symphony-plugins`: `plugin.toml` (nombre, versión, `plugin_api`, tipo, `exec`, `timeout_secs`) con validación estricta y el protocolo JSON v1 (`describe`, `validate`, `transform`) como tipos. `validator` y `context-transformer` son los que tienen punto de enganche (gate de P08 y handoff de P09); `tool` y `provider-adapter` se aceptan en el manifiesto pero el host los rechaza (ADR-0015).
+- **Verifica:** tests del manifiesto (válidos, `plugin_api` desconocida, rutas absolutas y `..`, claves desconocidas) y del protocolo (respuesta con otra `plugin_api`, JSON inválido).
 
 ### P12.S2 · Plugin host
-- **Qué:** descubrimiento, arranque vía ProcessSupervisor (con límites), timeouts y políticas: **un plugin nunca ejecuta comandos sin pasar por las políticas de Symphony**.
-- **Verifica:** un plugin que crashea no afecta al daemon; uno que excede el tiempo se mata.
+- **Qué:** descubrimiento en `~/.symphony/plugins`, ejecución por el supervisor (un proceso por llamada, límites de memoria y procesos, tiempo máximo, salida acotada), integración en el gate de validación (checks `plugin`, migración 006) y en el handoff (transformers, con `redact`), `[plugins]` en `project.toml`, IPC `plugin.list`/`plugin.check` y `symphony plugin list|check`. **Un plugin nunca ejecuta comandos ni abre la base: el protocolo no tiene ese mensaje.**
+- **Verifica:** un plugin que muere no afecta al daemon; uno que excede el tiempo se mata (sin huérfanos); uno que devuelve basura o miente de `plugin_api` es un error legible; en el gate, un plugin que no pudo correr queda `SKIPPED`, no «pasó».
 
 ### P12.S3 · Plugin de ejemplo
-- **Qué:** `examples/plugins/validator-todo-check` (ejemplo: falla si el diff agrega `TODO` sin issue) con tests.
+- **Qué:** `examples/plugins/validator-todo-check` (falla si el diff agrega `TODO` sin issue) con tests, y una guía en el QUICKSTART para escribir uno.
 
 ### P12.S4 · Cierre
 - Protocolo §4.6. Tag `p12-done`.
@@ -1198,8 +1202,8 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 
 **Orden (ADR-0014):** tercera, tras P12. Rama `phase/p14-sugerencias`.
 
-### P14.S1 · Migración 006
-- **Qué:** `model_suggestions` (la única tabla del spec sin migrar); activación de `profile_models.learned_adjustment`. Es la **006**: la 005 ya es la de validación de P08.
+### P14.S1 · Migración 007
+- **Qué:** `model_suggestions` (la única tabla del spec sin migrar); activación de `profile_models.learned_adjustment`. Es la **007**: la 005 es la de validación de P08 y la 006 la de checks de plugin (ADR-0015).
 
 ### P14.S2 · Sugerencias por reglas
 - **Qué:** detectar cambios de tipo de tarea (por ejemplo, documentación → refactor multiarchivo, por archivos tocados y tipo de comandos) y proponer `[Switch] [Keep] [Don't suggest again]`. **Nunca cambiar automáticamente.**
