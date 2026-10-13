@@ -44,6 +44,17 @@ fn main() {
     }
 
     match mode {
+        // Devuelve lo que recibió: para comprobar qué ve un validator.
+        "echo" => {
+            let params = &request["params"];
+            let files = params["files"].to_string();
+            let diff = params["diff"].as_str().unwrap_or("");
+            reply(&ok(json!({
+                "passed": true,
+                "summary": format!("files={files} diff={diff}"),
+                "findings": []
+            })));
+        }
         "validate-ok" => reply(&ok(
             json!({"passed": true, "summary": "todo bien", "findings": []}),
         )),

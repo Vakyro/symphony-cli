@@ -301,6 +301,11 @@ impl Runtime {
                 .validate(ctx.chat.id, 3, ValidationTrigger::MergeGate)
                 .await
             {
+                Ok(v) if v.passed() && v.has_skipped() => checks.push(check(
+                    "validation",
+                    "WARN",
+                    "pasó, pero un check no pudo correr (¿un plugin caído?)",
+                )),
                 Ok(v) if v.passed() => checks.push(check(
                     "validation",
                     "PASS",

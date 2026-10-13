@@ -119,6 +119,22 @@ fn tail(s: &str, max: usize) -> &str {
     &s[from..]
 }
 
+/// ¿Parece una variable de entorno con un secreto? (claves de API, tokens, contraseñas.)
+fn secret_env_name(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    [
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "AUTH",
+    ]
+    .iter()
+    .any(|w| up.contains(w))
+}
+
 /// Recorta a `max` caracteres.
 fn clip(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
@@ -136,24 +152,40 @@ impl Plugin {
         if !kind.supported() {
             return Err(PluginError::Unsupported(kind.as_str()));
         }
-        let spec = ProcessSpec::new(self.manifest.program(&self.dir))
+        let mut spec = ProcessSpec::new(self.manifest.program(&self.dir))
             .args(self.manifest.exec.iter().skip(1))
             .cwd(&self.dir)
-            .env("SYMPHONY_PLUGIN_API", "1")
-            .with_stdin()
-            .limits(Limits {
-                max_memory_bytes: Some(MAX_MEMORY_BYTES),
-                cpu_cores: None,
-                max_processes: Some(MAX_PROCESSES),
-            });
+            .env("SYMPHONY_PLUGIN_API", "1");
+        // Las claves de proveedores y tokens del entorno del daemon no llegan al plugin.
+        for (name, _) in std::env::vars_os() {
+            if secret_env_name(&name.to_string_lossy()) {
+                spec = spec.env(name, "");
+            }
+        }
+        let spec = spec.with_stdin().limits(Limits {
+            max_memory_bytes: Some(MAX_MEMORY_BYTES),
+            cpu_cores: None,
+            max_processes: Some(MAX_PROCESSES),
+        });
         let mut proc = spawn(spec)
             .await
             .map_err(|e| PluginError::Spawn(e.to_string()))?;
-        // Si el plugin ya salió, escribirle falla: el estado de salida lo explica mejor.
-        let _ = proc.write_stdin(request.to_line().as_bytes()).await;
-        let _ = proc.close_stdin().await;
-
         let secs = self.manifest.timeout_secs;
+        let started = std::time::Instant::now();
+        // Escribir también cuenta para el tiempo máximo: un plugin que no lee stdin llenaría la
+        // tubería y colgaría la llamada. Si ya salió, escribirle falla y el estado de salida lo
+        // explica mejor.
+        let line = request.to_line();
+        let wrote = tokio::time::timeout(Duration::from_secs(secs), async {
+            let _ = proc.write_stdin(line.as_bytes()).await;
+            let _ = proc.close_stdin().await;
+        })
+        .await;
+        if wrote.is_err() {
+            let _ = proc.terminate_tree();
+            return Err(PluginError::Timeout(secs));
+        }
+        let remaining = Duration::from_secs(secs).saturating_sub(started.elapsed());
         let mut stdout = String::new();
         let mut stderr = String::new();
         let mut overflow = false;
@@ -179,10 +211,7 @@ impl Plugin {
                 }
             }
         };
-        if tokio::time::timeout(Duration::from_secs(secs), read)
-            .await
-            .is_err()
-        {
+        if tokio::time::timeout(remaining, read).await.is_err() {
             let _ = proc.terminate_tree();
             return Err(PluginError::Timeout(secs));
         }
@@ -287,5 +316,26 @@ impl Plugin {
             )));
         }
         Ok(symphony_core::redact(out).into_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_looking_environment_names_are_scrubbed() {
+        for n in [
+            "ANTHROPIC_API_KEY",
+            "GITHUB_TOKEN",
+            "openai_api_key",
+            "AWS_SECRET_ACCESS_KEY",
+            "DB_PASSWORD",
+        ] {
+            assert!(secret_env_name(n), "{n}");
+        }
+        for n in ["PATH", "HOME", "USERPROFILE", "SYMPHONY_HOME", "TEMP"] {
+            assert!(!secret_env_name(n), "{n}");
+        }
     }
 }

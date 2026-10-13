@@ -59,6 +59,15 @@ impl Validation {
             .all(|t| t.status != ValidationStatus::Fail)
     }
 
+    /// Algún check no pudo correr (un plugin que murió o no está instalado): la validación
+    /// «pasó» sin que ese check opinara.
+    pub fn has_skipped(&self) -> bool {
+        self.tiers
+            .iter()
+            .flat_map(|t| &t.checks)
+            .any(|c| c.status == CheckStatus::Skipped)
+    }
+
     /// El texto que recibe el agente cuando falla (FLOW §15.2).
     pub fn feedback(&self) -> String {
         let mut out = String::from(

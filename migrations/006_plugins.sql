@@ -19,5 +19,8 @@ CREATE TABLE validation_checks (
 ) STRICT;
 CREATE INDEX validation_checks_run ON validation_checks(validation_run_id);
 
-INSERT INTO validation_checks SELECT * FROM validation_checks_bak;
+INSERT INTO validation_checks
+    (id, validation_run_id, name, status, passed_count, failed_count, summary, output_object_id)
+SELECT id, validation_run_id, name, status, passed_count, failed_count, summary, output_object_id
+FROM validation_checks_bak;
 DROP TABLE validation_checks_bak;

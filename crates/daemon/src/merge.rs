@@ -196,6 +196,11 @@ impl Runtime {
                 .validate(agent_id, 3, ValidationTrigger::MergeGate)
                 .await
             {
+                Ok(v) if v.passed() && v.has_skipped() => checks.push(Check {
+                    name: "validation",
+                    status: "WARN",
+                    detail: "pasó, pero un check no pudo correr (¿un plugin caído?): revisa la vista de validación".into(),
+                }),
                 Ok(v) if v.passed() => checks.push(Check {
                     name: "validation",
                     status: "PASS",

@@ -78,8 +78,8 @@ pub enum ManifestError {
     #[error("`exec` está vacío")]
     ExecEmpty,
     #[error(
-        "`exec[0]` = `{0}`: tiene que ser un nombre del PATH o un archivo relativo dentro de la \
-         carpeta del plugin (sin ruta absoluta ni `..`)"
+        "`exec[0]` = `{0}`: tiene que ser un archivo de la carpeta del plugin (`./x`) o un nombre \
+         del PATH, sin ruta absoluta ni `..`"
     )]
     ExecPath(String),
     #[error("`timeout_secs = {0}` fuera de 1–{MAX_TIMEOUT_SECS}")]
@@ -134,19 +134,26 @@ impl Manifest {
     /// nombre del `PATH`.
     pub fn program(&self, dir: &Path) -> PathBuf {
         let first = &self.exec[0];
-        if !is_relative_file(first) {
-            return PathBuf::from(first);
-        }
         let direct = dir.join(first);
-        if direct.is_file() || !cfg!(windows) {
+        let exe = dir.join(format!("{first}.exe"));
+        // Un archivo de la carpeta del plugin gana: `validator` y `./validator` son el mismo.
+        if direct.is_file() {
             return direct;
         }
-        let exe = dir.join(format!("{first}.exe"));
-        if exe.is_file() { exe } else { direct }
+        if cfg!(windows) && exe.is_file() {
+            return exe;
+        }
+        // Con separador se esperaba un archivo del plugin; sin él, un programa del PATH.
+        if is_relative_file(first) {
+            direct
+        } else {
+            PathBuf::from(first)
+        }
     }
 }
 
-/// `./x`, `bin/x` o `x.js` son archivos del plugin; `node` es un nombre del PATH.
+/// `./x` y `bin/x` son siempre archivos del plugin; `node` es un nombre del PATH salvo que la
+/// carpeta del plugin tenga un archivo con ese nombre.
 fn is_relative_file(p: &str) -> bool {
     p.contains('/') || p.contains('\\')
 }
@@ -242,6 +249,23 @@ timeout_secs = 20
             bad(&base("timeout_secs = 301")),
             ManifestError::Timeout(301)
         ));
+    }
+
+    #[test]
+    fn a_bare_name_that_exists_in_the_plugin_dir_is_the_plugin_file() {
+        let dir = std::env::temp_dir().join(format!("sym-plugin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("check.py"), "x").unwrap();
+        let m = Manifest::parse(
+            "name='x'\nversion='1'\nplugin_api=1\nkind='validator'\nexec=['check.py']",
+        )
+        .unwrap();
+        assert_eq!(m.program(&dir), dir.join("check.py"));
+        let other =
+            Manifest::parse("name='x'\nversion='1'\nplugin_api=1\nkind='validator'\nexec=['node']")
+                .unwrap();
+        assert_eq!(other.program(&dir), PathBuf::from("node"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

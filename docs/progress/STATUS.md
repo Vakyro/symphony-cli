@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-12 · por claude-code/sonnet-5.5
-**Fase actual:** P12 · Plugins (rama `phase/p12-plugins`, por crear desde `main`). P11.5 cerrada (`p115-done`)
-**Paso actual:** P12.S4 · Cierre (revisión de código, merge a `main`, tag `p12-done`)
+**Fase actual:** P14 · Sugerencias de modelo (rama `phase/p14-sugerencias`, por crear desde `main`). P12 cerrada (`p12-done`)
+**Paso actual:** P14.S1 · Migración 007 (`model_suggestions`)
 **Estado del paso:** sin empezar
 **En curso por:** nadie
 
@@ -30,7 +30,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 - [x] S10 Deuda anotada
 - [x] S11 Cierre (`p115-done`)
 
-**P12 · Plugins** (`phase/p12-plugins`, `docs/phases/P12-plugins.md`): ✅ S1 protocolo y manifiesto · ✅ S2 plugin host · ✅ S3 plugin de ejemplo · S4 cierre (`p12-done`)
+**P12 · Plugins** (`phase/p12-plugins`, `docs/phases/P12-plugins.md`): ✅ S1 · ✅ S2 · ✅ S3 · ✅ S4 cierre (`p12-done`)
 
 **P14 · Sugerencias de modelo** (`phase/p14-sugerencias`): S1 migración **007** · S2 sugerencias por reglas · S3 desempeño aprendido (umbral en ADR) · S4 experimentos ML (ADR; rechazar es válido) · S5 cierre (`p14-done`)
 
@@ -42,6 +42,8 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 ## Para usar lo nuevo (Leo)
 `symphony daemon stop` y luego `cargo install --path crates/cli --locked --force` y `cargo install --path crates/daemon --locked --force` (no lo hice yo: puede haber un daemon tuyo en uso). Novedades: `symphony chat merge`, `symphony review`, `[providers.permissions]`, texto del chat en vivo con Claude, `Ctrl+G`/`Ctrl+R` en el chat.
+
+Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y el ejemplo `examples/plugins/validator-todo-check` (QUICKSTART § Plugins).
 
 ## Permisos vigentes (sin preguntar)
 - Merge `--no-ff` de la rama de fase a `main`, tag `pNN-done`, push de `main` y del tag (memoria «merge a main OK»).
@@ -83,4 +85,5 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P09 | ✅ (live pendientes → P11.5.S9) | p09-done |
 | P08 | ✅ | p08-done |
 | P11.5 | ✅ (live de pago pendientes → Para Leo) | p115-done |
-| P12, P14, P15, P13, P16 | ⏳ en ese orden (ADR-0014) | |
+| P12 | ✅ | p12-done |
+| P14, P15, P13, P16 | ⏳ en ese orden (ADR-0014) | |

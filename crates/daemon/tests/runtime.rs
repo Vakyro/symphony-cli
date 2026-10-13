@@ -4811,11 +4811,17 @@ async fn a_handoff_flags_a_checkpoint_older_than_the_last_activity() {
 
 /// P11.5.S5: el tope de simultáneos de un lote sigue a la cuota de ahora. Con la cuota conocida
 /// en 30 % solo caben 2 de 3: el tercero espera `READY` y arranca cuando termina uno.
+///
+/// Cada agente espera una «puerta» (un archivo con el id de su tarea en una carpeta del test):
+/// el orden de los hechos lo manda el test, no el reloj, así que no depende de la carga.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_batch_cap_follows_the_quota_that_is_known_now() {
-    // Cada agente tarda 4 s: A sigue vivo cuando baja la cuota aunque la creación del lote vaya
-    // lenta (bajo la carga del workspace completo).
-    let script = slow_writes("fix.txt", "hecho").replace("ms = 1500", "ms = 4000");
+    let gates = tempfile::tempdir().unwrap();
+    let wait_for_gate = r#"const fs = require("fs"); const f = process.argv[1] + "/" + process.env.SYMPHONY_TASK_ID; setInterval(() => { if (fs.existsSync(f)) process.exit(0); }, 50);"#;
+    let script = format!(
+        "[[step]]\nkind = \"say\"\ntext = \"Trabajando\"\n\n[[step]]\nkind = \"run\"\ncommand = [\"node\", \"-e\", '{wait_for_gate}', '{}']\n\n[[step]]\nkind = \"edit\"\npath = \"fix.txt\"\ncontent = \"hecho\\n\"\n",
+        gates.path().display()
+    );
     let e = env_with(&[("alpha", &script)], None).await;
     make_chat(&e).await;
     let reactor = symphony_daemon::dependencies::spawn(
@@ -4837,9 +4843,9 @@ async fn a_batch_cap_follows_the_quota_that_is_known_now() {
         .await
         .unwrap();
     assert_eq!(batch.parallel, 3, "al crearlo no hay cuota conocida");
-    // Después de crearlo, la cuota conocida baja: 30 % → la mitad (2 de 3).
+    // A sigue detenido en su puerta: la cuota conocida baja a 30 % → la mitad (2 de 3).
     set_health(&e, "alpha", "HEALTHY", "KNOWN", Some(0.30), None).await;
-    let id = |name: &str| {
+    let agent_of = |name: &str| {
         batch
             .agents
             .iter()
@@ -4848,9 +4854,18 @@ async fn a_batch_cap_follows_the_quota_that_is_known_now() {
             .agent_id
             .to_string()
     };
-    let (b, c, d) = (id("B"), id("C"), id("D"));
-    // D queda esperando cupo con B y C ya en marcha.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let open_gate = |agent: &str| {
+        let task: String = one(
+            &e,
+            &format!("SELECT task_id FROM agents WHERE id = '{agent}'"),
+        );
+        std::fs::write(gates.path().join(task), "").unwrap();
+    };
+    let (a, b, c, d) = (agent_of("A"), agent_of("B"), agent_of("C"), agent_of("D"));
+    open_gate(&a);
+
+    // D queda esperando cupo con B y C en marcha (detenidos en su puerta).
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     loop {
         let why: Option<String> = one(
             &e,
@@ -4865,10 +4880,10 @@ async fn a_batch_cap_follows_the_quota_that_is_known_now() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let runs = |a: &str| -> i64 {
+    let runs = |agent: &str| -> i64 {
         one(
             &e,
-            &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id = '{a}'"),
+            &format!("SELECT COUNT(*) FROM agent_runs WHERE agent_id = '{agent}'"),
         )
     };
     assert_eq!((runs(&b), runs(&c), runs(&d)), (1, 1, 0));
@@ -4877,8 +4892,11 @@ async fn a_batch_cap_follows_the_quota_that_is_known_now() {
         "READY"
     );
     // Cuando uno termina hay cupo: D arranca y el lote completo termina.
-    for a in &batch.agents {
-        wait_state(&e, &a.agent_id.to_string(), "COMPLETED").await;
+    open_gate(&b);
+    open_gate(&c);
+    open_gate(&d);
+    for agent in [&a, &b, &c, &d] {
+        wait_state(&e, agent, "COMPLETED").await;
     }
     assert_eq!(runs(&d), 1);
     e.runtime.wait_executors().await;
@@ -5440,5 +5458,31 @@ async fn a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored(
         .await
         .unwrap();
     assert!(h.prompt.contains("Trabajo"), "{}", h.prompt);
+    e.writer.shutdown();
+}
+
+/// P12 (revisión): el validator ve también los archivos nuevos que todavía no tienen
+/// seguimiento (el gate corre antes del commit) y lo que ve va sin secretos.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_validator_plugin_sees_untracked_new_files() {
+    let e = env(&writes("nuevo.txt", "// TODO sin issue"), None).await;
+    install_plugin(&e, "echo", "validator", PLUGIN_GATE);
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Archivo nuevo",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let checks = plugin_checks(&e, &agent);
+    let summary = checks[0].2.clone().unwrap_or_default();
+    assert!(summary.contains("nuevo.txt"), "{summary}");
+    assert!(summary.contains("TODO sin issue"), "{summary}");
     e.writer.shutdown();
 }

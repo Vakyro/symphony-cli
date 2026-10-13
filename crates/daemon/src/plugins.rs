@@ -19,12 +19,25 @@ use crate::validation::{CheckResult, ulid_string};
 
 /// Hallazgos que se copian al resumen de un check.
 const FINDINGS_IN_SUMMARY: usize = 8;
+/// Caracteres del diff que ve un plugin.
+const DIFF_KEEP: usize = 512 * 1024;
+/// Líneas de cada archivo nuevo sin seguimiento que entran al diff del plugin.
+const UNTRACKED_LINES: usize = 2000;
+/// Tiempo total que pueden tomar los context transformers de un handoff.
+const TRANSFORM_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Lo que un proyecto activa, resuelto contra lo instalado. `Err` = por qué no sirve.
 #[derive(Debug, Clone, Default)]
 pub struct Active {
-    pub validators: Vec<Result<Plugin, String>>,
-    pub transformers: Vec<Result<Plugin, String>>,
+    pub validators: Vec<Result<Plugin, Unavailable>>,
+    pub transformers: Vec<Result<Plugin, Unavailable>>,
+}
+
+/// Un plugin activado que no se puede usar: cuál es y por qué.
+#[derive(Debug, Clone)]
+pub struct Unavailable {
+    pub name: String,
+    pub why: String,
 }
 
 impl Runtime {
@@ -39,20 +52,26 @@ impl Runtime {
             return Active::default();
         }
         let installed = discover(&SymphonyHome::at(&self.home).plugins_dir());
-        let resolve = |names: &[String], want: Kind| -> Vec<Result<Plugin, String>> {
+        let resolve = |names: &[String], want: Kind| -> Vec<Result<Plugin, Unavailable>> {
             names
                 .iter()
-                .map(
-                    |n| match installed.plugins.iter().find(|p| &p.manifest.name == n) {
+                .map(|n| {
+                    let unavailable = |why: String| Unavailable {
+                        name: n.clone(),
+                        why,
+                    };
+                    match installed.plugins.iter().find(|p| &p.manifest.name == n) {
                         Some(p) if p.manifest.kind == want => Ok(p.clone()),
-                        Some(p) => Err(format!(
+                        Some(p) => Err(unavailable(format!(
                             "`{n}` es de tipo `{}`, no `{}`",
                             p.manifest.kind.as_str(),
                             want.as_str()
-                        )),
-                        None => Err(format!("`{n}` no está instalado en ~/.symphony/plugins")),
-                    },
-                )
+                        ))),
+                        None => Err(unavailable(format!(
+                            "`{n}` no está instalado en ~/.symphony/plugins"
+                        ))),
+                    }
+                })
                 .collect()
         };
         Active {
@@ -69,7 +88,7 @@ impl Runtime {
         vrun: &str,
         worktree: &Path,
         base_ref: &str,
-        plugins: &[Result<Plugin, String>],
+        plugins: &[Result<Plugin, Unavailable>],
     ) -> Result<Vec<CheckResult>, String> {
         let task = self
             .reader
@@ -78,16 +97,38 @@ impl Runtime {
             .and_then(|c| repo::get_task(&c, agent.task_id).map_err(|e| e.to_string()))?;
         let (wt, base) = (worktree.to_path_buf(), base_ref.to_string());
         let (diff, files) = tokio::task::spawn_blocking(move || {
-            let r = Repo::at(wt);
-            let diff = r.diff(&base).unwrap_or_default();
-            let files = r
+            let r = Repo::at(&wt);
+            let mut diff = r.diff(&base).unwrap_or_default();
+            let mut files: Vec<String> = r
                 .diff_numstat(&base)
                 .map(|v| v.into_iter().map(|n| n.path).collect())
                 .unwrap_or_default();
+            // Los archivos nuevos todavía sin seguimiento (el gate corre antes del commit) no
+            // salen en `git diff`: entran como adiciones, con tope por archivo.
+            for entry in r.status().unwrap_or_default() {
+                if let symphony_git::FileStatus::Untracked { path } = entry
+                    && let Ok(bytes) = std::fs::read(wt.join(&path))
+                    && !bytes.contains(&0)
+                {
+                    let text = String::from_utf8_lossy(&bytes);
+                    diff.push_str(&format!("\ndiff --git a/{path} b/{path}\n+++ b/{path}\n"));
+                    for line in text.lines().take(UNTRACKED_LINES) {
+                        diff.push('+');
+                        diff.push_str(line);
+                        diff.push('\n');
+                    }
+                    files.push(path);
+                }
+            }
             (diff, files)
         })
         .await
         .map_err(|e| e.to_string())?;
+        // Lo que sale hacia un plugin tampoco lleva secretos, y no pasa de un tope.
+        let diff: String = symphony_core::redact(&diff)
+            .chars()
+            .take(DIFF_KEEP)
+            .collect();
         let input = ValidateInput {
             task_code: task.code.clone(),
             task_title: task.title.clone(),
@@ -98,11 +139,11 @@ impl Runtime {
         for resolved in plugins {
             let started = Instant::now();
             let (name, status, failed, summary) = match resolved {
-                Err(why) => (
-                    "?".to_string(),
+                Err(u) => (
+                    u.name.clone(),
                     CheckStatus::Skipped,
                     None,
-                    format!("no se ejecutó: {why}"),
+                    format!("no se ejecutó: {}", u.why),
                 ),
                 Ok(p) => match p.validate(&input).await {
                     Ok(v) => {
@@ -167,10 +208,25 @@ impl Runtime {
                 .map(|p| p.root_path)
         });
         let Some(root) = root else { return text };
+        let deadline = Instant::now() + TRANSFORM_BUDGET;
         for resolved in self.active_plugins(&root).transformers {
+            if Instant::now() >= deadline {
+                tracing::warn!(
+                    "context transformers: se acabó el presupuesto de tiempo del handoff"
+                );
+                break;
+            }
             match resolved {
-                Err(why) => tracing::warn!(%why, "context transformer no disponible"),
-                Ok(p) => match p.transform(&text).await {
+                Err(u) => {
+                    tracing::warn!(plugin = %u.name, why = %u.why, "context transformer no disponible")
+                }
+                Ok(p) => match tokio::time::timeout(
+                    deadline.saturating_duration_since(Instant::now()),
+                    p.transform(&text),
+                )
+                .await
+                .unwrap_or(Err(symphony_plugins::PluginError::Timeout(30)))
+                {
                     Ok(next) => text = next,
                     Err(e) => tracing::warn!(
                         plugin = %p.manifest.name,
