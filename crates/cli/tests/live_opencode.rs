@@ -52,10 +52,24 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
+/// Estado de git del repo de Symphony (donde corre el test): un modelo que escribe fuera de su
+/// worktree lo ensucia, y eso no puede pasar sin que el test lo diga (visto en la corrida 1 de
+/// S9.2: `n1.txt`…`n8.txt` aparecieron en la raíz del repo).
+fn workspace_status() -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 struct Env {
     _dir: tempfile::TempDir,
     home: PathBuf,
     repo: PathBuf,
+    workspace_before: String,
 }
 
 impl Env {
@@ -79,6 +93,7 @@ impl Env {
             _dir: dir,
             home,
             repo,
+            workspace_before: workspace_status(),
         }
     }
 
@@ -226,6 +241,12 @@ impl Env {
 impl Drop for Env {
     fn drop(&mut self) {
         let _ = self.cli(&["daemon", "stop"]);
+        let after = workspace_status();
+        if after != self.workspace_before && !std::thread::panicking() {
+            panic!(
+                "el modelo escribió fuera de su worktree y ensució el repo de Symphony:\n{after}"
+            );
+        }
     }
 }
 
