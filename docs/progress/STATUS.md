@@ -32,7 +32,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P12 · Plugins** (`phase/p12-plugins`): S1 protocolo y manifiesto · S2 plugin host · S3 plugin de ejemplo · S4 cierre (`p12-done`)
 
-**P14 · Sugerencias de modelo** (`phase/p14-sugerencias`): S1 migración **006** · S2 sugerencias por reglas · S3 desempeño aprendido (umbral en ADR) · S4 experimentos ML (ADR; rechazar es válido) · S5 cierre (`p14-done`)
+**P14 · Sugerencias de modelo** (`phase/p14-sugerencias`): S1 migración **007** · S2 sugerencias por reglas · S3 desempeño aprendido (umbral en ADR) · S4 experimentos ML (ADR; rechazar es válido) · S5 cierre (`p14-done`)
 
 **P15 · GUI de escritorio** (`phase/p15-gui`): S1 puente · S2 scaffold · S3 vistas · S4 diseño y QA · S5 bundles en CI · S6 cierre (`p15-done`)
 

@@ -24,7 +24,7 @@ Opción 3. Mismo mecanismo que ADR-0010 (orden de ejecución distinto del númer
 |---|---|---|
 | 1 | **P11.5 · Pendientes y pulido** (nueva) | Cierra lo que dejaron P07.5–P11 y mejora el chat, que es el valor principal (STATUS, uso-v0.1). Barata y sin dependencias |
 | 2 | P12 · Plugins | Superficie nueva: tiene que existir antes de la revisión de seguridad de P13 |
-| 3 | P14 · Sugerencias de modelo | Solo reglas. Migración **006** (la 005 ya es la de validación de P08). S4 (ML) se resuelve con evidencia; rechazar es válido |
+| 3 | P14 · Sugerencias de modelo | Solo reglas. Migración **006→007** (la 005 es la de validación de P08 y la 006 la de checks de plugin, ADR-0015). S4 (ML) se resuelve con evidencia; rechazar es válido |
 | 4 | P15 · GUI de escritorio | Último bloque de funciones; su empaquetado (S5) entra a la pipeline de P13.S7 |
 | 5 | P13 · Endurecimiento y pre-release | Endurece el producto completo. Tag `v0.9.0` local |
 | 6 | P16 · Validación final y v1.0.0 | Sin cambios |

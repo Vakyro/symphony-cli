@@ -1,0 +1,26 @@
+[package]
+name = "symphony-plugins"
+description = "Plugins de Symphony: manifiesto, protocolo JSON v1 y host de procesos aislados (ADR-0015)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+symphony-core = { path = "../core" }
+symphony-process = { path = "../process" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml_edit.workspace = true
+tokio = { workspace = true, features = ["time", "rt"] }
+
+[dev-dependencies]
+sysinfo.workspace = true
+symphony-testkit = { path = "../testkit" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["time", "rt", "macros", "rt-multi-thread"] }

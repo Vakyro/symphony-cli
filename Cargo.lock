@@ -2957,6 +2957,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "symphony-plugins"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "symphony-core",
+ "symphony-process",
+ "symphony-testkit",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml_edit",
+]
+
+[[package]]
 name = "symphony-process"
 version = "0.1.0"
 dependencies = [
