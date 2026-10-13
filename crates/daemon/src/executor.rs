@@ -42,6 +42,18 @@ pub(crate) fn os_limits(home: &Path) -> symphony_process::Limits {
     }
 }
 
+/// De dónde sale el agente y qué pide el reemplazo (`Runtime::pick_replacement`).
+struct Replace<'a> {
+    provider: &'a str,
+    model: &'a str,
+    /// El login fue rechazado (se aparta el proveedor entero, no solo el modelo).
+    auth: bool,
+    /// Rotación a propósito (umbral de contexto del chat): se aparta el proveedor actual.
+    rotate: bool,
+    /// Tamaño del handoff en tokens, para descartar modelos cuya ventana no lo cabe.
+    needed_context: Option<u64>,
+}
+
 pub(crate) struct Launch {
     pub adapter: Arc<dyn ProviderAdapter>,
     pub project_id: ProjectId,
@@ -832,12 +844,16 @@ impl Runtime {
         &self,
         c: &rusqlite::Connection,
         agent: &repo::Agent,
-        current_provider: &str,
-        current_model: &str,
-        auth: bool,
-        rotate: bool,
+        why: Replace<'_>,
     ) -> Result<(Option<repo::EligibleModel>, Option<crate::routing::Pending>), repo::RepoError>
     {
+        let Replace {
+            provider: current_provider,
+            model: current_model,
+            auth,
+            rotate,
+            needed_context,
+        } = why;
         if agent.failover_policy == FailoverPolicy::None {
             return Ok((None, None));
         }
@@ -879,6 +895,7 @@ impl Runtime {
         let mut choose = crate::routing::Choose {
             profile: profile.clone(),
             only_provider: same.then(|| current_provider.to_string()),
+            needed_context,
             ..Default::default()
         };
         if rotate {
@@ -929,10 +946,10 @@ impl Runtime {
             RunEndReason::QuotaExhausted
         };
         let who = l.adapter.display_name();
-        let (why, why_en) = if auth {
-            (format!("{who} rechazó el login"), "login rejected")
+        let why = if auth {
+            format!("{who} rechazó el login")
         } else {
-            (format!("{who} se quedó sin cuota"), "quota exhausted")
+            format!("{who} se quedó sin cuota")
         };
         let failure_id = ProviderFailureId::new();
         let (failed_provider, failed_model, failed_err) =
@@ -968,11 +985,18 @@ impl Runtime {
             return;
         }
 
-        // 2. El router elige el reemplazo.
+        // 2. El router elige el reemplazo, sin los modelos cuya ventana no cabe el handoff.
+        let needed = self.handoff_tokens(l.agent_id).await;
         let picked = self.read_op(|c| {
             let agent = repo::get_agent(c, l.agent_id)?;
-            let (next, pending) =
-                self.pick_replacement(c, &agent, &l.provider_id, &l.model_id, auth, false)?;
+            let why = Replace {
+                provider: &l.provider_id,
+                model: &l.model_id,
+                auth,
+                rotate: false,
+                needed_context: needed,
+            };
+            let (next, pending) = self.pick_replacement(c, &agent, why)?;
             Ok((agent, next, pending))
         });
         let (agent, next, pending) = match picked {
@@ -1071,7 +1095,6 @@ impl Runtime {
                 model,
                 &reason,
                 "FAILOVER",
-                why_en,
                 Some(failure_id),
                 None,
                 pending,
@@ -1094,7 +1117,6 @@ impl Runtime {
         model: repo::EligibleModel,
         reason: &str,
         change: &'static str,
-        reason_en: &str,
         failure_id: Option<ProviderFailureId>,
         message: Option<&str>,
         route: Option<crate::routing::Pending>,
@@ -1112,17 +1134,20 @@ impl Runtime {
                     .await
                     .map_err(AgentOpError)?;
                 let old = self.read_op(|c| repo::get_run(c, from))?;
-                let old_name = self
-                    .adapter(&old.provider_id)
-                    .map_or_else(|| old.provider_id.clone(), |a| a.display_name().to_string());
+                // El id del modelo ya lleva al proveedor: no se repite (observación de Leo, Día 2).
                 let separator = format!(
-                    "── Executor changed: {old_name} / {} → {} / {}\nReason: {reason_en}\nAgent #{}, task and workspace unchanged\nHandoff restored from checkpoint #{}",
-                    old.model_id,
-                    adapter.display_name(),
-                    model.model_id,
-                    agent.number,
-                    h.checkpoint_seq
+                    "── Executor cambiado: {} → {}\nMotivo: {reason}\nAgente #{}, tarea y workspace sin cambios\nHandoff restaurado del checkpoint #{}",
+                    old.model_id, model.model_id, agent.number, h.checkpoint_seq
                 );
+                // FLOW §13.3: el checkpoint puede estar atrasado; el código se rehace del worktree.
+                let separator = if h.stale {
+                    format!(
+                        "{separator}\nAviso: el checkpoint #{} puede estar atrasado (hubo actividad después); el estado del código se reconstruyó del workspace",
+                        h.checkpoint_seq
+                    )
+                } else {
+                    separator
+                };
                 let change_row = (from, h.checkpoint_id, now_ms() - h.checkpoint_created_at);
                 let handoff = (
                     h.checkpoint_id,
@@ -1333,12 +1358,15 @@ impl Runtime {
         message: Option<&str>,
     ) -> Result<(RunId, String), AgentOpError> {
         let profile_name = profile.to_string();
+        // El handoff que recibiría el modelo nuevo: el router descarta a quien no lo cabe.
+        let needed = self.handoff_tokens(agent_id).await;
         let decision = self.read_op(|c| {
             if crate::routing::profile_weights(c, &profile_name)?.is_none() {
                 return Ok(None);
             }
             let choose = crate::routing::Choose {
                 profile: profile_name.clone(),
+                needed_context: needed,
                 ..Default::default()
             };
             Ok(Some(self.evaluate(c, &choose)?))
@@ -1486,7 +1514,6 @@ impl Runtime {
             model,
             &reason,
             "USER_SWITCH",
-            "user switch",
             None,
             message,
             route,
@@ -1611,7 +1638,7 @@ impl Runtime {
     /// Política por umbral (P07.5.S6, apagada por defecto): si el último turno del chat
     /// usó tanto contexto como el umbral y hay otro executor elegible, el próximo mensaje
     /// va a ese otro con handoff en vez de reanudar la sesión del CLI.
-    fn rotation_target(
+    async fn rotation_target(
         &self,
         agent: &repo::Agent,
         last: &repo::AgentRun,
@@ -1622,16 +1649,44 @@ impl Runtime {
         if limit == 0 {
             return Ok(None);
         }
+        let due = self.read_op(|c| {
+            Ok(
+                repo::get_task(c, agent.task_id)?.code == repo::CHAT_TASK_CODE
+                    && repo::last_turn_tokens(c, last.id)? >= limit,
+            )
+        })?;
+        if !due {
+            return Ok(None);
+        }
+        // Armar el handoff cuesta (git): solo cuando de verdad toca rotar (CONSTRAINTS A11).
+        let needed = self.handoff_tokens(agent.id).await;
         self.read_op(|c| {
-            if repo::get_task(c, agent.task_id)?.code != repo::CHAT_TASK_CODE
-                || repo::last_turn_tokens(c, last.id)? < limit
-            {
-                return Ok(None);
-            }
-            let (next, pending) =
-                self.pick_replacement(c, agent, &last.provider_id, &last.model_id, false, true)?;
+            let why = Replace {
+                provider: &last.provider_id,
+                model: &last.model_id,
+                auth: false,
+                rotate: true,
+                needed_context: needed,
+            };
+            let (next, pending) = self.pick_replacement(c, agent, why)?;
             Ok(next.map(|n| (n, pending)))
         })
+    }
+
+    /// Tamaño (tokens) del handoff que recibiría el modelo nuevo, para que el router descarte a
+    /// quien no lo cabe. `None` si no se puede armar (sin checkpoint o sin worktree): se elige
+    /// como antes, sin ese dato.
+    async fn handoff_tokens(&self, agent: AgentId) -> Option<u64> {
+        // Un agente sin runs (recién liberado de una dependencia) arranca con su objetivo, no con
+        // un handoff: no hay nada que medir y armarlo cuesta git.
+        let has_run = self
+            .read_op(|c| Ok(!repo::runs_of(c, agent)?.is_empty()))
+            .ok()?;
+        if !has_run {
+            return None;
+        }
+        let h = self.prepare_handoff(agent, "estimate").await.ok()?;
+        u64::try_from(h.tokens_sent).ok()
     }
 
     /// Mensaje después de terminado el turno (ADR-0005, adenda; P07.5.S1): retoma la
@@ -1678,7 +1733,7 @@ impl Runtime {
                     agent.number
                 ))
             })?;
-        if let Some((next, route)) = self.rotation_target(&agent, &last)? {
+        if let Some((next, route)) = self.rotation_target(&agent, &last).await? {
             let reason = format!(
                 "El contexto de {} llegó al umbral configurado de tokens.",
                 last.model_id
@@ -1690,7 +1745,6 @@ impl Runtime {
                     next,
                     &reason,
                     "FAILOVER",
-                    "context threshold",
                     None,
                     Some(text),
                     route,
@@ -1767,7 +1821,6 @@ impl Runtime {
         change: &'static str,
         resolution: &str,
         reason: &str,
-        reason_en: &str,
     ) -> Result<RunId, AgentOpError> {
         if self.is_live(agent_id) {
             let number = self
@@ -1807,7 +1860,6 @@ impl Runtime {
                 model,
                 reason,
                 change,
-                reason_en,
                 None,
                 None,
                 None,
@@ -1832,7 +1884,6 @@ impl Runtime {
             "RESTART",
             "RESTART",
             "El usuario reinició el agente desde su último checkpoint.",
-            "user restart",
         )
         .await
     }
@@ -1845,7 +1896,6 @@ impl Runtime {
             "RECLAIM",
             "RECLAIM",
             "Se recuperó el agente tras perder el latido del executor.",
-            "reclaim after lost heartbeat",
         )
         .await
     }

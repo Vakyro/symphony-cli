@@ -148,7 +148,7 @@ fn hints(app: &App) -> &'static str {
         }
         Screen::Providers => "↑↓ elegir · r volver a detectar · d activar/desactivar · Esc volver",
         Screen::Chat => {
-            "Enter enviar · Tab modelo · ↑↓/rueda · ^Y copiar · ^E exportar · F2 ratón · Esc tareas"
+            "Enter enviar · Tab modelo · ^Y copiar · ^E exportar · ^R revisar · ^G a main · F2 ratón · Esc"
         }
         Screen::Home => {
             "↑↓ elegir · Enter abrir · n nuevo · t tareas · m milestones · s sistema · p proveedores · r recovery · : comando · Esc chat · q salir"
@@ -176,11 +176,13 @@ fn hints(app: &App) -> &'static str {
         }
         Screen::TaskDetail => "a abrir el agente · r releer · Esc volver a tareas",
         Screen::Milestones => {
-            "↑↓ elegir · a aprobar · c pedir cambios · h retener · r releer · Esc volver"
+            "↑↓ elegir · n nuevo · a aprobar · c pedir cambios · h retener · r releer · Esc volver"
         }
         Screen::System => "p cambiar perfil · r releer · Esc volver",
         Screen::PerformanceProfile => "↑↓ elegir · Enter aplicar · Esc volver",
-        Screen::Validation => "r volver a validar · g integración · Esc volver al agente",
+        Screen::Validation => {
+            "r volver a validar · e enviar el fallo al agente · g integración · Esc volver al agente"
+        }
         Screen::MergePreflight => {
             "p preflight · a aprobar · i integrar · x abandonar · c conflictos · w revisar · y veredicto"
         }
@@ -766,6 +768,15 @@ fn chat_lines(messages: &[Value], tools: &[Value], width: usize) -> Vec<Line<'st
     timeline.into_iter().flat_map(|(_, l)| l).collect()
 }
 
+/// El mensaje que el agente está escribiendo (vacío si no hay), con cursor al final.
+fn partial_lines(partial: &str, width: usize) -> Vec<Line<'static>> {
+    if partial.is_empty() {
+        return Vec::new();
+    }
+    let m = serde_json::json!({ "role": "ASSISTANT", "content": format!("{partial}▍") });
+    message_lines(&m, width)
+}
+
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// «⠋ pensando… 12 s» / «⠋ ejecutando Bash… 3 s»: lo que el agente está haciendo ahora.
@@ -844,7 +855,12 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
     let inner_h = usize::from(body.height.saturating_sub(2));
     let mut lines = view.map_or_else(Vec::new, |v| chat_lines(&v.messages, &v.activity, inner_w));
     if let Some(v) = view.filter(|v| v.state() == "RUNNING") {
-        lines.push(working_line(app, v));
+        // Con texto parcial, el texto mismo es la señal de trabajo.
+        if v.partial.is_empty() {
+            lines.push(working_line(app, v));
+        } else {
+            lines.extend(partial_lines(&v.partial, inner_w));
+        }
     }
     if lines.is_empty() {
         lines.push(Line::from(dim("Escribe tu primer mensaje para empezar.")));
@@ -1298,7 +1314,9 @@ fn from_bottom(total: usize, height: u16, scroll: u16) -> u16 {
 fn conversation(app: &App, f: &mut Frame, area: Rect) {
     let Some(a) = &app.agent else { return };
     // Con ajuste de línea: un texto largo del agente no se corta en el borde.
-    let mut lines = chat_lines(&a.messages, &[], usize::from(area.width.saturating_sub(2)));
+    let width = usize::from(area.width.saturating_sub(2));
+    let mut lines = chat_lines(&a.messages, &[], width);
+    lines.extend(partial_lines(&a.partial, width));
     if lines.is_empty() {
         lines.push(Line::from(dim("Sin mensajes todavía.")));
     }
@@ -1968,6 +1986,21 @@ fn milestones(app: &App, f: &mut Frame, area: Rect) {
                 "      Gate Review: a aprobar · c pedir cambios · h retener",
             )));
         }
+    }
+    if let Some((name, approval)) = &app.milestone_input {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            bold("Nuevo milestone: "),
+            Span::raw(format!("{name}▏")),
+        ]));
+        lines.push(Line::from(dim(format!(
+            "  Tab: {} · Enter crear · Esc cancelar",
+            if *approval {
+                "con aprobación"
+            } else {
+                "sin aprobación"
+            }
+        ))));
     }
     paragraph(f, area, "Milestones", lines);
 }

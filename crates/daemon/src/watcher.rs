@@ -38,10 +38,16 @@ struct Change {
     text: Option<String>,
 }
 
-/// `src\a.rs` → `ctx://file/src/a.rs`, solo si es una dirección válida.
+/// `src\a.rs` → `ctx://file/src/a.rs` (y `@scope/x.ts` → `ctx://file/%40scope/x.ts`), solo si es
+/// una dirección válida.
 fn uri_of(rel: &str) -> Option<String> {
-    let uri = format!("ctx://file/{}", rel.replace('\\', "/"));
-    symphony_context::uri::CtxUri::parse(&uri).ok().map(|_| uri)
+    use symphony_context::uri::CtxUri;
+    let uri = CtxUri::File {
+        path: rel.replace('\\', "/"),
+        rev: None,
+    }
+    .to_string();
+    CtxUri::parse(&uri).ok().map(|_| uri)
 }
 
 fn hidden(rel: &Path) -> bool {
@@ -328,5 +334,9 @@ mod tests {
         );
         assert_eq!(uri_of("src\\a.rs").as_deref(), Some("ctx://file/src/a.rs"));
         assert_eq!(uri_of("../fuera.rs"), None);
+        assert_eq!(
+            uri_of("packages/@scope/a b#1.ts").as_deref(),
+            Some("ctx://file/packages/%40scope/a b%231.ts")
+        );
     }
 }

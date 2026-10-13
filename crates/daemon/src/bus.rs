@@ -103,7 +103,14 @@ pub struct EventBus {
     checkpoints: Checkpointer,
     tui: broadcast::Sender<Arc<BusEvent>>,
     state: Arc<watch::Sender<BusState>>,
+    /// Texto que el agente va escribiendo en el turno (P11.5.S3), por id de agente. Solo en
+    /// memoria: nunca se persiste.
+    partial: Arc<std::sync::Mutex<HashMap<String, String>>>,
 }
+
+/// Tope del texto parcial por agente; pasado esto se deja de acumular (el mensaje completo llega
+/// igual al terminar el bloque).
+const PARTIAL_MAX: usize = 64 * 1024;
 
 impl EventBus {
     /// `tui_capacity`: cuántos eventos puede atrasarse un suscriptor antes de perder los más viejos.
@@ -119,7 +126,17 @@ impl EventBus {
             checkpoints,
             tui,
             state: Arc::new(state),
+            partial: Arc::default(),
         }
+    }
+
+    /// Lo que el agente lleva escrito del mensaje en curso (vacío si no hay).
+    pub fn partial(&self, agent: &str) -> String {
+        self.partial
+            .lock()
+            .ok()
+            .and_then(|m| m.get(agent).cloned())
+            .unwrap_or_default()
     }
 
     /// La reserva de cuota por proveedor de `config.toml`.
@@ -132,6 +149,41 @@ impl EventBus {
     }
 
     pub async fn publish(&self, ev: BusEvent) -> Result<(), WriterClosed> {
+        // Texto parcial: solo en memoria y broadcast, sin tocar la base ni el estado (A11).
+        if let (AgentEvent::AssistantDelta { text }, Some(agent)) = (&ev.event, &ev.agent_id) {
+            if let Ok(mut m) = self.partial.lock() {
+                let acc = m.entry(agent.clone()).or_default();
+                if acc.len() < PARTIAL_MAX {
+                    // Un trozo que no cabe se corta y se marca: nada de huecos en medio.
+                    let room = PARTIAL_MAX - acc.len();
+                    if text.len() <= room {
+                        acc.push_str(text);
+                    } else {
+                        let mut cut = room;
+                        while !text.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        acc.push_str(&text[..cut]);
+                        acc.push('…');
+                    }
+                }
+            }
+            let _ = self.tui.send(Arc::new(ev));
+            return Ok(());
+        }
+        // El mensaje completo (o el fin del turno) reemplaza al parcial.
+        if let Some(agent) = &ev.agent_id
+            && matches!(
+                ev.event,
+                AgentEvent::AssistantText { .. }
+                    | AgentEvent::TurnFinished { .. }
+                    | AgentEvent::AgentStopped { .. }
+                    | AgentEvent::StateChanged { .. }
+            )
+            && let Ok(mut m) = self.partial.lock()
+        {
+            m.remove(agent);
+        }
         let payload = serde_json::to_string(&ev.event).ok();
         self.writer
             .event(NewEvent {

@@ -144,7 +144,15 @@ impl Agent {
         self.hook("UserPromptSubmit", json!({}));
         for step in steps {
             match step {
-                Step::Say { text } => self.say(text),
+                Step::Say { text, deltas } => {
+                    if *deltas {
+                        for chunk in text.chars().collect::<Vec<_>>().chunks(6) {
+                            let piece: String = chunk.iter().collect();
+                            emit(&json!({"type": "assistant_delta", "text": piece}));
+                        }
+                    }
+                    self.say(text)
+                }
                 Step::Plan { content } => {
                     let task = std::env::var("SYMPHONY_TASK_ID").unwrap_or_default();
                     let full = self

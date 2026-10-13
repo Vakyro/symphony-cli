@@ -76,16 +76,6 @@ pub fn latest_mr(conn: &Connection, agent: AgentId) -> Result<Option<MergeReques
         .optional()?)
 }
 
-/// Las pendientes de integrar (la cola), en orden de llegada.
-pub fn queue(conn: &Connection, target_branch: &str) -> Result<Vec<MergeRequest>, RepoError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {MR_COLS} FROM merge_requests
-         WHERE target_branch = ?1 AND status IN ('READY','QUEUED') ORDER BY created_at, rowid"
-    ))?;
-    let rows = stmt.query_map([target_branch], mr_row)?;
-    Ok(rows.collect::<Result<_, _>>()?)
-}
-
 /// Abre la solicitud del agente o reaprovecha la que sigue sin cerrar (`PREFLIGHT`, `READY`,
 /// `QUEUED` o `BLOCKED`): una por agente a la vez.
 pub fn open_or_reuse(

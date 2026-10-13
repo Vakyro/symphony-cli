@@ -248,7 +248,15 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 
 - Un modelo que tu cuenta no tenga habilitado falla al instante con «not available» y Symphony pasa al siguiente según la política de failover.
 - Copilot con `auto` puede usar modelos distintos entre turnos, y no informa de tokens: el cambio por umbral de uso no le aplica.
-- Antigravity y Copilot pueden ejecutarlo todo si lo permites (`skip_permissions` / `allow_all_tools` en sus adapters), pero todavía no hay opción en `config.toml`.
+- Los permisos de Claude, Codex, Antigravity y Copilot se cambian en `~/.symphony/config.toml`, sección `[providers.permissions]` (los valores de la tabla son los predeterminados; reinicia el daemon con `symphony daemon stop` para aplicarlos):
+  ```toml
+  [providers.permissions]
+  claude_permission_mode = "acceptEdits"     # default · acceptEdits · plan · bypassPermissions
+  codex_sandbox = "workspace-write"          # read-only · workspace-write · danger-full-access
+  antigravity_skip_permissions = false       # true: cualquier comando, sin sandbox
+  copilot_allow_all_tools = false            # true: cualquier comando
+  ```
+  Un valor inválido deja los predeterminados y el daemon lo avisa en su log. Kimi y OpenCode no tienen modo restringido: no hay opción.
 - Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.
 - **OpenCode** toma como raíz del proyecto el repo principal, no el worktree del agente: Symphony le avisa en el prompt cuál es su directorio, pero un modelo puede escribir en el repo con una ruta absoluta (`docs/research/cli-opencode.md`). La lista de modelos de OpenCode se pide en segundo plano la primera vez (tarda ~7 s): al principio solo aparece `opencode/default`; haz `symphony providers refresh` unos segundos después. Sus modelos gratuitos son inestables; Claude y Codex siguen siendo los que mejor funcionan (`docs/research/opencode-y-calidad-de-proveedores.md`).
 
@@ -282,6 +290,18 @@ git switch main
 git merge symphony/session-xyz/agent-1
 git branch -d symphony/session-xyz/agent-1
 ```
+
+### Integrar el chat en `main`
+
+El chat trabaja en la rama `symphony/chat` y los agentes se integran a ella: `main` no se toca hasta que tú lo pides. Para llevar lo que hay en el chat a `main` (un commit de merge `--no-ff`):
+
+```bash
+symphony chat merge            # preflight: qué entra, conflictos, estado de tu repo y de la revisión
+symphony chat merge --review   # pide a un review agent que revise el chat (solo recomienda)
+symphony chat merge --yes      # integra (exige el preflight sin ✗ y una revisión que apruebe)
+```
+
+En la vista Chat: `Ctrl+G` hace el preflight, `Ctrl+R` pide la revisión y una segunda `Ctrl+G` seguida (con la revisión aprobada) integra. Symphony no cambia tu rama: tu repo tiene que estar en `main` y sin cambios sin commitear. Si el revisor falló o no hubo revisión, `--yes --skip-review` integra igual, porque tú lo decides; si pidió cambios, también hace falta `--skip-review`.
 
 ---
 

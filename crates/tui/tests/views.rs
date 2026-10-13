@@ -1037,6 +1037,45 @@ fn chat_shows_the_agent_process_live_in_time_order() {
     assert!(screen.contains("ejecutando Bash… 2 s"));
 }
 
+/// P11.5.S3: el texto que el agente va escribiendo se ve en el chat (con cursor) y reemplaza
+/// al «pensando…»; al llegar el mensaje completo desaparece.
+#[test]
+fn chat_shows_the_partial_text_while_the_agent_writes() {
+    let mut app = chat_app();
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    app.chat.as_mut().unwrap().inspect = json!({ "agent": { "state": "RUNNING" } });
+    ok(
+        &mut app,
+        Req::Logs,
+        json!({
+            "messages": [{ "role": "USER", "content": "explícame el bus", "at": NOW - 3_000 }],
+            "partial": "El bus persiste primero y desp",
+        }),
+    );
+    let screen = draw(&app);
+    assert!(
+        screen.contains("El bus persiste primero y desp▍"),
+        "{screen}"
+    );
+    assert!(!screen.contains("pensando"), "{screen}");
+
+    // Mensaje completo: el parcial llega vacío y queda solo el mensaje.
+    ok(
+        &mut app,
+        Req::Logs,
+        json!({
+            "messages": [
+                { "role": "USER", "content": "explícame el bus", "at": NOW - 3_000 },
+                { "role": "ASSISTANT", "content": "El bus persiste primero y después difunde.", "at": NOW - 1_000 },
+            ],
+            "partial": "",
+        }),
+    );
+    let screen = draw(&app);
+    assert!(screen.contains("y después difunde."), "{screen}");
+    assert!(!screen.contains('▍'), "{screen}");
+}
+
 #[test]
 fn chat_at_rest_does_not_animate() {
     let mut app = chat_app();
@@ -1502,5 +1541,175 @@ fn the_new_views_open_from_the_command_bar() {
         let calls = command(&mut app, cmd);
         assert_eq!(app.screen, screen, "{cmd}");
         assert_eq!(methods(&calls), [method], "{cmd}");
+    }
+}
+
+/// P11.5.S6: integrar el chat en `main` desde la vista Chat pide `Ctrl+G` dos veces seguidas y
+/// solo si el preflight quedó listo con la revisión aprobada; otra tecla lo desarma.
+#[test]
+fn chat_merge_needs_two_ctrl_g_after_an_approving_preflight() {
+    let mut app = chat_app();
+    let prepared = |status: &str| {
+        json!({
+            "ahead": 2, "ready": true,
+            "checks": [{ "name": "review", "status": status, "detail": "el revisor recomienda integrar" }],
+        })
+    };
+
+    // Primer Ctrl+G: solo el preflight, nunca el merge.
+    let calls = ctrl(&mut app, 'g');
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].method, "chat.merge.prepare");
+    // Sin revisión aprobada, no queda armado: otro Ctrl+G vuelve a ser preflight.
+    ok(&mut app, Req::ChatMerge, prepared("WARN"));
+    assert!(!app.chat_merge_armed);
+    assert_eq!(ctrl(&mut app, 'g')[0].method, "chat.merge.prepare");
+
+    // Revisión aprobada: queda armado y el siguiente Ctrl+G integra con confirmación.
+    ok(&mut app, Req::ChatMerge, prepared("PASS"));
+    assert!(app.chat_merge_armed);
+    let calls = ctrl(&mut app, 'g');
+    assert_eq!(calls[0].method, "chat.merge.integrate");
+    assert_eq!(calls[0].params["confirm"], true);
+
+    // Una tecla en medio lo desarma.
+    ok(&mut app, Req::ChatMerge, prepared("PASS"));
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('x'),
+        KeyModifiers::NONE,
+    )));
+    assert_eq!(ctrl(&mut app, 'g')[0].method, "chat.merge.prepare");
+
+    // Un FAIL se muestra como error y no arma nada.
+    ok(
+        &mut app,
+        Req::ChatMerge,
+        json!({ "ahead": 1, "checks": [{ "name": "conflicts", "status": "FAIL", "detail": "choca en a.rs" }] }),
+    );
+    assert!(!app.chat_merge_armed);
+    assert!(matches!(&app.notice, Some(Notice::Error(m)) if m.contains("choca en a.rs")));
+
+    // Ctrl+R pide la revisión.
+    assert_eq!(ctrl(&mut app, 'r')[0].method, "chat.merge.review");
+}
+
+/// P11.5.S7: la vista 17 crea un milestone desde la TUI (nombre + con/sin aprobación).
+#[test]
+fn view_17_creates_a_milestone_from_the_tui() {
+    let mut app = home_app();
+    press(&mut app, KeyCode::Char('m'));
+    ok(&mut app, Req::Milestones, json!({ "milestones": [] }));
+
+    press(&mut app, KeyCode::Char('n'));
+    assert_eq!(app.milestone_input, Some((String::new(), true)));
+    // Sin nombre no hay llamada.
+    assert!(press(&mut app, KeyCode::Enter).is_empty());
+    assert!(matches!(&app.notice, Some(Notice::Error(_))));
+    for c in "Auth listo".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Tab);
+    assert!(draw(&app).contains("Auth listo▏"));
+    assert!(draw(&app).contains("sin aprobación"));
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["milestone.create"]);
+    assert_eq!(calls[0].params["name"], "Auth listo");
+    assert_eq!(calls[0].params["requires_approval"], false);
+    assert!(app.milestone_input.is_none());
+
+    // Esc cancela sin llamar.
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Char('x'));
+    assert!(press(&mut app, KeyCode::Esc).is_empty());
+    assert!(app.milestone_input.is_none());
+    assert_eq!(app.screen, Screen::Milestones);
+}
+
+/// P11.5.S7: «Enviar al agente» de la vista 28 manda el fallo de validación a la sesión del
+/// agente, con lo que falló y su resumen; sin fallos no manda nada.
+#[test]
+fn view_28_sends_the_validation_failure_to_the_agent() {
+    let mut app = open_flow('v');
+    ok(
+        &mut app,
+        Req::ValidationGet,
+        json!({ "agent_id": "01AGENT1", "runs": [
+            { "id": "v2", "tier": 2, "trigger": "AUTO", "status": "FAIL", "checks": [
+                { "name": "typecheck", "status": "PASS", "summary": null },
+                { "name": "targeted_tests", "status": "FAIL",
+                  "summary": "FAIL auth.refresh.test.ts expected 200, received 401" } ] },
+        ]}),
+    );
+    let calls = press(&mut app, KeyCode::Char('e'));
+    assert_eq!(methods(&calls), ["agent.send"]);
+    assert_eq!(calls[0].params["agent"], "01AGENT1");
+    let text = calls[0].params["text"].as_str().unwrap();
+    assert!(text.contains("tier 2 · targeted_tests: FAIL"), "{text}");
+    assert!(text.contains("expected 200, received 401"), "{text}");
+    assert!(!text.contains("typecheck"), "solo lo que falló: {text}");
+
+    // Todo en verde: no hay nada que mandar.
+    ok(
+        &mut app,
+        Req::ValidationGet,
+        json!({ "agent_id": "01AGENT1", "runs": [
+            { "id": "v3", "tier": 2, "trigger": "AUTO", "status": "PASS", "checks": [
+                { "name": "typecheck", "status": "PASS", "summary": null } ] },
+        ]}),
+    );
+    assert!(press(&mut app, KeyCode::Char('e')).is_empty());
+    assert!(matches!(&app.notice, Some(Notice::Info(m)) if m.contains("No hay fallos")));
+}
+
+/// P11.5.S7: un aviso del pie caduca solo (no se queda hasta la siguiente tecla).
+#[test]
+fn a_footer_notice_expires_on_its_own() {
+    let mut app = chat_app();
+    app.error("algo falló");
+    assert!(app.notice.is_some());
+    app.update(Msg::Tick(NOW + 1_000));
+    assert!(app.notice.is_some(), "todavía reciente");
+    app.update(Msg::Tick(NOW + 20_000));
+    assert!(app.notice.is_none(), "caducó");
+}
+
+/// P11.5.S6 (revisión): la confirmación de «Ctrl+G otra vez» no sobrevive a salir del chat.
+#[test]
+fn chat_merge_confirmation_does_not_survive_leaving_the_chat() {
+    let mut app = chat_app();
+    ok(
+        &mut app,
+        Req::ChatMerge,
+        json!({ "ahead": 1, "checks": [{ "name": "review", "status": "PASS", "detail": "ok" }] }),
+    );
+    assert!(app.chat_merge_armed);
+    // A otra pantalla y de vuelta.
+    press(&mut app, KeyCode::Esc);
+    assert_ne!(app.screen, Screen::Chat);
+    assert!(!app.chat_merge_armed || press(&mut app, KeyCode::Char('x')).is_empty());
+    assert!(!app.chat_merge_armed, "salir del chat lo desarma");
+}
+
+/// P11.5.S6 (revisión): la URI de un archivo que arma la TUI es la misma que el parser del
+/// daemon acepta y devuelve igual.
+#[test]
+fn the_tui_builds_file_uris_the_context_parser_accepts() {
+    use symphony_context::uri::CtxUri;
+    for p in [
+        "src/a.rs",
+        "packages/@scope/x.ts",
+        "a?b#c%d.txt",
+        "dir/sub dir/a b.txt",
+    ] {
+        let uri = symphony_tui::app::ctx_file_uri(p);
+        let parsed = CtxUri::parse(&uri).unwrap_or_else(|e| panic!("{uri}: {e}"));
+        assert_eq!(
+            parsed,
+            CtxUri::File {
+                path: p.into(),
+                rev: None
+            }
+        );
+        assert_eq!(parsed.to_string(), uri);
     }
 }

@@ -88,6 +88,117 @@ impl Runtime {
             .unwrap_or_default()
     }
 
+    /// Cupos libres del lote ahora: el tope pedido, recortado por la cuota conocida, menos los
+    /// agentes que ya ocupan uno. `None` si el lote no está registrado.
+    fn batch_room(&self, milestone: MilestoneId) -> Option<usize> {
+        let wanted = *self.batches.lock().ok()?.get(&milestone)?;
+        let allowed = agent_concurrency(wanted, &self.known_quota());
+        let in_flight: i64 = self
+            .reader
+            .lock()
+            .ok()?
+            .query_row(
+                "SELECT COUNT(*) FROM agents a JOIN tasks t ON t.id = a.task_id
+                 WHERE t.milestone_id = ?1
+                   AND a.state IN ('RUNNING','TESTING','WAITING_PROVIDER','WAITING_RESOURCE')",
+                [milestone.to_string()],
+                |r| r.get(0),
+            )
+            .ok()?;
+        Some(allowed.saturating_sub(usize::try_from(in_flight).unwrap_or(0)))
+    }
+
+    /// ¿Hay cupo para arrancar `agent`? Fuera de un lote, siempre. Con un lote, mira la cuota
+    /// de ahora, no la de cuando se creó (P11.5.S5): si bajó, el agente espera; nunca se mata a
+    /// uno en curso.
+    pub(crate) fn batch_has_room_for(&self, agent: AgentId) -> bool {
+        let milestone = self.reader.lock().ok().and_then(|c| {
+            let task = repo::get_agent(&c, agent).ok()?.task_id;
+            deps::milestone_of_task(&c, task).ok().flatten()
+        });
+        match milestone.and_then(|m| self.batch_room(m)) {
+            Some(room) => room > 0,
+            None => true,
+        }
+    }
+
+    /// Deja constancia de por qué un agente liberado todavía no arranca.
+    pub(crate) async fn hold_for_batch(&self, agent: AgentId) {
+        let id = agent.to_string();
+        let _ = self
+            .writer
+            .write(Box::new(move |t| {
+                t.execute(
+                    "UPDATE agents SET state_reason = ?1, updated_at = ?2 WHERE id = ?3 AND state = 'READY'",
+                    rusqlite::params![
+                        "esperando cupo del lote (la cuota conocida limita los simultáneos)",
+                        now_ms(),
+                        id
+                    ],
+                )?;
+                Ok(())
+            }))
+            .await;
+    }
+
+    /// Arranca, mientras haya cupo, a los agentes de cada lote que quedaron esperándolo, en el
+    /// orden del plan. Olvida los lotes sin agentes vivos. Lo llama el reactor de dependencias.
+    pub async fn fill_batches(&self) {
+        // Una pasada a la vez: dos en paralelo calcularían el mismo cupo y arrancarían de más.
+        let _one_at_a_time = self.batch_fill.lock().await;
+        let milestones: Vec<MilestoneId> = match self.batches.lock() {
+            Ok(b) if !b.is_empty() => b.keys().copied().collect(),
+            _ => return,
+        };
+        for m in milestones {
+            let (held, alive): (Vec<AgentId>, i64) = {
+                let Ok(c) = self.reader.lock() else { continue };
+                let held = c
+                    .prepare(
+                        "SELECT a.id FROM agents a JOIN tasks t ON t.id = a.task_id
+                         WHERE t.milestone_id = ?1 AND a.state = 'READY'
+                           AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.agent_id = a.id)
+                         ORDER BY t.rowid",
+                    )
+                    .and_then(|mut s| {
+                        s.query_map([m.to_string()], |r| r.get::<_, String>(0))?
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|id| id.parse().ok())
+                    .collect();
+                let alive = c
+                    .query_row(
+                        "SELECT COUNT(*) FROM agents a JOIN tasks t ON t.id = a.task_id
+                         WHERE t.milestone_id = ?1
+                           AND a.state NOT IN ('COMPLETED','FAILED','CANCELLED')",
+                        [m.to_string()],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(1);
+                (held, alive)
+            };
+            if alive == 0 {
+                if let Ok(mut b) = self.batches.lock() {
+                    b.remove(&m);
+                }
+                continue;
+            }
+            let Some(mut room) = self.batch_room(m) else {
+                continue;
+            };
+            for agent in held {
+                if room == 0 {
+                    break;
+                }
+                if crate::dependencies::start_now(self, agent).await {
+                    room -= 1;
+                }
+            }
+        }
+    }
+
     /// Crea los agentes de un lote. Los agentes que dependen de otros nacen esperando
     /// (`WAITING_DEPENDENCY`) y arrancan solos al cumplirse; el tope de simultáneos se aplica
     /// con dependencias entre tareas de una misma ola.
@@ -201,6 +312,9 @@ impl Runtime {
                 milestone = slot.lock().ok().and_then(|s| *s);
             }
             if let Some(m) = milestone {
+                if let Ok(mut b) = self.batches.lock() {
+                    b.insert(m, wanted);
+                }
                 let task = created.task_id;
                 self.writer
                     .write(Box::new(move |t| {

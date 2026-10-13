@@ -42,6 +42,21 @@ impl std::str::FromStr for Resolution {
 /// Arranca el reactor. Termina con `shutdown`.
 pub fn spawn(runtime: Runtime, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
     let mut changes = runtime.writer.state_changes();
+    // La cuota también cambia sin que un agente cambie de estado: se revisa cada tanto, en otra
+    // tarea para no retrasar la lectura de los cambios de estado.
+    {
+        let (rt, stop) = (runtime.clone(), shutdown.clone());
+        tokio::spawn(async move {
+            let mut refill = tokio::time::interval(std::time::Duration::from_secs(3));
+            refill.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    () = stop.cancelled() => break,
+                    _ = refill.tick() => rt.fill_batches().await,
+                }
+            }
+        });
+    }
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -56,9 +71,16 @@ pub fn spawn(runtime: Runtime, shutdown: CancellationToken) -> tokio::task::Join
                         };
                         if let Ok(agent) = c.agent_id.parse::<AgentId>() {
                             react(&runtime, agent, outcome).await;
+                            // Terminó uno: puede haber cupo para quien esperaba.
+                            let rt = runtime.clone();
+                            tokio::spawn(async move { rt.fill_batches().await });
                         }
                     }
-                    Err(RecvError::Lagged(_)) => {}
+                    // Se perdieron cambios de estado: nadie sabe cuáles, se revisa a todos.
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(perdidos = n, "el reactor de dependencias se atrasó");
+                        recheck_waiting(&runtime).await;
+                    }
                     Err(RecvError::Closed) => break,
                 }
             }
@@ -78,6 +100,65 @@ async fn react(rt: &Runtime, agent: AgentId, outcome: Finished) {
         .and_then(|c| repo::get_agent(&c, agent).ok())
         .map(|a| a.task_id);
     let Some(task) = task else { return };
+    reconcile_and_start(rt, task, outcome).await;
+}
+
+/// Un agente que nació esperando puede haber perdido la carrera contra el fin de su dependencia
+/// (lo leyó pendiente y, antes de que se confirmara su creación, la dependencia terminó y el
+/// reactor ya había pasado): queda `WAITING_DEPENDENCY` para siempre. Se reevalúa con las
+/// dependencias que ya están hechas. Es idempotente.
+pub async fn recheck_new(rt: &Runtime, task: TaskId) {
+    let finished: Vec<(TaskId, Finished)> = rt
+        .reader
+        .lock()
+        .ok()
+        .and_then(|c| deps::dependencies_of(&c, task).ok())
+        .map(|rows| {
+            rows.into_iter()
+                .filter_map(|d| {
+                    let outcome = match d.status {
+                        TaskStatus::Done => Finished::Done,
+                        TaskStatus::Failed => Finished::Failed,
+                        TaskStatus::Cancelled => Finished::Cancelled,
+                        _ => return None,
+                    };
+                    Some((d.task_id, outcome))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for (dep, outcome) in finished {
+        reconcile_and_start(rt, dep, outcome).await;
+    }
+}
+
+/// Reevalúa a todos los agentes que esperan una dependencia. Lo usa el reactor cuando se atrasa
+/// en el canal de cambios de estado (`Lagged`): sin esto, una tarea terminada en ese hueco dejaba
+/// a sus dependientes esperando para siempre. Es idempotente.
+pub async fn recheck_waiting(rt: &Runtime) {
+    let waiting: Vec<TaskId> = rt
+        .reader
+        .lock()
+        .ok()
+        .and_then(|c| {
+            let mut stmt = c
+                .prepare("SELECT task_id FROM agents WHERE state = 'WAITING_DEPENDENCY'")
+                .ok()?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).ok()?;
+            Some(
+                rows.flatten()
+                    .filter_map(|id| id.parse::<TaskId>().ok())
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+    for task in waiting {
+        recheck_new(rt, task).await;
+    }
+}
+
+/// Reevalúa a los dependientes de `task` (que terminó con `outcome`) y arranca a los liberados.
+async fn reconcile_and_start(rt: &Runtime, task: TaskId, outcome: Finished) {
     let reactions: Arc<Mutex<Vec<Reaction>>> = Arc::default();
     let sink = reactions.clone();
     let written = rt
@@ -118,14 +199,25 @@ async fn react(rt: &Runtime, agent: AgentId, outcome: Finished) {
 /// Un agente liberado arranca solo si ya sabe con qué modelo (exacto o profile); si quedó
 /// «decidir después», espera en `READY` a que el usuario elija.
 pub async fn start_released(rt: &Runtime, agent_id: AgentId) {
+    // Un agente de un lote espera si la cuota de ahora no deja cupo; `fill_batches` lo arranca.
+    if !rt.batch_has_room_for(agent_id) {
+        rt.hold_for_batch(agent_id).await;
+        return;
+    }
+    start_now(rt, agent_id).await;
+}
+
+/// Arranca a un agente `READY` sin mirar el cupo del lote (lo mira quien llama).
+/// `true` si lo arrancó (los «decidir después» y los fallos no gastan cupo).
+pub(crate) async fn start_now(rt: &Runtime, agent_id: AgentId) -> bool {
     let agent = rt
         .reader
         .lock()
         .ok()
         .and_then(|c| repo::get_agent(&c, agent_id).ok());
-    let Some(agent) = agent else { return };
+    let Some(agent) = agent else { return false };
     if agent.state != AgentState::Ready {
-        return;
+        return false;
     }
     let started = match (
         agent.execution_mode,
@@ -137,10 +229,14 @@ pub async fn start_released(rt: &Runtime, agent_id: AgentId) {
             .switch_to_profile(agent_id, profile, None)
             .await
             .map(|_| ()),
-        _ => return,
+        _ => return false,
     };
-    if let Err(e) = started {
-        tracing::warn!(agent = %agent_id, error = %e.0, "no se pudo arrancar el agente liberado");
+    match started {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(agent = %agent_id, error = %e.0, "no se pudo arrancar el agente liberado");
+            false
+        }
     }
 }
 

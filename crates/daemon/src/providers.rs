@@ -11,32 +11,38 @@ use symphony_adapter_common::{AdapterError, ProviderAdapter};
 use symphony_adapter_copilot::CopilotAdapter;
 use symphony_adapter_kimi::KimiAdapter;
 use symphony_adapter_opencode::OpenCodeAdapter;
+use symphony_core::ProviderPermissions;
 use symphony_store::{StoreError, WriterHandle, repo};
 
 use std::sync::Arc;
 
-/// Adapters incluidos en esta versión.
-pub fn builtin() -> Vec<Box<dyn ProviderAdapter>> {
+/// Adapters incluidos en esta versión, con los permisos de `[providers.permissions]`.
+pub fn builtin(p: &ProviderPermissions) -> Vec<Box<dyn ProviderAdapter>> {
     vec![
-        Box::new(ClaudeAdapter::default()),
-        Box::new(CodexAdapter::default()),
+        Box::new(ClaudeAdapter {
+            permission_mode: p.claude_permission_mode.clone(),
+            ..ClaudeAdapter::default()
+        }),
+        Box::new(CodexAdapter {
+            sandbox: p.codex_sandbox.clone(),
+            ..CodexAdapter::default()
+        }),
         Box::new(KimiAdapter::default()),
-        Box::new(AntigravityAdapter::default()),
-        Box::new(CopilotAdapter::default()),
+        Box::new(AntigravityAdapter {
+            skip_permissions: p.antigravity_skip_permissions,
+            ..AntigravityAdapter::default()
+        }),
+        Box::new(CopilotAdapter {
+            allow_all_tools: p.copilot_allow_all_tools,
+            ..CopilotAdapter::default()
+        }),
         Box::new(OpenCodeAdapter::default()),
     ]
 }
 
 /// Adapters como Arc para el Runtime.
-pub fn builtin_arc() -> Vec<Arc<dyn ProviderAdapter>> {
-    vec![
-        Arc::new(ClaudeAdapter::default()),
-        Arc::new(CodexAdapter::default()),
-        Arc::new(KimiAdapter::default()),
-        Arc::new(AntigravityAdapter::default()),
-        Arc::new(CopilotAdapter::default()),
-        Arc::new(OpenCodeAdapter::default()),
-    ]
+pub fn builtin_arc(p: &ProviderPermissions) -> Vec<Arc<dyn ProviderAdapter>> {
+    builtin(p).into_iter().map(Arc::from).collect()
 }
 
 /// Resultado de detectar un proveedor.

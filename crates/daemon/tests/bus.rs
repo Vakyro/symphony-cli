@@ -107,3 +107,94 @@ async fn slow_subscriber_never_blocks_the_producer_nor_loses_persisted_events() 
     assert_eq!(reader.await.unwrap(), n as u32);
     writer.shutdown();
 }
+
+/// P11.5.S3: el texto parcial se difunde y se acumula por agente, pero no se persiste ni toca el
+/// estado; el mensaje completo lo reemplaza.
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_text_is_ephemeral_and_replaced_by_the_full_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("s.db");
+    symphony_store::open(&db)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p1','p','/p','main',0);",
+        )
+        .unwrap();
+    let writer = Writer::start(&db).unwrap();
+    let bus = EventBus::new(
+        writer.handle(),
+        16,
+        symphony_object_store::ObjectStore::new(dir.path().join("objects")),
+    );
+    let mut rx = bus.subscribe();
+    let delta = |agent: &str, text: &str| BusEvent {
+        project_id: "p1".into(),
+        agent_id: Some(agent.into()),
+        run_id: None,
+        source: EventSource::JsonStream,
+        event: AgentEvent::AssistantDelta { text: text.into() },
+        occurred_at: 1,
+    };
+
+    assert_eq!(bus.partial("a1"), "");
+    bus.publish(delta("a1", "Hola, ")).await.unwrap();
+    bus.publish(delta("a1", "mundo")).await.unwrap();
+    bus.publish(delta("a2", "otro")).await.unwrap();
+    assert_eq!(bus.partial("a1"), "Hola, mundo");
+    assert_eq!(bus.partial("a2"), "otro");
+    // Los suscriptores (la TUI) reciben cada trozo.
+    for _ in 0..3 {
+        assert!(matches!(
+            rx.recv().await.unwrap().event,
+            AgentEvent::AssistantDelta { .. }
+        ));
+    }
+    // Nada en la base ni en el estado por agente.
+    let stats = writer.handle().flush().await.unwrap();
+    assert_eq!(stats.events_written, 0);
+    assert!(bus.state().borrow().is_empty());
+
+    // El mensaje completo reemplaza al parcial de ese agente (y solo de ese).
+    let mut full = ev(2);
+    full.agent_id = Some("a1".into());
+    full.project_id = "p1".into();
+    // `a1` no existe en `agents`: la persistencia del evento no es lo que se prueba aquí.
+    let _ = bus.publish(full).await;
+    assert_eq!(bus.partial("a1"), "");
+    assert_eq!(bus.partial("a2"), "otro");
+
+    drop(bus);
+    writer.shutdown();
+}
+
+/// P11.5.S3 (revisión): al llegar al tope el texto parcial se corta con una marca y deja de
+/// acumular: ningún trozo posterior, por chico que sea, entra y deja huecos.
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_text_stops_for_good_at_the_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("s.db");
+    symphony_store::open(&db).unwrap();
+    let writer = Writer::start(&db).unwrap();
+    let bus = EventBus::new(
+        writer.handle(),
+        16,
+        symphony_object_store::ObjectStore::new(dir.path().join("objects")),
+    );
+    let delta = |text: String| BusEvent {
+        project_id: "p1".into(),
+        agent_id: Some("a1".into()),
+        run_id: None,
+        source: EventSource::JsonStream,
+        event: AgentEvent::AssistantDelta { text },
+        occurred_at: 1,
+    };
+    bus.publish(delta("a".repeat(65_000))).await.unwrap();
+    bus.publish(delta("b".repeat(5_000))).await.unwrap();
+    bus.publish(delta("c".into())).await.unwrap();
+    let partial = bus.partial("a1");
+    assert!(partial.ends_with('…'), "marca de corte");
+    assert!(!partial.contains('c'), "nada después del tope");
+    assert!(partial.len() <= 64 * 1024 + 3);
+    drop(bus);
+    writer.shutdown();
+}

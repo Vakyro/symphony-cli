@@ -125,6 +125,22 @@ enum Cmd {
         #[command(subcommand)]
         action: FactCmd,
     },
+    /// Pide a un review agent que revise el trabajo de un agente (solo recomienda; no integra).
+    Review {
+        /// ID o número del agente a revisar.
+        agent: String,
+        /// Modelo exacto del revisor (ej. `claude/sonnet`).
+        #[arg(long)]
+        model: Option<String>,
+        /// Profile del revisor (por defecto `@review`).
+        #[arg(long, conflicts_with = "model")]
+        profile: Option<String>,
+    },
+    /// El chat general del proyecto (la rama `symphony/chat`).
+    Chat {
+        #[command(subcommand)]
+        action: ChatCmd,
+    },
     /// Muestra el git diff del worktree del agente contra su commit base.
     Diff {
         /// ID o número del agente.
@@ -173,6 +189,32 @@ enum Cmd {
 enum ProvidersCmd {
     /// Vuelve a detectar los CLIs instalados.
     Refresh,
+}
+
+#[derive(Subcommand)]
+enum ChatCmd {
+    /// Integra el chat en `main`: sin opciones muestra el preflight; `--review` pide la revisión;
+    /// `--yes` hace el merge (nunca sin tu confirmación).
+    Merge {
+        /// Pide a un review agent que revise el chat (solo recomienda).
+        #[arg(long, conflicts_with = "yes")]
+        review: bool,
+        /// Confirma e integra el chat en `main` con un commit de merge.
+        #[arg(long)]
+        yes: bool,
+        /// Con `--yes`: integra aunque el revisor haya fallado o no haya revisión.
+        #[arg(long, requires = "yes")]
+        skip_review: bool,
+        /// Corre la validación del proyecto en el preflight (puede tardar).
+        #[arg(long, conflicts_with_all = ["review", "yes"])]
+        validate: bool,
+        /// Con `--review`: modelo exacto del revisor (ej. `claude/sonnet`).
+        #[arg(long, requires = "review")]
+        model: Option<String>,
+        /// Con `--review`: profile del revisor (por defecto `@review`).
+        #[arg(long, requires = "review", conflicts_with = "model")]
+        profile: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -559,6 +601,72 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                 }
             }
         }
+        Some(Cmd::Chat {
+            action:
+                ChatCmd::Merge {
+                    review,
+                    yes,
+                    skip_review,
+                    validate,
+                    model,
+                    profile,
+                },
+        }) => {
+            let cwd = std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .display()
+                .to_string();
+            let mut conn = client::connect_or_start(home).await?;
+            if yes {
+                let res = client::call(
+                    &mut conn,
+                    "chat.merge.integrate",
+                    json!({ "project_root": cwd, "confirm": true, "skip_review": skip_review }),
+                )
+                .await?;
+                println!(
+                    "Chat integrado en la rama principal: {}",
+                    res["commit"].as_str().unwrap_or("?")
+                );
+            } else if review {
+                let res = client::call(
+                    &mut conn,
+                    "chat.merge.review",
+                    json!({ "project_root": cwd, "model": model, "profile": profile }),
+                )
+                .await?;
+                println!(
+                    "Revisión pedida al agente {}. Cuando termine, corre `symphony chat merge` para ver su veredicto.",
+                    res["reviewer_agent_id"].as_str().unwrap_or("?")
+                );
+            } else {
+                let res = client::call(
+                    &mut conn,
+                    "chat.merge.prepare",
+                    json!({ "project_root": cwd, "validate": validate }),
+                )
+                .await?;
+                print_chat_merge(&res);
+            }
+        }
+        Some(Cmd::Review {
+            agent,
+            model,
+            profile,
+        }) => {
+            let mut conn = client::connect_or_start(home).await?;
+            let res = client::call(
+                &mut conn,
+                "review.start",
+                json!({ "agent": agent, "model": model, "profile": profile }),
+            )
+            .await?;
+            println!(
+                "Revisión pedida al agente {}. Su veredicto queda guardado al terminar \
+                 (aparece en la vista del agente y en `symphony chat merge`).",
+                res["reviewer_agent_id"].as_str().unwrap_or("?")
+            );
+        }
         Some(Cmd::Fact { action }) => {
             let cwd_str = std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
@@ -849,6 +957,37 @@ fn print_providers(v: &Value) {
             p["models"],
             text("cli_path")
         );
+    }
+}
+
+fn print_chat_merge(v: &Value) {
+    println!(
+        "Integrar `{}` en `{}` — {} commit(s) por integrar
+",
+        v["source"].as_str().unwrap_or("?"),
+        v["target"].as_str().unwrap_or("?"),
+        v["ahead"].as_u64().unwrap_or(0)
+    );
+    let empty = Vec::new();
+    for c in v["checks"].as_array().unwrap_or(&empty) {
+        let mark = match c["status"].as_str().unwrap_or("") {
+            "PASS" => "✓",
+            "WARN" => "!",
+            _ => "✗",
+        };
+        println!(
+            "  {mark} {:<17} {}",
+            c["name"].as_str().unwrap_or("?"),
+            c["detail"].as_str().unwrap_or("")
+        );
+    }
+    println!();
+    if v["ready"].as_bool().unwrap_or(false) {
+        println!(
+            "Listo. Pide la revisión con `symphony chat merge --review` e integra con `symphony chat merge --yes`."
+        );
+    } else {
+        println!("Hay comprobaciones en ✗: corrígelas y vuelve a correr `symphony chat merge`.");
     }
 }
 

@@ -170,12 +170,19 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
             args: vec!["hook".into(), "emit".into()],
         }
     });
+    // La config se lee antes que el runtime: los permisos de los proveedores (`[providers.
+    // permissions]`) se fijan al crear los adapters. Una config inválida deja los predeterminados.
+    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home));
+    let permissions = config
+        .as_ref()
+        .map(|c| c.providers.permissions.clone())
+        .unwrap_or_default();
     let runtime = crate::runtime::Runtime::new(
         home,
         writer.handle(),
         runtime_reader,
         bus.clone(),
-        crate::providers::builtin_arc(),
+        crate::providers::builtin_arc(&permissions),
         hook_cmd,
     );
     runtime.watch_active_projects();
@@ -187,7 +194,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     runtime.set_scheduling(scheduling.clone());
     scheduling.spawn(writer.handle(), shutdown.clone());
 
-    match symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home)) {
+    match config {
         Ok(config) => {
             bus.set_health_config(crate::health::HealthConfig::from_config(&config));
             scheduling.set_limits(symphony_scheduler::Limits::from_config(&config.performance));
@@ -207,7 +214,11 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
             runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
         }
         Err(e) => {
-            tracing::warn!(error = %e, "config.toml no se pudo leer; el chat no cambia por umbral")
+            tracing::warn!(
+                error = %e,
+                "config.toml no se pudo leer: permisos de proveedores predeterminados y el chat \
+                 no cambia por umbral"
+            )
         }
     }
 
@@ -419,6 +430,9 @@ async fn dispatch(req: Request, state: &State) -> Response {
         }
         "merge.get" => merge_get(req, state),
         "review.start" => review_start(req, state).await,
+        "chat.merge.prepare" | "chat.merge.review" | "chat.merge.integrate" => {
+            chat_merge(req, state).await
+        }
         "batch.create" => batch_create(req, state).await,
         "batch.status" => batch_status(req, state),
         "batch.integrate" => batch_integrate(req, state).await,
@@ -804,7 +818,9 @@ async fn agent_logs(req: Request, state: &State) -> Response {
                 .into_iter()
                 .map(|(role, content, at)| json!({ "role": role, "content": content, "at": at }))
                 .collect();
-            Response::ok(req.id, json!({ "messages": messages }))
+            // `partial`: lo que el agente lleva escrito del mensaje en curso (P11.5.S3).
+            let partial = state.bus.partial(&agent_id.to_string());
+            Response::ok(req.id, json!({ "messages": messages, "partial": partial }))
         }
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }
@@ -1505,10 +1521,12 @@ async fn recovery_act(req: Request, state: &State) -> Response {
 async fn refresh_providers(
     writer: &symphony_store::WriterHandle,
 ) -> Result<(), symphony_store::StoreError> {
-    let detected =
-        tokio::task::spawn_blocking(|| crate::providers::detect_all(&crate::providers::builtin()))
-            .await
-            .unwrap_or_default();
+    // Detectar no depende de los permisos: se usan los predeterminados.
+    let detected = tokio::task::spawn_blocking(|| {
+        crate::providers::detect_all(&crate::providers::builtin(&Default::default()))
+    })
+    .await
+    .unwrap_or_default();
     crate::providers::save(writer, detected, now_ms()).await
 }
 
@@ -2277,6 +2295,54 @@ fn merge_get(req: Request, state: &State) -> Response {
             })).collect::<Vec<_>>(),
         }))
     })
+}
+
+/// chat → `main` (P11.5.S6): `prepare` (preflight, sin cambios), `review` (pide la revisión) e
+/// `integrate` (merge, solo con `confirm: true`).
+async fn chat_merge(req: Request, state: &State) -> Response {
+    let root = project_root_param(&req.params);
+    let flag = |k: &str, default: bool| {
+        req.params
+            .get(k)
+            .and_then(Value::as_bool)
+            .unwrap_or(default)
+    };
+    let text = |k: &str| {
+        req.params
+            .get(k)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let runtime = state.runtime.clone();
+    let method = req.method.clone();
+    let (validate, confirm, skip_review) = (
+        flag("validate", false),
+        flag("confirm", false),
+        flag("skip_review", false),
+    );
+    let (model, profile) = (text("model"), text("profile"));
+    let done = tokio::spawn(async move {
+        match method.as_str() {
+            "chat.merge.prepare" => runtime
+                .chat_merge_prepare(&root, validate)
+                .await
+                .map(|p| p.to_json()),
+            "chat.merge.review" => runtime
+                .chat_merge_review(&root, model, profile)
+                .await
+                .map(|r| json!({ "reviewer_agent_id": r.to_string() })),
+            _ => runtime
+                .chat_merge_integrate(&root, confirm, skip_review)
+                .await
+                .map(|c| json!({ "status": "MERGED", "commit": c })),
+        }
+    })
+    .await;
+    match done {
+        Ok(Ok(v)) => Response::ok(req.id, v),
+        Ok(Err(e)) => Response::error(req.id, "merge_error", e),
+        Err(e) => Response::error(req.id, "merge_error", e.to_string()),
+    }
 }
 
 async fn review_start(req: Request, state: &State) -> Response {

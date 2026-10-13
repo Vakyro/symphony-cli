@@ -125,6 +125,8 @@ impl ClaudeAdapter {
                 "--output-format",
                 "stream-json",
                 "--verbose",
+                // Deltas de texto para ver la respuesta mientras se escribe (P11.5.S3).
+                "--include-partial-messages",
             ])
             .args(["--model", &req.model])
             .args(["--permission-mode", &self.permission_mode])
@@ -326,6 +328,23 @@ impl ProviderAdapter for ClaudeAdapter {
                     text: t.to_string(),
                 })
                 .collect(),
+            // Texto parcial (`--include-partial-messages`); el resto de `stream_event`
+            // (inicio de bloque, JSON de herramientas, razonamiento) no interesa.
+            (Some("stream_event"), _) => {
+                let e = &v["event"];
+                match (e["type"].as_str(), e["delta"]["type"].as_str()) {
+                    (Some("content_block_delta"), Some("text_delta")) => e["delta"]["text"]
+                        .as_str()
+                        .filter(|t| !t.is_empty())
+                        .map(|t| {
+                            vec![AgentEvent::AssistantDelta {
+                                text: t.to_string(),
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                }
+            }
             // Eco de un mensaje del usuario (`--replay-user-messages`); los tool_result van por hooks.
             (Some("user"), _) if v.get("isReplay").and_then(Value::as_bool) == Some(true) => {
                 match &v["message"]["content"] {

@@ -3036,6 +3036,7 @@ dependencies = [
  "insta",
  "ratatui",
  "serde_json",
+ "symphony-context",
  "symphony-protocol",
  "symphony-testkit",
  "tempfile",

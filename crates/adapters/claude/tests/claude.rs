@@ -389,3 +389,79 @@ fn shared_skills_plugin_and_extra_mcp_servers_are_registered_per_invocation() {
     assert_eq!(servers["remoto"]["type"], "http");
     assert_eq!(at("--allowedTools"), "mcp__fs,mcp__remoto");
 }
+
+/// P11.5.S2: el modo de permisos sale de la config; el valor por defecto sigue siendo `acceptEdits`.
+#[test]
+fn permission_mode_comes_from_the_config() {
+    let a = ClaudeAdapter {
+        permission_mode: "plan".into(),
+        ..adapter()
+    };
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "sonnet".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        hook: None,
+        env: vec![],
+    };
+    let args: Vec<String> = a
+        .spawn_spec(&req)
+        .unwrap()
+        .args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        args[args.iter().position(|a| a == "--permission-mode").unwrap() + 1],
+        "plan"
+    );
+    assert!(!args.iter().any(|a| a == "acceptEdits"), "{args:?}");
+}
+
+/// P11.5.S3: con `--include-partial-messages` el texto llega en `stream_event`; solo el
+/// `text_delta` es un evento (efímero), el resto del stream parcial se ignora.
+#[test]
+fn partial_message_text_deltas_become_assistant_delta() {
+    // Sintético, con la forma documentada del stream parcial de Claude Code.
+    let delta = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hola"}},"session_id":"s","parent_tool_use_id":null}"#;
+    assert_eq!(
+        adapter().parse_stream_line(delta),
+        vec![AgentEvent::AssistantDelta {
+            text: "Hola".into()
+        }]
+    );
+    for ignored in [
+        r#"{"type":"stream_event","event":{"type":"message_start","message":{"id":"m"}}}"#,
+        r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}"#,
+        r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"a\""}}}"#,
+        r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}}"#,
+        r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}}"#,
+        r#"{"type":"stream_event","event":{"type":"message_stop"}}"#,
+    ] {
+        assert!(adapter().parse_stream_line(ignored).is_empty(), "{ignored}");
+    }
+}
+
+#[test]
+fn spawn_and_resume_ask_for_partial_messages() {
+    let a = adapter();
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "sonnet".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        hook: None,
+        env: vec![],
+    };
+    let has = |args: &[std::ffi::OsString]| {
+        args.iter()
+            .any(|a| a.to_string_lossy() == "--include-partial-messages")
+    };
+    assert!(has(&a.spawn_spec(&req).unwrap().args));
+    let resume = ResumeRequest {
+        spawn: req,
+        cli_session_id: "7f0c7b3e-2c7e-4a58-9d9e-8e1b1c4f0a11".into(),
+    };
+    assert!(has(&a.resume_spec(&resume).unwrap().args));
+}

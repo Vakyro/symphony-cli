@@ -8,7 +8,7 @@ use symphony_core::{
 };
 use symphony_store::merge::{
     approve, conflicts_of, finish_review, insert_review, latest_mr, mark_merged, open_or_reuse,
-    queue, replace_conflicts, resolve_conflicts, review_by_reviewer, reviews_of_target, set_status,
+    replace_conflicts, resolve_conflicts, review_by_reviewer, reviews_of_target, set_status,
 };
 use symphony_store::open_in_memory;
 
@@ -46,7 +46,6 @@ fn one_open_request_per_agent_is_reused_until_it_is_merged() {
     assert_eq!(again.preflight_json.as_deref(), Some("{\"checks\":[]}"));
 
     set_status(&conn, &first.id, MergeStatus::Ready, None).unwrap();
-    assert_eq!(queue(&conn, "symphony/chat").unwrap().len(), 1);
     approve(&conn, &first.id, 3).unwrap();
     mark_merged(&conn, &first.id, "abc123", 4).unwrap();
     let merged = latest_mr(&conn, agent).unwrap().unwrap();
@@ -58,7 +57,6 @@ fn one_open_request_per_agent_is_reused_until_it_is_merged() {
         ),
         (MergeStatus::Merged, Some("abc123"), Some(3))
     );
-    assert!(queue(&conn, "symphony/chat").unwrap().is_empty());
 
     // Una vez integrada, una solicitud nueva abre otra fila.
     let next = open_or_reuse(&conn, agent, task, "symphony/chat", true, 5).unwrap();

@@ -677,7 +677,6 @@ impl Runtime {
             model,
             "La validación de la tarea falló; el fallo vuelve al mismo agente.",
             "RESTART",
-            "validation failed",
             None,
             Some(feedback),
             None,
