@@ -2102,7 +2102,9 @@ impl Runtime {
             Ok((a, t, w, ar, cp, rs))
         })?;
         let is_live = self.is_live(agent_id);
+        let suggestion = self.pending_suggestion_json(agent_id);
         Ok(serde_json::json!({
+            "suggestion": suggestion,
             "agent": {
                 "id": agent.id.to_string(),
                 "number": agent.number,

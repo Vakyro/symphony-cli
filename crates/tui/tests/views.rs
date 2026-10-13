@@ -1713,3 +1713,42 @@ fn the_tui_builds_file_uris_the_context_parser_accepts() {
         assert_eq!(parsed.to_string(), uri);
     }
 }
+
+/// P14.S2 (FLOW §8.5): una sugerencia de modelo pendiente se ve en el chat y se resuelve con
+/// tres teclas; sin sugerencia, esas teclas no hacen nada.
+#[test]
+fn chat_shows_the_model_suggestion_and_resolves_it_with_three_keys() {
+    let mut app = chat_app();
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    // Sin sugerencia: Ctrl+T/K/N no llaman a nada.
+    for c in ['t', 'k', 'n'] {
+        assert!(ctrl(&mut app, c).is_empty());
+    }
+    app.chat.as_mut().unwrap().inspect = json!({
+        "agent": { "state": "READY" },
+        "suggestion": {
+            "id": "SUG1", "current_model_id": "google/flash",
+            "suggested_model_id": "claude/sonnet",
+            "reason": "la tarea pasó de documentación a un refactor de varios archivos",
+        },
+    });
+    let screen = draw(&app);
+    assert!(
+        screen.contains("Sugerencia: google/flash → claude/sonnet"),
+        "{screen}"
+    );
+    assert!(screen.contains("^T cambiar"), "{screen}");
+
+    for (c, action) in [('t', "switch"), ('k', "keep"), ('n', "mute")] {
+        let calls = ctrl(&mut app, c);
+        assert_eq!(methods(&calls), ["suggestion.resolve"], "{c}");
+        assert_eq!(calls[0].params, json!({ "id": "SUG1", "action": action }));
+    }
+    // La respuesta se avisa y no cambia nada por su cuenta.
+    ok(
+        &mut app,
+        Req::SuggestionResolve,
+        json!({ "status": "ACCEPTED" }),
+    );
+    assert!(matches!(&app.notice, Some(Notice::Info(m)) if m.contains("modelo sugerido")));
+}

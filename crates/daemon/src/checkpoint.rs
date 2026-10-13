@@ -16,7 +16,7 @@ use symphony_core::{AgentId, CheckpointId, RunId, redact};
 use symphony_git::{FileStatus, Repo};
 use symphony_object_store::ObjectStore;
 use symphony_store::{WriterHandle, repo};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::bus::BusEvent;
 
@@ -165,11 +165,16 @@ pub struct Checkpointer {
 
 impl Checkpointer {
     /// Arranca el worker (necesita un runtime de tokio).
-    pub fn start(writer: WriterHandle, objects: ObjectStore, keep: usize) -> Self {
+    pub fn start(
+        writer: WriterHandle,
+        objects: ObjectStore,
+        keep: usize,
+        taken: broadcast::Sender<AgentId>,
+    ) -> Self {
         let progress: Arc<Mutex<HashMap<AgentId, Progress>>> = Arc::default();
         // Sin límite pero acotada: hay a lo sumo un trabajo pendiente por agente (`dirty`).
         let (jobs, rx) = mpsc::unbounded_channel();
-        tokio::spawn(worker(writer, objects, keep, progress.clone(), rx));
+        tokio::spawn(worker(writer, objects, keep, progress.clone(), rx, taken));
         Self { progress, jobs }
     }
 
@@ -210,6 +215,7 @@ async fn worker(
     keep: usize,
     progress: Arc<Mutex<HashMap<AgentId, Progress>>>,
     mut jobs: mpsc::UnboundedReceiver<Job>,
+    taken: broadcast::Sender<AgentId>,
 ) {
     while let Some(job) = jobs.recv().await {
         match job {
@@ -217,8 +223,14 @@ async fn worker(
                 let _ = done.send(());
             }
             Job::Agent(agent) => {
-                if let Err(e) = take(&writer, &objects, keep, &progress, agent).await {
-                    tracing::warn!(agent = %agent, error = %e, "no se pudo tomar el checkpoint");
+                match take(&writer, &objects, keep, &progress, agent).await {
+                    // Quien lo evalúa (sugerencias) se entera de que hay checkpoint nuevo.
+                    Ok(()) => {
+                        let _ = taken.send(agent);
+                    }
+                    Err(e) => {
+                        tracing::warn!(agent = %agent, error = %e, "no se pudo tomar el checkpoint");
+                    }
                 }
             }
         }

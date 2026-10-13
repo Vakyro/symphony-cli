@@ -768,6 +768,31 @@ fn chat_lines(messages: &[Value], tools: &[Value], width: usize) -> Vec<Line<'st
     timeline.into_iter().flat_map(|(_, l)| l).collect()
 }
 
+/// La sugerencia de cambio de modelo pendiente (FLOW §8.5), en un par de líneas. `keys` dice con
+/// qué teclas se resuelve en esta vista.
+fn suggestion_lines(s: Option<&Value>, keys: &str, width: usize) -> Vec<Line<'static>> {
+    let Some(s) = s else { return Vec::new() };
+    let text = format!(
+        "Sugerencia: {} → {} · {}",
+        text(&s["current_model_id"]),
+        text(&s["suggested_model_id"]),
+        text(&s["reason"])
+    );
+    let mut out = vec![Line::raw("")];
+    for (i, l) in wrap(&text, width.saturating_sub(2)).into_iter().enumerate() {
+        out.push(Line::from(colored(
+            if i == 0 {
+                format!("◆ {l}")
+            } else {
+                format!("  {l}")
+            },
+            Color::Cyan,
+        )));
+    }
+    out.push(Line::from(dim(format!("  {keys}"))));
+    out
+}
+
 /// El mensaje que el agente está escribiendo (vacío si no hay), con cursor al final.
 fn partial_lines(partial: &str, width: usize) -> Vec<Line<'static>> {
     if partial.is_empty() {
@@ -854,6 +879,11 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
     let inner_w = usize::from(body.width.saturating_sub(2));
     let inner_h = usize::from(body.height.saturating_sub(2));
     let mut lines = view.map_or_else(Vec::new, |v| chat_lines(&v.messages, &v.activity, inner_w));
+    lines.extend(suggestion_lines(
+        view.and_then(AgentView::suggestion),
+        "^T cambiar · ^K mantener · ^N no sugerir más",
+        inner_w,
+    ));
     if let Some(v) = view.filter(|v| v.state() == "RUNNING") {
         // Con texto parcial, el texto mismo es la señal de trabajo.
         if v.partial.is_empty() {
@@ -1317,6 +1347,11 @@ fn conversation(app: &App, f: &mut Frame, area: Rect) {
     let width = usize::from(area.width.saturating_sub(2));
     let mut lines = chat_lines(&a.messages, &[], width);
     lines.extend(partial_lines(&a.partial, width));
+    lines.extend(suggestion_lines(
+        a.suggestion(),
+        "S cambiar · K mantener · N no sugerir más",
+        width,
+    ));
     if lines.is_empty() {
         lines.push(Line::from(dim("Sin mensajes todavía.")));
     }

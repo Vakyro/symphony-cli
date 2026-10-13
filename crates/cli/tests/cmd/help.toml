@@ -21,6 +21,7 @@ Commands:
   explain-route  Por qué se eligió el modelo de un agente: decisiones de routing y candidatos evaluados
   context        Context engine: qué entró al último handoff, estadísticas y el original de un objeto
   fact           Hechos consolidados del proyecto (arquitectura, decisiones, restricciones, convenciones)
+  suggestion     Sugerencias de cambio de modelo (nunca se aplican solas)
   plugin         Plugins instalados en `~/.symphony/plugins` (validators y context transformers)
   review         Pide a un review agent que revise el trabajo de un agente (solo recomienda; no integra)
   chat           El chat general del proyecto (la rama `symphony/chat`)

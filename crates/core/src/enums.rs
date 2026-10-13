@@ -166,6 +166,16 @@ db_enum!(
 );
 
 db_enum!(
+    /// `model_suggestions.status` (DB §3.E). Una sugerencia nunca se aplica sola.
+    SuggestionStatus {
+        Pending => "PENDING",
+        Accepted => "ACCEPTED",
+        Kept => "KEPT",
+        Muted => "MUTED",
+    }
+);
+
+db_enum!(
     /// `merge_requests.status` (DB §3.H).
     MergeStatus {
         Preflight => "PREFLIGHT",
@@ -387,6 +397,11 @@ mod tests {
             "ReviewRecommendation",
         );
         assert_matches_db(CheckName::ALL, CheckName::as_str, "CheckName");
+        assert_matches_db(
+            SuggestionStatus::ALL,
+            SuggestionStatus::as_str,
+            "SuggestionStatus",
+        );
         assert_matches_db(
             MilestoneStatus::ALL,
             MilestoneStatus::as_str,

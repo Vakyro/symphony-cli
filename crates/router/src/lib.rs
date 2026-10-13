@@ -7,6 +7,8 @@
 //! La decisión es una función de sus entradas: el mismo conjunto de candidatos da el mismo
 //! resultado en cualquier orden, y un modelo no elegible nunca gana.
 
+pub mod suggest;
+
 use std::cmp::Ordering;
 
 use symphony_core::{Health, ProviderState, QuotaCertainty, RejectReason, SpeedClass};

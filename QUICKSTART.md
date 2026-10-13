@@ -260,6 +260,16 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 - Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.
 - **OpenCode** toma como raíz del proyecto el repo principal, no el worktree del agente: Symphony le avisa en el prompt cuál es su directorio, pero un modelo puede escribir en el repo con una ruta absoluta (`docs/research/cli-opencode.md`). La lista de modelos de OpenCode se pide en segundo plano la primera vez (tarda ~7 s): al principio solo aparece `opencode/default`; haz `symphony providers refresh` unos segundos después. Sus modelos gratuitos son inestables; Claude y Codex siguen siendo los que mejor funcionan (`docs/research/opencode-y-calidad-de-proveedores.md`).
 
+### Sugerencias de modelo
+
+Si una tarea cambia de tipo (por ejemplo, de documentación a un refactor de varios archivos) y hay un modelo claramente mejor para ese trabajo, Symphony te lo **sugiere**; nunca cambia el modelo por su cuenta. La sugerencia aparece en el chat y en la vista del agente:
+
+- chat: `Ctrl+T` cambia al modelo sugerido, `Ctrl+K` mantiene el actual, `Ctrl+N` no vuelve a sugerir cambios en ese agente;
+- vista del agente: `S`, `K` y `N`;
+- terminal: `symphony suggestion list|switch|keep|mute <id>`.
+
+Con el uso, los modelos que rinden bien en un profile (`@code`, `@docs`…) ganan un pequeño ajuste de puntaje (solo con 10 o más runs observados; ADR-0016).
+
 ### Plugins
 
 Un plugin es un programa aparte que Symphony lanza para una tarea concreta. Hoy hay dos tipos: **validator** (revisa lo que cambió una tarea y corre en el tier 2 de la validación) y **context-transformer** (reescribe el handoff). No abre tu base ni pide a Symphony que ejecute nada: recibe un JSON por stdin y contesta un JSON por stdout.
