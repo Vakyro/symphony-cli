@@ -29,6 +29,8 @@ use crate::runtime::{Runtime, now_ms};
 /// Lo que hace falta para lanzar un executor.
 /// Cada cuánto se toma la foto del árbol de procesos de un run.
 const PROCESS_SAMPLE_EVERY: Duration = Duration::from_secs(5);
+/// CPU del árbol entre dos muestras que cuenta como latido (4 % de un núcleo en 5 s).
+const CPU_ALIVE_MS: u64 = 200;
 
 /// Límites del SO según `[performance]` del `config.toml` (se relee en cada lanzamiento).
 pub(crate) fn os_limits(home: &Path) -> symphony_process::Limits {
@@ -426,8 +428,9 @@ impl Runtime {
         Ok(())
     }
 
-    /// Foto del árbol de procesos del run hacia la tabla `processes` (P08.S4).
-    async fn record_processes(&self, l: &Launch, proc: &Supervised) {
+    /// Foto del árbol de procesos del run hacia la tabla `processes` (P08.S4). Devuelve el tiempo
+    /// de CPU acumulado del árbol, en ms.
+    async fn record_processes(&self, l: &Launch, proc: &Supervised) -> u64 {
         let samples: Vec<symphony_store::processes::ProcSample> = proc
             .process_tree()
             .into_iter()
@@ -441,8 +444,9 @@ impl Runtime {
             })
             .collect();
         if samples.is_empty() {
-            return;
+            return 0;
         }
+        let cpu = samples.iter().map(|p| p.cpu_time_ms).sum();
         let run = l.run_id;
         let _ = self
             .writer
@@ -455,6 +459,7 @@ impl Runtime {
                 )?)
             }))
             .await;
+        cpu
     }
 
     /// Lee la salida del CLI y atiende el control hasta que el proceso termina.
@@ -463,11 +468,21 @@ impl Runtime {
         // Las últimas líneas de stderr: si el CLI se cae, dicen por qué (dogfooding 2026-10-24).
         let mut err_tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
         let mut control_open = true;
-        let mut monitor = tokio::time::interval(PROCESS_SAMPLE_EVERY);
+        let mut tree_cpu_ms = 0u64;
+        // Más seguido que el watchdog: si no, un árbol ocupado parecería callado.
+        let mut monitor = tokio::time::interval(PROCESS_SAMPLE_EVERY.min(self.stale_after / 3));
         monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let stopped = loop {
             tokio::select! {
-                _ = monitor.tick() => self.record_processes(&l, &proc).await,
+                _ = monitor.tick() => {
+                    // Un `cargo test` en frío puede pasar 15 min sin una línea: si el árbol gasta
+                    // CPU, el agente trabaja, no está colgado (dogfooding 2026-10-24).
+                    let cpu = self.record_processes(&l, &proc).await;
+                    if cpu >= tree_cpu_ms + CPU_ALIVE_MS {
+                        self.beat(l.run_id);
+                    }
+                    tree_cpu_ms = tree_cpu_ms.max(cpu);
+                }
                 line = proc.next_output() => match line {
                     None => break None,
                     Some(OutputLine::Stdout(line)) => {

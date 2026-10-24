@@ -232,6 +232,13 @@ impl Agent {
                     self.turns += 1;
                 }
                 Step::Sleep { ms } => std::thread::sleep(Duration::from_millis(*ms)),
+                Step::Busy { ms } => {
+                    let until = std::time::Instant::now() + Duration::from_millis(*ms);
+                    let mut x = 0u64;
+                    while std::time::Instant::now() < until {
+                        x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7));
+                    }
+                }
                 Step::RateLimit { retry_after_ms } => {
                     emit(
                         &json!({"type": "system", "subtype": "api_retry", "error": "rate_limit", "error_status": 429, "retry_delay_ms": retry_after_ms}),

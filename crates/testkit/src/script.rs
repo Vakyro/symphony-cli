@@ -67,6 +67,10 @@ pub enum Step {
     Sleep {
         ms: u64,
     },
+    /// Gasta CPU sin escribir nada durante `ms` (como un `cargo build` callado).
+    Busy {
+        ms: u64,
+    },
     /// Plan por fases (P08.S5): crea `.symphony/plan/<SYMPHONY_TASK_ID>.md` con `content` si
     /// falta y marca como hechas las tareas de la primera fase pendiente. Simula a un agente
     /// que ejecuta una fase por sesión.
