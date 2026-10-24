@@ -213,6 +213,34 @@ async fn apply(writer: &WriterHandle, objects: &ObjectStore, project: &str, batc
     }
 }
 
+/// Quita del índice los archivos del proyecto que no están en `keep`.
+async fn prune_missing(
+    writer: &WriterHandle,
+    objects: &ObjectStore,
+    project: &str,
+    keep: std::collections::HashSet<String>,
+) {
+    let (store, owner) = (objects.clone(), project.to_string());
+    let pruned = writer
+        .write(Box::new(move |t| {
+            for uri in context::file_uris(t, &owner)? {
+                if keep.contains(&uri) {
+                    continue;
+                }
+                if let Some(old) = context::delete_file(t, &owner, &uri)? {
+                    store
+                        .release(t, &old)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                }
+            }
+            Ok(())
+        }))
+        .await;
+    if let Err(e) = pruned {
+        tracing::warn!(project, error = %e, "no se pudo limpiar el índice de archivos");
+    }
+}
+
 async fn apply_all(writer: &WriterHandle, objects: &ObjectStore, project: &str, all: Vec<Change>) {
     let mut all = all.into_iter().peekable();
     while all.peek().is_some() {
@@ -261,6 +289,12 @@ impl Watchers {
             let initial = tokio::task::spawn_blocking(move || scan(&scan_root))
                 .await
                 .unwrap_or_default();
+            // Con el recorrido completo, lo indexado que ya no está (borrado o ahora ignorado,
+            // p. ej. un `target/` que entró antes de su regla) sale del índice.
+            if initial.len() < MAX_FILES {
+                let keep = initial.iter().filter_map(|c| uri_of(&c.rel)).collect();
+                prune_missing(&writer, &objects, &project, keep).await;
+            }
             apply_all(&writer, &objects, &project, initial).await;
             let ignore = gitignore(&root);
             while let Some(first) = rx.recv().await {

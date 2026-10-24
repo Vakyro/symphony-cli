@@ -309,6 +309,7 @@ impl Runtime {
         if harness == symphony_core::HarnessMode::Symphony {
             env.push((symphony_adapter_common::ENV_HARNESS.into(), "1".into()));
         }
+        env.extend(crate::gc::cargo_env(&self.home, &l.worktree));
         env.extend(self.shared_env(&l).await);
         let spawn_req = SpawnRequest {
             worktree: l.worktree.clone(),
@@ -2034,7 +2035,9 @@ impl Runtime {
                 Ok(())
             }))
             .await
-            .map_err(op_err)
+            .map_err(op_err)?;
+        self.reclaim_disk(false).await;
+        Ok(())
     }
 
     /// Termina forzosamente el executor y el agente (FLOW §7).

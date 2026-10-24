@@ -241,20 +241,23 @@ fn find_opencode() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         if cfg!(windows) && dir.join("opencode.cmd").is_file() {
-            let native = dir.join("node_modules/opencode-ai/bin/opencode.exe");
-            if native.is_file() {
-                return Some(native);
+            // El paquete se llamaba `opencode-ai`; desde 2026-10 es `@opencode/cli`.
+            for pkg in ["@opencode/cli", "opencode-ai"] {
+                let native = dir.join("node_modules").join(pkg).join("bin/opencode.exe");
+                if native.is_file() {
+                    return Some(native);
+                }
             }
         }
     }
     find_on_path("opencode")
 }
 
-/// La versión del paquete npm (`.../opencode-ai/bin/opencode.exe` → `../package.json`).
+/// La versión del paquete npm (`.../@opencode/cli/bin/opencode.exe` → `../package.json`).
 pub fn version_from_package(binary: &Path) -> Option<String> {
     let pkg = binary.parent()?.parent()?.join("package.json");
     let json: Value = serde_json::from_str(&std::fs::read_to_string(pkg).ok()?).ok()?;
-    (json["name"] == "opencode-ai")
+    (json["name"] == "opencode-ai" || json["name"] == "@opencode/cli")
         .then(|| json["version"].as_str().map(str::to_string))
         .flatten()
         .filter(|v| !v.is_empty())

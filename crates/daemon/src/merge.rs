@@ -522,6 +522,7 @@ impl Runtime {
             MergeOutcome::Merged { commit } => {
                 self.record_integration(&mr.id, &ctx, chat_agent, &commit)
                     .await?;
+                self.reclaim_disk(false).await;
                 Ok(commit)
             }
             MergeOutcome::UpToDate => {
@@ -531,6 +532,7 @@ impl Runtime {
                     .map_err(|e| e.to_string())?;
                 self.record_integration(&mr.id, &ctx, chat_agent, &head)
                     .await?;
+                self.reclaim_disk(false).await;
                 Ok(head)
             }
             MergeOutcome::Conflicts { paths } => {

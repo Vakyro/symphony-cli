@@ -136,6 +136,16 @@ pub fn upsert_file(
     }
 }
 
+/// Las URIs de los archivos indexados del proyecto.
+pub fn file_uris(conn: &Connection, project: &str) -> Result<Vec<String>, RepoError> {
+    let mut stmt =
+        conn.prepare("SELECT uri FROM context_objects WHERE project_id = ?1 AND kind = 'FILE'")?;
+    let uris = stmt
+        .query_map([project], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(uris)
+}
+
 /// Borra el archivo `uri` del proyecto con sus chunks y recuperaciones. Devuelve su blob.
 pub fn delete_file(
     conn: &Connection,

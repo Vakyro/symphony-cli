@@ -354,6 +354,13 @@ fn the_version_comes_from_the_npm_package_without_running_the_cli() {
     )
     .unwrap();
     assert_eq!(version_from_package(&exe).as_deref(), Some("1.18.34"));
+    // El nombre nuevo del paquete (2026-10).
+    std::fs::write(
+        pkg.join("package.json"),
+        r#"{"name":"@opencode/cli","version":"2.1.4"}"#,
+    )
+    .unwrap();
+    assert_eq!(version_from_package(&exe).as_deref(), Some("2.1.4"));
     // El `package.json` de otro paquete no cuenta.
     std::fs::write(
         pkg.join("package.json"),

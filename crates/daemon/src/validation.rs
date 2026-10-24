@@ -142,8 +142,13 @@ async fn exec_shell(
     cwd: &Path,
     timeout: Duration,
     limits: symphony_process::Limits,
+    env: Vec<(String, String)>,
 ) -> Result<Exec, String> {
-    let spec = shell_spec(command).cwd(cwd).limits(limits);
+    let spec = env
+        .into_iter()
+        .fold(shell_spec(command).cwd(cwd).limits(limits), |s, (k, v)| {
+            s.env(k, v)
+        });
     let mut proc = symphony_process::spawn(spec)
         .await
         .map_err(|e| e.to_string())?;
@@ -241,7 +246,8 @@ impl Runtime {
 
         let started_ms = now_ms();
         let limits = crate::executor::os_limits(&self.home);
-        let result = exec_shell(command, cwd, timeout, limits).await;
+        let env = crate::gc::cargo_env(&self.home, cwd);
+        let result = exec_shell(command, cwd, timeout, limits, env).await;
         // El fin se anota antes de soltar el turno: el siguiente no puede empezar antes.
         let ended_ms = now_ms();
         if let Some(s) = held {

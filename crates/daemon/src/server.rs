@@ -238,6 +238,8 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         hook_cmd,
     );
     runtime.watch_active_projects();
+    let reclaim = runtime.clone();
+    tokio::spawn(async move { reclaim.reclaim_disk(true).await });
 
     crate::dependencies::spawn(runtime.clone(), shutdown.clone());
     crate::suggestions::spawn(runtime.clone(), shutdown.clone());

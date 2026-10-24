@@ -349,6 +349,74 @@ async fn decide_later_creates_a_ready_agent_without_executor() {
     e.writer.shutdown();
 }
 
+/// Disco (2026-10-24): cancelar un agente borra su worktree limpio y deja la rama; uno con
+/// cambios sin commitear se queda.
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_an_agent_frees_its_clean_worktree_and_keeps_the_branch() {
+    let e = env(WORK, None).await;
+    let clean = e
+        .runtime
+        .create_agent(req(&e, "Limpio", Execution::DecideLater))
+        .await
+        .unwrap();
+    let dirty = e
+        .runtime
+        .create_agent(req(&e, "Con cambios", Execution::DecideLater))
+        .await
+        .unwrap();
+    std::fs::write(dirty.worktree.join("README.md"), "a medias\n").unwrap();
+    e.runtime.stop(clean.agent_id).await.unwrap();
+    e.runtime.stop(dirty.agent_id).await.unwrap();
+    e.writer.handle().flush().await.unwrap();
+
+    assert!(!clean.worktree.exists());
+    assert!(git(&e.repo, &["branch", "--list", &clean.branch]).contains(&clean.branch));
+    assert!(dirty.worktree.join("README.md").is_file());
+    let status = |id: &symphony_core::AgentId| {
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT w.status FROM worktrees w JOIN agents a ON a.worktree_id = w.id WHERE a.id = '{id}'"
+            ),
+        )
+    };
+    assert_eq!(status(&clean.agent_id), "REMOVED");
+    assert_ne!(status(&dirty.agent_id), "REMOVED");
+    e.writer.shutdown();
+}
+
+/// Disco: los agentes de un proyecto Rust comparten `target/`; el repo del usuario no.
+#[test]
+fn cargo_builds_of_agents_share_one_target_dir() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join(".symphony");
+    let wt = home.join("worktrees").join("p").join("agent-001");
+    std::fs::create_dir_all(&wt).unwrap();
+    assert!(
+        symphony_daemon::gc::cargo_env(&home, &wt).is_empty(),
+        "sin Cargo.toml"
+    );
+    std::fs::write(wt.join("Cargo.toml"), "").unwrap();
+    std::fs::write(d.path().join("Cargo.toml"), "").unwrap();
+    let env = symphony_daemon::gc::cargo_env(&home, &wt);
+    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        assert_eq!(
+            env,
+            [(
+                "CARGO_TARGET_DIR".to_string(),
+                home.join("cache")
+                    .join("cargo-target")
+                    .display()
+                    .to_string()
+            )]
+        );
+    }
+    assert!(
+        symphony_daemon::gc::cargo_env(&home, d.path()).is_empty(),
+        "el repo del usuario"
+    );
+}
+
 /// P07.5.S4: crear el chat dos veces devuelve el mismo agente, en `symphony/chat`.
 #[tokio::test(flavor = "multi_thread")]
 async fn chat_is_created_once_per_project_on_its_own_branch() {
@@ -3326,6 +3394,20 @@ async fn project_files_stay_searchable_as_they_change() {
 
     std::fs::remove_file(e.repo.join("src/auth.ts")).unwrap();
     wait_for("rotarnuevo", false);
+
+    // Lo que entró antes de su regla en `.gitignore` sale al volver a arrancar: el recorrido
+    // inicial limpia lo que ya no corresponde.
+    std::fs::create_dir_all(e.repo.join("target")).unwrap();
+    std::fs::write(e.repo.join("target/output"), "artefactoviejo\n").unwrap();
+    wait_for("artefactoviejo", true);
+    std::fs::write(e.repo.join(".gitignore"), "build/\ntarget/\n").unwrap();
+    symphony_daemon::watcher::Watchers::default().ensure(
+        &project,
+        &e.repo,
+        e.writer.handle(),
+        ObjectStore::new(e.home.join("objects")),
+    );
+    wait_for("artefactoviejo", false);
     e.writer.shutdown();
 }
 
@@ -4603,7 +4685,22 @@ async fn a_batch_creates_agents_with_dependencies_and_integrates_what_finished()
     // B espera a A; con tope 1, C (misma ola que A) espera a A también.
     assert_eq!(by_id["B"].depends_on, vec![by_id["A"].task_code.clone()]);
     assert_eq!(by_id["C"].depends_on, vec![by_id["A"].task_code.clone()]);
-    assert_eq!(by_id["B"].state, AgentState::WaitingDependency);
+    // Con la máquina cargada, A (1,5 s) puede terminar antes de que nazca B: entonces B nace
+    // liberado. Si no, espera.
+    if by_id["B"].state != AgentState::WaitingDependency {
+        let a_state: String = one(
+            &e,
+            &format!(
+                "SELECT state FROM agents WHERE id = '{}'",
+                by_id["A"].agent_id
+            ),
+        );
+        assert_eq!(
+            a_state, "COMPLETED",
+            "B no esperó a A: {:?}",
+            by_id["B"].state
+        );
+    }
     assert_ne!(by_id["A"].state, AgentState::WaitingDependency);
 
     // El chat sabe lo que delegó.

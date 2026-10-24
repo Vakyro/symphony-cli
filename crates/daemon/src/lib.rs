@@ -11,6 +11,7 @@ pub mod context_views;
 pub mod dependencies;
 pub mod executor;
 pub mod export;
+pub mod gc;
 pub mod handoff;
 pub mod health;
 pub mod learning;
