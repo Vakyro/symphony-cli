@@ -499,3 +499,19 @@ fn the_harness_keeps_opencodes_tools_when_there_is_no_broker() {
     req.env.push(("SYMPHONY_HARNESS".into(), "1".into()));
     assert!(run_config(&req)["permission"].get("bash").is_none());
 }
+
+/// opencode 2.x cambió la forma del error (`type`, `message`, `status`, `retryAfterMs`): antes
+/// llegaba como «: » y no pedía failover (dogfooding 2026-10-24).
+#[test]
+fn the_free_limit_of_opencode_2_is_a_quota_with_its_reset() {
+    let ev = adapter().parse_stream_line(&lines("error-free-limit-2.1.4.jsonl").remove(0));
+    assert!(
+        matches!(
+            &ev[..],
+            [AgentEvent::ProviderError(e)] if e.failure_type == FailureType::DailyQuota
+                && e.message.contains("Free usage limit")
+                && e.retry_after_ms == Some(6_968_000)
+        ),
+        "{ev:?}"
+    );
+}

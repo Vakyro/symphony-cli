@@ -1,0 +1,10 @@
+agente,fecha,proveedor,modelo,tipo_tarea,dificultad,veredicto,calidad_1a5,retrabajo_integrador,notas
+1,2026-10-24,google,google/gemini-4-argon-high,docs,media,aceptado,4,mínimo (agregar er.md al índice),fiel a LEARNINGS; 45 comandos citados existen; 6 capítulos
+2,2026-10-24,moonshot,moonshot/kimi-for-coding,codigo_tooling,media,aceptado,5,mensaje de commit (backticks escapados),parser DDL con 3 tests; Symphony lo marcó CRASH por cp1252 aunque terminó
+3,2026-10-24,opencode,opencode/deepseek-v4.1-flash-free,docs,baja,aceptado,5,ninguno,corrigió comandos viejos inexistentes; todo verificado con --help
+4,2026-10-24,moonshot,moonshot/kimi-for-coding,tests_propiedades,media,aceptado,4,cargo fmt,targets fuzz sin compilar (sin nightly) y lo dijo; documentó en la bitácora sin que se le pidiera
+5,2026-10-24,opencode,opencode/glm-5.3-flash-free,ci_config,baja,aceptado,3,continue-on-error agregado,no previó falsos positivos de typos en un repo en español
+6,2026-10-24,google,anthropic/claude-sonnet-5-5-medium,tests_integracion,alta,parcial,4,commit hecho por el integrador,soak correcto (RSS estable) pero el watchdog lo mató antes del commit
+12,2026-10-24,github,github/auto,docs,baja,rechazado,1,ninguno (no hubo trabajo),con el harness escribió una llamada a herramienta como texto («to=functions.bash») y terminó a los 43 s sin hacer nada
+11,2026-10-24,opencode,opencode/big-pickle,docs,media,no_evaluable,,ninguno,se agotó el uso gratuito de OpenCode a los 4 min; Symphony no lo reconoció (formato de error 2.x) y no hizo failover
+7,2026-10-24,openai,openai/gpt-6.1-sol,codigo_tooling,media,bloqueado_correcto,,ninguno,detectó una contradicción real en el plan (thiserror vs sin dependencias) y paró tras dos intentos sin inventar; 3 fases de plan; el error era del integrador

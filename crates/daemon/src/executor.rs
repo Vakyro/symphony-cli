@@ -470,7 +470,12 @@ impl Runtime {
         let mut control_open = true;
         let mut tree_cpu_ms = 0u64;
         // Más seguido que el watchdog: si no, un árbol ocupado parecería callado.
-        let mut monitor = tokio::time::interval(PROCESS_SAMPLE_EVERY.min(self.stale_after / 3));
+        // `interval` hace panic con 0: un `stale_after` de 0 no puede tumbar el pump.
+        let mut monitor = tokio::time::interval(
+            PROCESS_SAMPLE_EVERY
+                .min(self.stale_after / 3)
+                .max(Duration::from_millis(10)),
+        );
         monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let stopped = loop {
             tokio::select! {
@@ -478,10 +483,13 @@ impl Runtime {
                     // Un `cargo test` en frío puede pasar 15 min sin una línea: si el árbol gasta
                     // CPU, el agente trabaja, no está colgado (dogfooding 2026-10-24).
                     let cpu = self.record_processes(&l, &proc).await;
+                    // Contra la muestra anterior, no contra el máximo: la suma baja cuando un hijo
+                    // termina, y el siguiente comando no tiene que superar al anterior (auditoría
+                    // P13.S5, hallazgo 1).
                     if cpu >= tree_cpu_ms + CPU_ALIVE_MS {
                         self.beat(l.run_id);
                     }
-                    tree_cpu_ms = tree_cpu_ms.max(cpu);
+                    tree_cpu_ms = cpu;
                 }
                 line = proc.next_output() => match line {
                     None => break None,

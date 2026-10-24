@@ -473,13 +473,33 @@ impl ProviderAdapter for OpenCodeAdapter {
             }
             Some("error") => {
                 let e = &v["error"];
-                let mut text = e["data"]["message"].as_str().unwrap_or("").to_string();
-                for key in ["statusCode", "responseBody"] {
-                    if let Some(x) = e["data"].get(key).filter(|x| !x.is_null()) {
+                // 1.x: `{name, data: {message, statusCode, responseBody}}`; 2.x: `{type, message,
+                // status, retryAfterMs}` (visto con opencode 2.1.4 al agotarse el uso gratuito).
+                let mut text = e["data"]["message"]
+                    .as_str()
+                    .or_else(|| e["message"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                for (key, x) in [
+                    ("statusCode", &e["data"]["statusCode"]),
+                    ("responseBody", &e["data"]["responseBody"]),
+                    ("status", &e["status"]),
+                ] {
+                    if !x.is_null() {
                         text.push_str(&format!(" {key}={}", x.to_string().trim_matches('"')));
                     }
                 }
-                self.error_event(e["name"].as_str().unwrap_or(""), &text)
+                let name = e["name"]
+                    .as_str()
+                    .or_else(|| e["type"].as_str())
+                    .unwrap_or("");
+                let mut events = self.error_event(name, &text);
+                if let (Some(AgentEvent::ProviderError(pe)), Some(ms)) =
+                    (events.first_mut(), e["retryAfterMs"].as_u64())
+                {
+                    pe.retry_after_ms = pe.retry_after_ms.or(Some(ms));
+                }
+                events
             }
             _ => Vec::new(),
         }

@@ -1829,6 +1829,42 @@ async fn chat_fails_over_on_quota_and_keeps_waiting_for_messages() {
     e.writer.shutdown();
 }
 
+/// Auditoría P13.S5, hallazgo 1: tras un hijo que gastó mucha CPU y terminó, un comando callado
+/// que sigue también late (la comparación es contra la muestra anterior, no contra el máximo).
+#[tokio::test(flavor = "multi_thread")]
+async fn cpu_keeps_beating_after_a_busy_child_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let child = dir.path().join("hijo.toml");
+    std::fs::write(&child, "[[step]]\nkind = \"busy\"\nms = 3000\n").unwrap();
+    let script = format!(
+        "[[step]]\nkind = \"run\"\ncommand = ['{}', 'run', '--script', '{}']\n\n[[step]]\nkind = \"busy\"\nms = 3000\n\n[[step]]\nkind = \"say\"\ntext = \"listo\"\n",
+        fake_agent().display(),
+        child.display()
+    );
+    let e = env_with_watchdog(
+        &[("fake", &script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+    e.runtime
+        .create_agent(req(
+            &e,
+            "compilar dos veces",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "COMPLETED"
+    );
+    e.writer.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_executor_that_burns_cpu_is_not_taken_for_hung() {
     let script = "[[step]]
