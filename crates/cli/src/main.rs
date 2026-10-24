@@ -1,4 +1,5 @@
 mod client;
+mod harness;
 mod hook;
 mod mcp;
 

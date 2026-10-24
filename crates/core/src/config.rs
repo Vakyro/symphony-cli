@@ -172,6 +172,25 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub chat: ChatConfig,
     pub plan: PlanConfig,
+    pub harness: HarnessConfig,
+}
+
+/// `[harness]` (ADR-0019): con qué herramientas trabajan los modelos.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HarnessConfig {
+    pub mode: HarnessMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HarnessMode {
+    /// Las herramientas propias de cada CLI (comportamiento de siempre).
+    #[default]
+    Native,
+    /// Las de Symphony, iguales para todos los modelos; se apagan las nativas de los CLIs
+    /// que lo permiten.
+    Symphony,
 }
 
 /// `[plan]`: plan por fases y tareas de cada agente (ADR-0011, ADR-0013).
@@ -386,6 +405,12 @@ failover = "ANY"
 enabled = true
 phase_start = "auto"
 min_tasks_per_phase = 2
+
+[harness]
+# Con qué herramientas trabajan los modelos (ADR-0019): "native" (las de cada CLI) o
+# "symphony" (las de Symphony: leer, escribir, editar, buscar y shell, iguales para todos;
+# se apagan las nativas de los CLIs que lo permiten).
+mode = "native"
 
 [context]
 # Cuánto se comprime el contexto en un handoff: RAW · SAFE · BALANCED · AGGRESSIVE
@@ -785,6 +810,25 @@ mod tests {
             parse::<Config>(Path::new("x"), DEFAULT_CONFIG).unwrap(),
             Config::default()
         );
+    }
+
+    #[test]
+    fn harness_mode_defaults_to_native_and_rejects_unknown_values() {
+        let (_d, home) = home();
+        std::fs::create_dir_all(home.root()).unwrap();
+        // El archivo creado con la plantilla trae el modo nativo.
+        assert_eq!(
+            load_or_create(&home).unwrap().harness.mode,
+            HarnessMode::Native
+        );
+        std::fs::write(home.config_path(), "[harness]\nmode = \"symphony\"\n").unwrap();
+        assert_eq!(
+            load_or_create(&home).unwrap().harness.mode,
+            HarnessMode::Symphony
+        );
+        std::fs::write(home.config_path(), "[harness]\nmode = \"otro\"\n").unwrap();
+        let err = load_or_create(&home).unwrap_err().to_string();
+        assert!(err.contains("otro") || err.contains("mode"), "{err}");
     }
 
     #[test]

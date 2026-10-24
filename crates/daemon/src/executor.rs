@@ -300,6 +300,14 @@ impl Runtime {
                     .to_string(),
             ),
         ];
+        // Harness de Symphony (ADR-0019): el modelo trabaja con las herramientas del broker.
+        let harness =
+            symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&self.home))
+                .map(|c| c.harness.mode)
+                .unwrap_or_default();
+        if harness == symphony_core::HarnessMode::Symphony {
+            env.push((symphony_adapter_common::ENV_HARNESS.into(), "1".into()));
+        }
         env.extend(self.shared_env(&l).await);
         let spawn_req = SpawnRequest {
             worktree: l.worktree.clone(),

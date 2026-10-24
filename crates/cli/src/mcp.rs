@@ -7,12 +7,13 @@
 
 use std::path::PathBuf;
 
+use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::{ErrorData, ServiceExt, schemars, tool, tool_router, transport::stdio};
+use rmcp::{ErrorData, ServiceExt, schemars, tool, tool_handler, tool_router, transport::stdio};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::client;
+use crate::{client, harness};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SearchArgs {
@@ -41,6 +42,9 @@ struct LinesArgs {
 }
 
 struct Broker {
+    tool_router: ToolRouter<Self>,
+    /// Directorio del agente (su worktree): de ahí cuelgan las rutas relativas del harness.
+    root: PathBuf,
     home: PathBuf,
     /// Identidad del run que pregunta; sin ella el daemon no registra el acceso.
     agent: Option<String>,
@@ -77,7 +81,7 @@ fn text_of(v: &Value, key: &str) -> String {
     v[key].as_str().unwrap_or("").to_string()
 }
 
-#[tool_router(server_handler)]
+#[tool_router(router = context_router)]
 impl Broker {
     #[tool(
         description = "Busca en el contexto indexado del proyecto (archivos, diffs, salidas de herramientas). Devuelve fragmentos con su dirección ctx://, líneas y relevancia."
@@ -154,10 +158,152 @@ impl Broker {
     }
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ReadArgs {
+    /// File path (absolute, or relative to the working directory).
+    path: String,
+    /// First line to return (1-based). Default 1.
+    offset: Option<usize>,
+    /// Maximum number of lines. Default 2000.
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct WriteArgs {
+    /// File path (absolute, or relative to the working directory). Parent folders are created.
+    path: String,
+    /// Complete new content of the file.
+    content: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct EditArgs {
+    /// File path (absolute, or relative to the working directory).
+    path: String,
+    /// Exact text to replace, copied from the file (including whitespace).
+    old: String,
+    /// Replacement text.
+    new: String,
+    /// Replace every occurrence instead of requiring a unique one. Default false.
+    replace_all: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GlobArgs {
+    /// Glob pattern such as "**/*.rs" or "src/*.ts".
+    pattern: String,
+    /// Folder to search in. Default: the working directory.
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GrepArgs {
+    /// Regular expression (Rust regex syntax).
+    pattern: String,
+    /// File or folder to search in. Default: the working directory.
+    path: Option<String>,
+    /// Only search files matching this glob, e.g. "*.rs".
+    glob: Option<String>,
+    /// Case-insensitive search. Default false.
+    ignore_case: Option<bool>,
+    /// Maximum number of matching lines. Default 100.
+    max_results: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ShellArgs {
+    /// Command line to run with the machine's shell.
+    command: String,
+    /// Working directory. Default: the agent's working directory.
+    cwd: Option<String>,
+    /// Time limit in seconds. Default 120, maximum 600.
+    timeout_secs: Option<u64>,
+}
+
+// Las herramientas del harness de Symphony (ADR-0019). Descripciones en inglés: es lo que leen
+// los modelos y rinden mejor así. Solo existen si el agente corre en el harness
+// (`SYMPHONY_HARNESS`); si no, no se suman al router al arrancar.
+#[tool_router(router = harness_router)]
+impl Broker {
+    #[tool(
+        description = "Read a text file. Returns the lines numbered; use offset and limit to page through long files."
+    )]
+    async fn read(&self, Parameters(a): Parameters<ReadArgs>) -> Result<String, ErrorData> {
+        harness::read(&self.root, &a.path, a.offset, a.limit).map_err(fail)
+    }
+
+    #[tool(
+        description = "Create a file or replace its whole content. Missing parent folders are created. To change part of an existing file use edit."
+    )]
+    async fn write(&self, Parameters(a): Parameters<WriteArgs>) -> Result<String, ErrorData> {
+        harness::write(&self.root, &a.path, &a.content).map_err(fail)
+    }
+
+    #[tool(
+        description = "Replace exact text in a file. old must match the file exactly and be unique unless replace_all is true; read the file first."
+    )]
+    async fn edit(&self, Parameters(a): Parameters<EditArgs>) -> Result<String, ErrorData> {
+        harness::edit(
+            &self.root,
+            &a.path,
+            &a.old,
+            &a.new,
+            a.replace_all.unwrap_or(false),
+        )
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Find files by glob pattern (e.g. **/*.rs). Respects .gitignore. Returns paths relative to the searched folder."
+    )]
+    async fn glob(&self, Parameters(a): Parameters<GlobArgs>) -> Result<String, ErrorData> {
+        harness::glob(&self.root, &a.pattern, a.path.as_deref()).map_err(fail)
+    }
+
+    #[tool(
+        description = "Search file contents with a regular expression. Respects .gitignore. Returns path:line:text for each match."
+    )]
+    async fn grep(&self, Parameters(a): Parameters<GrepArgs>) -> Result<String, ErrorData> {
+        harness::grep(
+            &self.root,
+            &a.pattern,
+            a.path.as_deref(),
+            a.glob.as_deref(),
+            a.ignore_case.unwrap_or(false),
+            a.max_results,
+        )
+        .map_err(fail)
+    }
+
+    #[tool(
+        description = "Run a shell command and return its exit code, stdout and stderr. Commands that exceed the time limit are killed."
+    )]
+    async fn shell(&self, Parameters(a): Parameters<ShellArgs>) -> Result<String, ErrorData> {
+        harness::shell(
+            &self.root,
+            &a.command,
+            a.cwd.as_deref(),
+            a.timeout_secs.map(std::time::Duration::from_secs),
+        )
+        .await
+        .map_err(fail)
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl rmcp::ServerHandler for Broker {}
+
 /// Sirve MCP por stdio hasta que el CLI cierra la conexión.
 pub async fn serve(home: PathBuf) -> miette::Result<()> {
     use miette::IntoDiagnostic;
+    // Con el harness (ADR-0019) el modelo no tiene otras herramientas: se suman las de archivos y shell.
+    let mut tool_router = Broker::context_router();
+    if env("SYMPHONY_HARNESS").is_some() {
+        tool_router += Broker::harness_router();
+    }
     let broker = Broker {
+        tool_router,
+        root: std::env::current_dir().into_diagnostic()?,
         home,
         agent: env("SYMPHONY_AGENT_ID"),
         run: env("SYMPHONY_RUN_ID"),

@@ -465,3 +465,57 @@ fn spawn_and_resume_ask_for_partial_messages() {
     };
     assert!(has(&a.resume_spec(&resume).unwrap().args));
 }
+
+/// ADR-0019: en el harness de Symphony Claude Code pierde todas sus herramientas propias y solo
+/// queda el broker; sin la marca todo sigue igual que antes.
+#[test]
+fn the_symphony_harness_turns_off_claudes_own_tools() {
+    let hook = HookCommand {
+        program: "symphony".into(),
+        args: vec!["hook".into(), "emit".into()],
+    };
+    let args_for = |env: Vec<(String, String)>| -> Vec<String> {
+        let req = SpawnRequest {
+            worktree: std::env::temp_dir(),
+            model: "sonnet".into(),
+            prompt: "hola".into(),
+            session_id: None,
+            hook: Some(hook.clone()),
+            env,
+        };
+        adapter()
+            .spawn_spec(&req)
+            .unwrap()
+            .args
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    };
+    let at = |args: &[String], flag: &str| {
+        args[args.iter().position(|a| a == flag).unwrap() + 1].clone()
+    };
+
+    let on = args_for(vec![("SYMPHONY_HARNESS".into(), "1".into())]);
+    assert_eq!(at(&on, "--tools"), "", "{on:?}");
+    let allowed = at(&on, "--allowedTools");
+    for tool in ["read", "write", "edit", "glob", "grep", "shell"] {
+        assert!(
+            allowed.contains(&format!("mcp__symphony-context__{tool}")),
+            "{allowed}"
+        );
+    }
+    assert!(at(&on, "--append-system-prompt").contains("read, write, edit, glob, grep and shell"));
+    // El broker recibe la marca para sumar sus herramientas.
+    let mcp: Value = serde_json::from_str(&at(&on, "--mcp-config")).unwrap();
+    assert_eq!(
+        mcp["mcpServers"]["symphony-context"]["env"]["SYMPHONY_HARNESS"],
+        "1"
+    );
+
+    let off = args_for(vec![]);
+    assert!(
+        !off.iter()
+            .any(|a| a == "--tools" || a == "--append-system-prompt"),
+        "{off:?}"
+    );
+}

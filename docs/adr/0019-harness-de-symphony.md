@@ -30,3 +30,10 @@ Opción C (elegida por Leo). Opción D queda fuera de v1.
 - `[providers.permissions]` pasa a ser `[harness]` (permisos de Symphony); los campos por proveedor se conservan solo como respaldo para proveedores con harness parcial.
 - Se necesita un fixture por proveedor que confirme que las herramientas nativas están apagadas y que las MCP se llaman.
 - Live: máximo 2 mensajes por corrida (STATUS § Permisos).
+
+## Enmienda (2026-10-23, P15.5.S4)
+Lo construido difiere del texto de arriba en dos puntos, a propósito:
+- **Las herramientas las ejecuta el broker, no el daemon.** `symphony mcp serve` corre en el directorio del agente y resuelve rutas, archivos y shell él mismo (`crates/cli/src/harness.rs`). Es más simple y rápido; el registro en `tool_calls` sale igual del stream del CLI. Pasar `shell` por el daemon para que el planificador de P08 clasifique y encole los comandos pesados queda pendiente; hoy esa cola solo alcanza a los CLIs cuyos hooks ven el comando.
+- **El modo por defecto es `native`.** `[harness] mode = "symphony"` lo activa. La medición (docs/research/harness-2026-10.md) es de una tarea mínima; el cambio de defecto es de Leo.
+- **Antigravity queda fuera**: no admite MCP ni lista de herramientas por invocación sin escribir su configuración persistente. Es el «harness parcial» previsto: `providers list` lo mostrará cuando se implemente esa marca.
+Las herramientas se llaman igual en todos: `read`, `write`, `edit`, `glob`, `grep`, `shell` (y las `context_*`). Las descripciones están en inglés porque es lo que leen los modelos.

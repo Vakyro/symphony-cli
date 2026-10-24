@@ -262,6 +262,17 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 - Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.
 - **OpenCode** toma como raíz del proyecto el repo principal, no el worktree del agente: Symphony le avisa en el prompt cuál es su directorio, pero un modelo puede escribir en el repo con una ruta absoluta (`docs/research/cli-opencode.md`). La lista de modelos de OpenCode se pide en segundo plano la primera vez (tarda ~7 s): al principio solo aparece `opencode/default`; haz `symphony providers refresh` unos segundos después. Sus modelos gratuitos son inestables; Claude y Codex siguen siendo los que mejor funcionan (`docs/research/opencode-y-calidad-de-proveedores.md`).
 
+### Harness de Symphony (mismas herramientas para todos los modelos)
+
+Por defecto cada CLI trabaja con sus propias herramientas. Con el harness de Symphony (ADR-0019) todos los modelos usan las mismas: leer, escribir, editar, buscar archivos y contenido, y shell, servidas por `symphony mcp serve`; las herramientas propias de cada CLI se apagan. Se activa en `~/.symphony/config.toml`:
+
+```toml
+[harness]
+mode = "symphony"   # native (por defecto) · symphony
+```
+
+Funciona con Claude Code, Codex, OpenCode, Copilot y Kimi; Antigravity no lo admite y sigue con las suyas. Verificado en vivo y con la comparación de costo en `docs/research/harness-2026-10.md`. Reinicia el daemon (`symphony daemon stop`) para aplicarlo.
+
 ### Sugerencias de modelo
 
 Si una tarea cambia de tipo (por ejemplo, de documentación a un refactor de varios archivos) y hay un modelo claramente mejor para ese trabajo, Symphony te lo **sugiere**; nunca cambia el modelo por su cuenta. La sugerencia aparece en el chat y en la vista del agente:

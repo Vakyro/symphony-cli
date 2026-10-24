@@ -60,3 +60,4 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-10-23 · claude-code/sonnet-5.5 · cierre · P15.5.S1 ✅: modelos de Codex, Antigravity y Kimi actualizados, router con familias nuevas, 1 mensaje live a Kimi. Sigue P15.5.S2.
 - 2026-10-23 · claude-code/sonnet-5.5 · cierre · P15.5.S2 ✅: acceso local total por defecto en los cuatro proveedores con modo restringido, 1 mensaje live a Codex. Sigue P15.5.S3.
 - 2026-10-23 · claude-code/sonnet-5.5 · cierre · P15.5.S3 ✅: estado y daemon por proyecto, aprendizaje compartido, `symphony migrate split`, GUI por proyecto. Sigue P15.5.S4.
+- 2026-10-24 · claude-code/sonnet-5.5 · cierre · P15.5.S4 ✅: harness de Symphony (herramientas del broker + apagar las nativas) en Claude, Codex, OpenCode, Copilot y Kimi, verificado en vivo; defecto `native`. Sigue P15.5.S5.

@@ -461,3 +461,21 @@ fn a_finished_background_query_is_promoted_and_a_broken_one_is_dropped() {
     assert_eq!(a.list_models().len(), 2);
     assert!(!tmp.exists());
 }
+
+/// ADR-0019: en el harness de Symphony OpenCode niega sus herramientas propias; sin la marca no.
+#[test]
+fn the_symphony_harness_denies_opencodes_own_tools() {
+    let mut req = request("default");
+    req.env.push(("SYMPHONY_HARNESS".into(), "1".into()));
+    let cfg = run_config(&req);
+    for tool in [
+        "bash", "edit", "read", "glob", "grep", "list", "webfetch", "task",
+    ] {
+        assert_eq!(cfg["permission"][tool], "deny", "{tool}");
+    }
+    // El permiso del worktree sigue ahí.
+    assert!(cfg["permission"]["external_directory"].is_object());
+
+    let plain = run_config(&request("default"));
+    assert!(plain["permission"].get("bash").is_none());
+}

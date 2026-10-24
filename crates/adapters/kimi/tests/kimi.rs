@@ -235,3 +235,33 @@ fn stderr_lines_give_the_session_id_and_errors() {
         ["ProviderError"]
     );
 }
+
+/// ADR-0019: en el harness de Symphony Kimi usa un agente sin herramientas propias y el broker
+/// como único servidor; sin la marca no cambia nada.
+#[test]
+fn the_symphony_harness_runs_kimi_with_no_tools_of_its_own() {
+    let mut req = request("default", None);
+    req.hook = Some(symphony_adapter_common::HookCommand {
+        program: "symphony".into(),
+        args: vec!["hook".into(), "emit".into()],
+    });
+    let plain = args(&adapter().spawn_spec(&req).unwrap());
+    assert!(
+        !plain
+            .iter()
+            .any(|a| a == "--agent-file" || a == "--mcp-config")
+    );
+
+    req.env.push(("SYMPHONY_HARNESS".into(), "1".into()));
+    let a = args(&adapter().spawn_spec(&req).unwrap());
+    let at = |flag: &str| a[a.iter().position(|x| x == flag).unwrap() + 1].clone();
+    let agent = std::fs::read_to_string(at("--agent-file")).unwrap();
+    assert!(
+        agent.contains("extend: default") && agent.contains("tools: []"),
+        "{agent}"
+    );
+    let mcp: serde_json::Value = serde_json::from_str(&at("--mcp-config")).unwrap();
+    let server = &mcp["mcpServers"]["symphony-context"];
+    assert_eq!(server["args"], serde_json::json!(["mcp", "serve"]));
+    assert_eq!(server["env"]["SYMPHONY_HARNESS"], "1");
+}

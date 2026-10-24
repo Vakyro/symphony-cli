@@ -167,6 +167,9 @@ pub fn extra_mcp_overrides(m: &symphony_adapter_common::ExtraMcp) -> Vec<String>
     out
 }
 
+/// Las funciones de Codex que son herramientas propias (`codex features list`).
+const CODEX_NATIVE_TOOLS: [&str; 3] = ["shell_tool", "unified_exec", "view_image"];
+
 fn s(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
 }
@@ -195,6 +198,13 @@ impl CodexAdapter {
         if let Some((cmd, env)) = symphony_adapter_common::broker(req) {
             for o in mcp_overrides(&cmd, &env) {
                 spec = spec.arg("-c").arg(o);
+            }
+        }
+        // Harness de Symphony (ADR-0019): sin el shell ni la lectura de imágenes de Codex, solo
+        // las herramientas del broker (verificado en vivo con codex 0.164).
+        if symphony_adapter_common::harness_on(req) {
+            for feature in CODEX_NATIVE_TOOLS {
+                spec = spec.arg("--disable").arg(feature);
             }
         }
         for m in symphony_adapter_common::extra_mcp(req) {

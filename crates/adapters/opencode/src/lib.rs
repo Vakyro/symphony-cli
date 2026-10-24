@@ -130,6 +130,11 @@ fn context_tokens(tokens: &Value) -> Option<u64> {
     Some(input + cache("read") + cache("write"))
 }
 
+/// Permisos de OpenCode que corresponden a sus herramientas propias.
+const OPENCODE_NATIVE_TOOLS: [&str; 8] = [
+    "bash", "edit", "read", "glob", "grep", "list", "webfetch", "task",
+];
+
 /// El JSON de `OPENCODE_CONFIG_CONTENT` de un spawn: el permiso para el worktree y, si hay, los
 /// servidores MCP (broker de Symphony y `mcp.toml`).
 ///
@@ -144,6 +149,13 @@ pub fn run_config(req: &SpawnRequest) -> Value {
     external.insert(format!("{}/**", fwd.trim_end_matches('/')), json!("allow"));
     external.insert(format!("{}\\**", wt.trim_end_matches('\\')), json!("allow"));
     let mut cfg = json!({ "permission": { "external_directory": external } });
+    // Harness de Symphony (ADR-0019): se niegan las herramientas propias de OpenCode y el modelo
+    // trabaja con las del broker (verificado en vivo con opencode 2.1.4).
+    if symphony_adapter_common::harness_on(req) {
+        for tool in OPENCODE_NATIVE_TOOLS {
+            cfg["permission"][tool] = json!("deny");
+        }
+    }
     if let Some(mcp) = mcp_config(req) {
         cfg["mcp"] = mcp["mcp"].clone();
     }

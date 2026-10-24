@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, ModelInfo, ProcessSpec, ProviderAdapter,
     ProviderError, ResumeRequest, SpawnRequest, ToolKind, find_on_path, has_token, json_str,
@@ -143,6 +143,24 @@ impl CopilotAdapter {
         } else {
             spec.arg("--allow-tool=write")
         };
+        // Harness de Symphony (ADR-0019): el broker como único servidor disponible; las
+        // herramientas propias de Copilot quedan fuera (verificado en vivo con copilot 1.0.103).
+        if symphony_adapter_common::harness_on(req)
+            && let Some((cmd, env)) = symphony_adapter_common::broker(req)
+        {
+            let name = symphony_adapter_common::MCP_SERVER_NAME;
+            let servers = json!({ "mcpServers": { name: {
+                "type": "local",
+                "command": cmd.program.to_string_lossy(),
+                "args": cmd.args,
+                "tools": ["*"],
+                "env": env.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+            } } });
+            spec = spec
+                .arg("--additional-mcp-config")
+                .arg(servers.to_string())
+                .args(["--available-tools", name]);
+        }
         for (k, v) in &req.env {
             spec = spec.env(k, v);
         }

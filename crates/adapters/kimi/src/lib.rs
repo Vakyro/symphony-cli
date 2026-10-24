@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, ModelInfo, ProcessSpec, ProviderAdapter,
     ProviderError, ResumeRequest, SpawnRequest, ToolKind, find_on_path, has_token, json_str,
@@ -26,6 +26,29 @@ const DEFAULT_MODEL: &str = "default";
 #[derive(Debug, Clone, Default)]
 pub struct KimiAdapter {
     pub binary: Option<PathBuf>,
+}
+
+/// Agente de Kimi sin herramientas propias: hereda el prompt de sistema del predeterminado.
+const HARNESS_AGENT: &str = "version: 1\nagent:\n  extend: default\n  tools: []\n  subagents: {}\n";
+
+/// El archivo de [`HARNESS_AGENT`] (Kimi solo acepta un archivo). Se crea una vez por versión del
+/// texto, en el directorio temporal; `None` si no se pudo escribir.
+fn harness_agent_file() -> Option<PathBuf> {
+    let path = std::env::temp_dir().join(format!(
+        "symphony-kimi-harness-{:08x}.yaml",
+        HARNESS_AGENT
+            .bytes()
+            .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
+    ));
+    if !path.is_file() {
+        // A un nombre temporal y luego renombrado: otro agente no lee un archivo a medias.
+        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+        std::fs::write(&tmp, HARNESS_AGENT).ok()?;
+        if std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    path.is_file().then_some(path)
 }
 
 /// El contenido de un mensaje: un texto, o una lista de partes (`think`, `text`).
@@ -147,6 +170,23 @@ impl KimiAdapter {
             .with_stdin();
         if req.model != DEFAULT_MODEL {
             spec = spec.args(["-m", &req.model]);
+        }
+        // Harness de Symphony (ADR-0019): un agente sin herramientas propias y el broker como
+        // única fuente (verificado en vivo con kimi 1.44).
+        if symphony_adapter_common::harness_on(req)
+            && let Some((cmd, env)) = symphony_adapter_common::broker(req)
+            && let Some(agent) = harness_agent_file()
+        {
+            let servers = json!({ "mcpServers": { symphony_adapter_common::MCP_SERVER_NAME: {
+                "command": cmd.program.to_string_lossy(),
+                "args": cmd.args,
+                "env": env.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+            } } });
+            spec = spec
+                .arg("--agent-file")
+                .arg(agent)
+                .arg("--mcp-config")
+                .arg(servers.to_string());
         }
         for (k, v) in &req.env {
             spec = spec.env(k, v);

@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-23 · por claude-code/sonnet-5.5
-**Fase actual:** P15.5 · Cambios de rumbo (rama `phase/p155-cambios-de-rumbo`), S4 · harness de Symphony (ADR-0019)
-**Paso actual:** P15.5.S4 · Harness de Symphony: herramientas en el broker MCP (ADR-0019)
+**Fase actual:** P15.5 · Cambios de rumbo (rama `phase/p155-cambios-de-rumbo`), S5 · más allá del código (ADR-0020)
+**Paso actual:** P15.5.S5 · Tipos de trabajo, validación por tipo, binarios y prompts (ADR-0020)
 **Estado del paso:** por empezar
 **En curso por:** nadie
 
@@ -36,7 +36,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P15 · GUI de escritorio** (`phase/p15-gui`, `docs/phases/P15-gui.md`): ✅ S1 · ✅ S2 · ✅ S3 · 🟡 S4 (falta revisión visual) · ✅ S5 · ✅ S6 cierre (`p15-done`)
 
-**P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · S4 harness completo · S5 más allá del código · S6 cierre (`p155-done`)
+**P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · ✅ S4 harness de Symphony (ADR-0019; `[harness] mode`, 5 de 6 proveedores) · S5 más allá del código · S6 cierre (`p155-done`)
 
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): S1 seguridad · S2 fuzzing · S3 recuperación y 4 h · S4 rendimiento y retención · S5 calidad del repo · S6 mdBook (+ guía SSH) · S7 pipeline de release en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
 
@@ -61,6 +61,7 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 Formato: paso · qué hace falta · comando exacto si aplica.
 - **Siempre ⛔:** live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); push de ramas que no sean `main`; publicar releases o pushear tags `v*`; cambiar defaults de permisos de proveedores; ToS.
 - **2026-10-12 · cuota gastada sin permiso (error del agente):** la sesión arrancó con `SYMPHONY_LIVE=1` en el entorno y el `cargo xtask check` de baseline de P11.5 corrió los 6 tests live con CLIs reales (`live_benchmark`, `live_handoff`, `live_cost`, `live_resume`, `live_sessions`, `live` de la TUI; ~9 min, 557 pasaron). **Falló `symphony-tui::live live_journey_a_with_claude_code`** (47 s): no se investigó; no es un cambio de P11.5, pero conviene que Leo lo revise (¿Claude Code, auth o cambio de CLI?). Corrección: `unset SYMPHONY_LIVE` antes de todo comando de cargo. Leo: revisa tu terminal de lanzamiento (`echo $SYMPHONY_LIVE`) para que no vuelva a heredarse.
+- P15.5.S4 · Probar el harness: pon `[harness] mode = "symphony"` en `~/.symphony/config.toml`, `symphony daemon stop` y trabaja unos días. Si te convence, dime y cambio el defecto de `native` a `symphony` (es cambio de defaults: tuyo). Antigravity no lo admite. Pendiente: que `shell` pase por el daemon para la cola de comandos pesados (P08).
 - P15.5.S3 · Para usar el estado por proyecto: `symphony daemon stop`, reinstalar (`cargo install --path crates/cli --locked --force` y `crates/daemon`) y, en cada proyecto con historia, `symphony migrate split` una vez (apaga tu daemon global y reparte `~/.symphony/symphony.db`; no borra nada). Los worktrees viejos siguen en `~/.symphony/worktrees` y funcionan; los nuevos nacen en `<proyecto>/.symphony/worktrees`. Pendiente aparte: `symphony daemon stop --all` y la GUI con selector de proyecto probado en una ventana real.
 - P15.5.S2 · Para aplicar los permisos nuevos: `symphony daemon stop` y reinstalar. Si tu `~/.symphony/config.toml` tiene valores explícitos en `[providers.permissions]`, mandan sobre los nuevos defaults. Verificado en vivo solo con Codex (pnpm, red y lectura de `~/.symphony` OK con `danger-full-access`); Claude, Copilot y Antigravity cambian por config sin prueba live.
 - P15.5.S1 · Copilot no tiene comando para listar modelos: probar a mano `copilot` + `/model` y decirme cuáles ves (hoy solo `auto`). Antigravity también ofrece Claude Opus/Sonnet 5.5 y GPT-OSS; siguen fuera hasta decidir los ToS (¿los habilito?).
