@@ -160,8 +160,8 @@ fn spawn_reads_prompt_from_stdin_and_injects_hooks_with_c() {
         .filter(|(k, _)| *k == "-c")
         .map(|(_, v)| v)
         .collect();
-    // 6 hooks + el broker MCP del contexto (command, args, env).
-    assert_eq!(overrides.len(), 9);
+    // 6 hooks + el broker MCP del contexto (command, args, env, tool_timeout_sec).
+    assert_eq!(overrides.len(), 10);
     assert!(overrides.iter().any(|o| o.starts_with(
         r#"mcp_servers.symphony-context.command="C:\\Program Files\\Symphony\\symphony.exe""#
     )));
@@ -174,6 +174,12 @@ fn spawn_reads_prompt_from_stdin_and_injects_hooks_with_c() {
         overrides
             .iter()
             .any(|o| *o == "mcp_servers.symphony-context.env={SYMPHONY_AGENT_ID=\"a1\"}")
+    );
+    // Codex corta las herramientas MCP a los 300 s si no se le dice otra cosa.
+    assert!(
+        overrides
+            .iter()
+            .any(|o| *o == "mcp_servers.symphony-context.tool_timeout_sec=1900")
     );
     assert!(
         overrides
@@ -411,4 +417,25 @@ fn the_harness_keeps_codexs_tools_when_there_is_no_broker() {
         .map(|s| s.to_string_lossy().into_owned())
         .collect();
     assert!(!args.iter().any(|a| a == "--disable"), "{args:?}");
+}
+
+/// Real (codex 0.164, 2026-10-24): sin créditos es cuota agotada, no una caída sin causa.
+#[test]
+fn out_of_credits_is_a_quota_that_asks_for_failover() {
+    let e = adapter()
+        .parse_error("Your workspace is out of credits. Ask your workspace owner to refill in order to continue.")
+        .expect("se reconoce");
+    assert_eq!(e.failure_type, FailureType::DailyQuota);
+    assert!(!e.transient);
+    // Y la línea tal como llega por stdout.
+    let line = r#"{"type":"error","message":"Your workspace is out of credits. Ask your workspace owner to refill in order to continue."}"#;
+    let events = adapter().parse_stream_line(line);
+    assert!(
+        events.iter().any(|ev| matches!(
+            ev,
+            symphony_adapter_common::AgentEvent::ProviderError(e)
+                if e.failure_type == FailureType::DailyQuota
+        )),
+        "{events:?}"
+    );
 }

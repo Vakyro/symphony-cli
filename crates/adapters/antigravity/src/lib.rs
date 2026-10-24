@@ -3,9 +3,9 @@
 //! - Turno headless por stdin: `agy --print= --input-format stream-json --output-format
 //!   stream-json`, con un mensaje `{"event":"user","message":{"content":…}}` por línea. `--print`
 //!   exige el prompt como valor, y el contrato prohíbe pasarlo como argumento.
-//! - Eventos NDJSON: `init` (trae `conversation_id`), `step_update` (herramientas, uso por paso) y
-//!   `result` (respuesta completa y estado). El texto se toma del `result`: los `text_delta` llegan
-//!   troceados por paso y un parser sin estado no puede juntarlos.
+//! - Eventos NDJSON: `init` (trae `conversation_id`), `step_update` (herramientas, deltas y uso por
+//!   paso) y `result` (respuesta completa y estado). Cada `text_delta` se emite al llegar; el texto
+//!   completo del `result` sigue siendo el mensaje que se persiste.
 //! - Permisos: en headless Antigravity **deniega solo** lo que pide permiso. Por defecto,
 //!   `--mode accept-edits` (ediciones sí, shell no); `skip_permissions` pasa
 //!   `--dangerously-skip-permissions` (todo, sin sandbox: `--sandbox` se cuelga en Windows).
@@ -96,18 +96,24 @@ fn step_events(step: &Value) -> Vec<AgentEvent> {
                 _ => Vec::new(),
             }
         }
-        // El último paso de respuesta deja el tamaño real del contexto (el `result` suma todos).
-        Some("agent_response") if state == "DONE" => {
-            let u = &step["usage"];
-            let tokens = u["input_tokens"].as_u64().unwrap_or(0)
-                + u["cache_read_tokens"].as_u64().unwrap_or(0);
-            if tokens == 0 {
-                Vec::new()
-            } else {
-                vec![AgentEvent::TurnUsage {
-                    context_tokens: tokens,
-                }]
+        Some("agent_response") => {
+            let mut out: Vec<AgentEvent> = json_str(step, "text_delta")
+                .filter(|text| !text.is_empty())
+                .map(|text| AgentEvent::AssistantDelta { text })
+                .into_iter()
+                .collect();
+            // El último paso de respuesta deja el tamaño real del contexto (el `result` suma todos).
+            if state == "DONE" {
+                let u = &step["usage"];
+                let tokens = u["input_tokens"].as_u64().unwrap_or(0)
+                    + u["cache_read_tokens"].as_u64().unwrap_or(0);
+                if tokens > 0 {
+                    out.push(AgentEvent::TurnUsage {
+                        context_tokens: tokens,
+                    });
+                }
             }
+            out
         }
         _ => Vec::new(),
     }

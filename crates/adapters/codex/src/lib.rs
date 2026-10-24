@@ -137,6 +137,9 @@ pub fn mcp_overrides(cmd: &HookCommand, env: &[(String, String)]) -> Vec<String>
         ),
         format!("mcp_servers.{name}.args=[{}]", args.join(",")),
         format!("mcp_servers.{name}.env={{{}}}", env.join(",")),
+        // Por encima del tope del `shell` del harness (30 min): si no, Codex corta a los 300 s un
+        // comando que el broker todavía deja correr (dogfooding 2026-10-24).
+        format!("mcp_servers.{name}.tool_timeout_sec=1900"),
     ]
 }
 
@@ -367,36 +370,38 @@ impl ProviderAdapter for CodexAdapter {
 
     fn parse_error(&self, text: &str) -> Option<ProviderError> {
         let lower = text.to_lowercase();
-        let (failure_type, code, transient) =
-            if lower.contains("usage limit") || lower.contains("hit your limit") {
-                (FailureType::DailyQuota, "usage_limit", false)
-            } else if lower.contains("rate limit")
-                || lower.contains("429")
-                || lower.contains("too many requests")
-            {
-                (FailureType::TempRateLimit, "rate_limit", true)
-            } else if lower.contains("401")
-                || lower.contains("unauthorized")
-                || lower.contains("codex login")
-                || lower.contains("not logged in")
-            {
-                (FailureType::Auth, "unauthorized", false)
-            } else if lower.contains("reconnecting")
-                || lower.contains("stream disconnected")
-                || lower.contains("waiting for network")
-                || lower.contains("error sending request")
-            {
-                // P01 Test D: Codex reintenta solo y espera la red sin fallar.
-                (FailureType::Network, "network", true)
-            } else if lower.contains("model")
-                && (lower.contains("not supported")
-                    || lower.contains("does not exist")
-                    || lower.contains("not found"))
-            {
-                (FailureType::ModelUnavailable, "model_unavailable", false)
-            } else {
-                return None;
-            };
+        let (failure_type, code, transient) = if lower.contains("usage limit")
+            || lower.contains("hit your limit")
+            || lower.contains("out of credits")
+        {
+            (FailureType::DailyQuota, "usage_limit", false)
+        } else if lower.contains("rate limit")
+            || lower.contains("429")
+            || lower.contains("too many requests")
+        {
+            (FailureType::TempRateLimit, "rate_limit", true)
+        } else if lower.contains("401")
+            || lower.contains("unauthorized")
+            || lower.contains("codex login")
+            || lower.contains("not logged in")
+        {
+            (FailureType::Auth, "unauthorized", false)
+        } else if lower.contains("reconnecting")
+            || lower.contains("stream disconnected")
+            || lower.contains("waiting for network")
+            || lower.contains("error sending request")
+        {
+            // P01 Test D: Codex reintenta solo y espera la red sin fallar.
+            (FailureType::Network, "network", true)
+        } else if lower.contains("model")
+            && (lower.contains("not supported")
+                || lower.contains("does not exist")
+                || lower.contains("not found"))
+        {
+            (FailureType::ModelUnavailable, "model_unavailable", false)
+        } else {
+            return None;
+        };
         Some(ProviderError {
             failure_type,
             raw_code: Some(code.into()),

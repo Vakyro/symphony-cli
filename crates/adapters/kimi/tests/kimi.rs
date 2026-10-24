@@ -272,3 +272,20 @@ fn the_symphony_harness_runs_kimi_with_no_tools_of_its_own() {
     assert_eq!(server["args"], serde_json::json!(["mcp", "serve"]));
     assert_eq!(server["env"]["SYMPHONY_HARNESS"], "1");
 }
+
+/// Real (kimi 1.44, 2026-10-24): el modelo no está en el plan. Llega partido por stdout; la primera
+/// línea basta para no esperar ni reintentar ese modelo.
+#[test]
+fn a_model_outside_the_plan_is_unavailable() {
+    let ev = adapter().parse_stream_line(
+        "Error code: 403 - {'error': {'message': 'Your current subscription does not hav",
+    );
+    assert!(
+        matches!(
+            &ev[..],
+            [symphony_adapter_common::AgentEvent::ProviderError(e)]
+                if e.failure_type == symphony_core::FailureType::ModelUnavailable
+        ),
+        "{ev:?}"
+    );
+}

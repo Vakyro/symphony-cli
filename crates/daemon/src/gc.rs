@@ -1,7 +1,8 @@
 //! Que Symphony no se coma el disco (pedido de Leo, 2026-10-24).
 //!
-//! - Los agentes de un proyecto Rust comparten un `target/` (`<home>/cache/cargo-target`): las
-//!   dependencias se compilan una vez y no una por worktree.
+//! - Los agentes de un proyecto Rust comparten `target/` en `<home>/cache/cargo-target/<n>`, con
+//!   [`TARGET_SLOTS`] carpetas: las dependencias se compilan pocas veces y no una por worktree, y
+//!   Cargo (que bloquea su carpeta mientras compila) no pone en fila a todos los agentes.
 //! - El worktree de un agente cancelado, ya integrado o completado hace más de 7 días se borra
 //!   (la rama queda; el diff sale del checkpoint). Uno con cambios sin commitear no se toca.
 
@@ -18,6 +19,11 @@ const CARGO_TARGET_CAP: u64 = 15 * 1024 * 1024 * 1024;
 
 /// Cuánto se guarda el worktree de un agente completado que nadie integró con Symphony.
 const COMPLETED_KEEP_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Cuántos `target/` compartidos hay. Con uno solo, seis agentes compilando esperaban el candado
+/// de Cargo y sus comandos vencían (dogfooding 2026-10-24); uno por agente llenaba el disco.
+/// ponytail: fijo; ajustarlo al número de agentes simultáneos si eso cambia.
+const TARGET_SLOTS: u32 = 3;
 
 fn cargo_target(home: &Path) -> PathBuf {
     home.join("cache").join("cargo-target")
@@ -38,9 +44,19 @@ pub fn cargo_env(home: &Path, worktree: &Path) -> Vec<(String, String)> {
     {
         return Vec::new();
     }
+    // `agent-007` → carpeta 1: agentes consecutivos caen en carpetas distintas.
+    let slot = worktree
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.rsplit('-').next())
+        .and_then(|n| n.parse::<u32>().ok())
+        .map_or(0, |n| n % TARGET_SLOTS);
     vec![(
         "CARGO_TARGET_DIR".into(),
-        cargo_target(home).display().to_string(),
+        cargo_target(home)
+            .join(slot.to_string())
+            .display()
+            .to_string(),
     )]
 }
 

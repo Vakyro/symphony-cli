@@ -435,10 +435,16 @@ fn cargo_builds_of_agents_share_one_target_dir() {
                 "CARGO_TARGET_DIR".to_string(),
                 home.join("cache")
                     .join("cargo-target")
+                    .join("1")
                     .display()
                     .to_string()
             )]
         );
+        // El agente siguiente cae en otra carpeta: no esperan el mismo candado de Cargo.
+        let next = home.join("worktrees").join("p").join("agent-002");
+        std::fs::create_dir_all(&next).unwrap();
+        std::fs::write(next.join("Cargo.toml"), "").unwrap();
+        assert_ne!(symphony_daemon::gc::cargo_env(&home, &next), env);
     }
     assert!(
         symphony_daemon::gc::cargo_env(&home, d.path()).is_empty(),

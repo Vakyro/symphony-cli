@@ -24,7 +24,8 @@ const GLOB_RESULTS: usize = 500;
 /// Lo que devuelve `shell` por flujo antes de recortar (cabeza y cola).
 const SHELL_OUT_MAX: usize = 30_000;
 pub const SHELL_TIMEOUT: Duration = Duration::from_secs(120);
-pub const SHELL_TIMEOUT_MAX: Duration = Duration::from_secs(600);
+/// Un `cargo test` en frío con otros agentes compilando pasa de 10 min (dogfooding 2026-10-24).
+pub const SHELL_TIMEOUT_MAX: Duration = Duration::from_secs(1800);
 
 fn resolve(root: &Path, p: &str) -> PathBuf {
     let p = Path::new(p);

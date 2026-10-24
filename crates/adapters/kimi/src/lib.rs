@@ -348,6 +348,10 @@ impl ProviderAdapter for KimiAdapter {
         let lower = text.to_lowercase();
         let (failure_type, code, transient) = if lower.contains("llm not set") {
             (FailureType::ModelUnavailable, "llm_not_set", false)
+        } else if lower.contains("subscription does not") || lower.contains("higher-tier") {
+            // 403 de un modelo fuera del plan (`kimi-for-coding-highspeed`); llega partido en varias
+            // líneas por stdout y la primera ya lo dice (dogfooding 2026-10-24).
+            (FailureType::ModelUnavailable, "plan_without_model", false)
         } else if lower.contains("insufficient balance")
             || lower.contains("quota")
             || lower.contains("usage limit")
