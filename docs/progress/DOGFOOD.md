@@ -33,6 +33,13 @@ que no.
 Kimi, OpenCode y Antigravity primero (Leo casi no los usa). Claude Code y Codex solo si hace
 falta. Rotar modelos dentro de cada proveedor para medir.
 
+## Resumen de la primera jornada (2026-10-24)
+
+Seis tareas delegadas, tres proveedores, seis modelos distintos (cuatro de pago, dos gratis):
+cinco terminaron con commit útil, una dejó el trabajo hecho pero sin commit. Todas se revisaron
+antes de integrar; ninguna inventó comandos. Lo que más falló no fueron los modelos sino
+Symphony: siete problemas reales encontrados en un día, cinco arreglados.
+
 ## Registro
 
 | Fecha | Proveedor / modelo | Tarea | Resultado | Hallazgo |
@@ -40,6 +47,9 @@ falta. Rotar modelos dentro de cada proveedor para medir.
 | 2026-10-24 | Antigravity · `google/gemini-4-argon-high` | P13.S6 esqueleto del libro (6 capítulos, 830 líneas) | ✅ 10 min, un commit; los 45 comandos citados existen; fiel a LEARNINGS | Sus herramientas nativas (no admite el harness) |
 | 2026-10-24 | Kimi · `moonshot/kimi-for-coding` | P13.S6 `cargo xtask er` (parser DDL + 3 tests) | ✅ el trabajo, 5,5 min, un commit con tests y clippy verdes; ❌ Symphony lo marcó `CRASH` | Kimi se cae en Windows al imprimir «⛔» (cp1252); el mensaje de commit salió con los backticks escapados (`\``) |
 | 2026-10-24 | OpenCode · `opencode/deepseek-v4.1-flash-free` (gratis) | P13.S6 QUICKSTART al día con P15.5 | ✅ 7 min, un commit; corrigió además comandos viejos que no existían (`symphony merge`) | — |
+| 2026-10-24 | Kimi · `moonshot/kimi-for-coding` (ya con UTF-8) | P13.S2 targets de cargo-fuzz + propiedades proptest | ✅ 30 min, un commit; documentó su parte en la bitácora; ningún panic real | No pudo compilar `fuzz/` (sin nightly) y lo dijo |
+| 2026-10-24 | OpenCode · `opencode/glm-5.3-flash-free` (gratis) | P13.S5 typos y lychee en CI | ✅ 4 min, un commit; versiones de las acciones existen | El job se dejó `continue-on-error` hasta ver su primera corrida (repo en español) |
+| 2026-10-24 | Antigravity · `anthropic/claude-sonnet-5-5-medium` | P13.S3 prueba de larga duración con reinicios | 🟡 escribió `soak.rs` (funciona: 60 s, 22 tandas, RSS 25 → 25 MB) pero no commiteó: el watchdog lo cortó a los 23 min (`NO_HEARTBEAT`) | Ver hallazgo del watchdog |
 
 ## Hallazgos (lo que se arregla)
 
@@ -70,4 +80,13 @@ falta. Rotar modelos dentro de cada proveedor para medir.
 - **2026-10-24 · Harness: `shell` y `read` sin tope de memoria.** La salida de `shell` se juntaba
   entera antes de recortarla y `read` cargaba el archivo completo. Arreglado (revisión P13.S1):
   cabeza y cola acotadas, lectura línea a línea.
+- **2026-10-24 · El watchdog mata agentes que compilan en silencio.** Un run sin salida durante
+  15 min (`DEFAULT_STALE_AFTER`) se cierra como `NO_HEARTBEAT`, aunque su `cargo` siga trabajando.
+  Le pasó a Antigravity (sus herramientas nativas no emiten eventos mientras corre un comando)
+  compilando los tests del daemon. **Pendiente:** contar como latido la CPU del árbol de procesos
+  del run (ya se muestrea cada pocos segundos en `record_processes`).
+- **2026-10-24 · Antigravity no deja mensajes en el stream** hasta el final: `symphony logs` solo
+  muestra el prompt. Pendiente: revisar su parser de stdout con una corrida real.
+- **2026-10-24 · Symphony integra en `symphony/chat`, no en una rama de fase.** Para este repo la
+  integración se hizo a mano (cherry-pick). Pendiente: elegir la rama destino al integrar.
 - **2026-10-24 · RAM.** El daemon en reposo usa 26 MB (9 hilos): no es problema.

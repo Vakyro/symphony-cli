@@ -141,3 +141,10 @@ Una sola sesión cubrió P11.S2–S6, P10 completa y P09.S1–S10, con una compa
 - **`cargo fmt` cambia el texto antes de la siguiente edición:** un reemplazo de texto exacto falló porque fmt ya había partido la línea. Hay que releer antes de editar algo que fmt pudo tocar.
 - **Antes de la compactación (P11/P10):** la carrera de `symphonyd.exe` en Windows (resuelta con `pinned_bin`), `copilot --version` de 1,7–3,4 s en cada arranque de daemon (resuelto con detección en paralelo), y corridas live de 30–70 s por par de proveedores.
 - **El trabajo en sí** (tres fases con revisión de código y CI en tres sistemas) también es mucho para una sola sesión. Partirla por fase deja STATUS al día y evita la compactación.
+
+## Dogfooding (2026-10-24)
+- **Python en Windows escribe en cp1252 si su salida va a un pipe.** Kimi se caía con el primer carácter fuera de cp1252 (`⛔`). Cualquier CLI en Python necesita `PYTHONIOENCODING=utf-8` y `PYTHONUTF8=1`.
+- **Un servidor MCP no hereda el entorno del agente:** cada CLI le pasa solo lo que se le dice. Lo que el broker necesite (`SYMPHONY_*`, `CARGO_TARGET_DIR`) va explícito en su config.
+- **`Path::starts_with` distingue mayúsculas también en Windows:** `Desktop` ≠ `desktop`. Para comparar rutas de usuario, normalizar.
+- **El silencio no es cuelgue:** un `cargo test` en frío puede pasar 15 min sin una línea. El watchdog tiene que mirar algo más que la salida.
+- **Los modelos baratos rinden en tareas acotadas con un plan escrito:** los dos modelos gratis de OpenCode entregaron docs y CI correctos al primer intento.

@@ -43,6 +43,16 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
 - Pendiente para cerrar S2: correr cada target 30 min con nightly y agregar corpus a
   CI (corto), o documentar ⛔ si no hay nightly disponible.
 
+## S3 · Recuperación (parte 1, delegado)
+- `crates/daemon/tests/soak.rs` (Antigravity con Claude Sonnet 5.5): tandas de fake-agents,
+  paradas a media tarea y reinicios del runtime; comprueba runs abiertos, `integrity_check` y
+  RSS. 60 s: 22 tandas, 2 reinicios, RSS 25 → 25 MB. Falta la corrida de 4 h (Journey E) y el
+  checkpoint corrupto.
+
+## S5 · Calidad (parte 1, delegado)
+- `_typos.toml`, `lychee.toml` y job `docs` en CI (OpenCode con GLM 5.3 Flash gratis), con
+  `continue-on-error` hasta revisar la primera corrida.
+
 ## S4 · Rendimiento y disco (adelantado por pedido de Leo: «Symphony debería ser super ligero»)
 - RAM: el daemon en reposo usa 26 MB.
 - Disco: worktrees que se borran solos (cancelado, integrado o completado hace 7 días; nunca

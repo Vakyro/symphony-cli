@@ -2,9 +2,10 @@
 
 **Actualizado:** 2026-10-24 · por claude-code/opus-5.5
 **Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, bitácora `docs/phases/P13-endurecimiento.md`)
-**Paso actual:** S1 ✅ · S4 disco 🟡 · S6 docs 🟡 (delegado con Symphony: `docs/progress/DOGFOOD.md`)
-**Estado del paso:** en curso
-**En curso por:** claude-code/opus-5.5 + agentes de Symphony (Kimi, OpenCode, Antigravity)
+**Paso actual:** S1 ✅ · S2 🟡 (targets y proptest; falta correr con nightly) · S3 🟡 (soak corto; falta el de 4 h) · S4 disco 🟡 · S5 🟡 (typos/lychee en CI) · S6 🟡 (libro, ER, QUICKSTART) · S7 ⏳ · S8 ⏳. Delegado con Symphony: `docs/progress/DOGFOOD.md`
+**Estado del paso:** pausado al cierre de la jornada (2026-10-24); rama pusheada
+**En curso por:** nadie
+**Siguiente:** watchdog que cuente la CPU del árbol como latido (DOGFOOD), luego S2 con nightly (WSL o CI), S3 de 4 h, S7 release en dry run
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
@@ -57,6 +58,8 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
+- **2026-10-24 · Dogfooding:** la copia estable de Symphony con la que se delega está en `~/.symphony-stable/bin` (commit en `VERSION`); el estado de los agentes de este repo, en `<repo>/.symphony/`. Detalle y hallazgos en `docs/progress/DOGFOOD.md`.
+- **2026-10-24 · Disco:** tu `~/.symphony` vieja (97 MB de base y unos 60 worktrees con `node_modules`/`target/`) se limpia sola cuando corras `symphony migrate split` en cada proyecto y abras su daemon (los worktrees de agentes terminados se borran al arrancar). Lo que no se migre, bórralo a mano.
 - **Basura que dejé yo:** por un typo de ruta se creó el archivo `C:\LATITU~1\x` (y su carpeta `C:\LATITU~1`) en la raíz del disco. No pude borrarlo: la comprobación de seguridad bloqueó el `rmdir` de una carpeta en la raíz. Es seguro quitarlo con `rmdir /s /q C:\LATITU~1`.
 Formato: paso · qué hace falta · comando exacto si aplica.
 - **Siempre ⛔:** live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); push de ramas que no sean `main`; publicar releases o pushear tags `v*`; cambiar defaults de permisos de proveedores; ToS.

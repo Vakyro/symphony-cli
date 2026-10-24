@@ -7,7 +7,7 @@
 ![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-blue)
 ![Licencia MIT](https://img.shields.io/badge/licencia-MIT-green)
 
-**v0.1.0 disponible, y el chat general (P07.5) ya está en `main`.** Abres `symphony` en cualquier carpeta, conversas con Claude Code, Codex, Kimi Code, Antigravity, Copilot u OpenCode y puedes pasar de uno a otro a mitad de conversación sin repetir nada. Incluye TUI, worktrees, handoff y recovery.
+**Hoy en `main`: hasta P15.5** (multiagente, failover, context engine, plugins, sugerencias, GUI y daemon por proyecto); P13 · endurecimiento está en curso. Abres `symphony` en cualquier carpeta, conversas con Claude Code, Codex, Kimi Code, Antigravity, Copilot u OpenCode y puedes pasar de uno a otro a mitad de conversación sin repetir nada. Con el harness de Symphony (por defecto) todos los modelos trabajan con las mismas herramientas.
 
 Symphony es un runtime local, escrito en Rust, que coordina los CLIs oficiales de IA para código desde una sola terminal. Hoy funcionan **Claude Code, Codex, Kimi Code, Antigravity (`agy`), Copilot y OpenCode**. Los últimos cuatro llegaron en P11: el cambio de proveedor con handoff está probado con CLIs reales, pero sus skills nativas aún no funcionan en el chat y cada uno tiene sus límites de permisos (ver el [QUICKSTART](QUICKSTART.md#proveedores-y-permisos)).
 
@@ -23,7 +23,7 @@ MODELO  = quien lo ejecuta ahora mismo            → se puede cambiar
 Si Claude se queda sin cuota a media tarea, Symphony le pasa el mismo agente a Codex con un checkpoint que se fue construyendo mientras trabajaba. Codex continúa desde ahí sin que le vuelvas a explicar nada.
 
 > [!NOTE]
-> **v0.1.0 y el chat general están listos.** Compila o instala, abre `symphony` y conversa. El roadmap está en [`docs/progress/STATUS.md`](docs/progress/STATUS.md) y el detalle completo en [`PLAN.md`](PLAN.md).
+> **Usable hoy, camino a v0.9.** Compila o instala, abre `symphony` y conversa. El roadmap está en [`docs/progress/STATUS.md`](docs/progress/STATUS.md) y el detalle completo en [`PLAN.md`](PLAN.md).
 
 ---
 
@@ -96,10 +96,23 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
 | P09 · Context engine | Handoff comprimido, MCP de contexto | ✅ p09-done |
 | P10 · Failover → **v0.5** | Salud de proveedores, failover con router, profiles y `explain-route` | ✅ **v0.5.0** |
 | P11 · Más proveedores | Kimi, Antigravity, Copilot y OpenCode con el mismo contrato; matriz de handoff entre los proveedores | ✅ p11-done |
-| P12–P13 → **v0.9** | Plugins, endurecimiento | ⏳ |
-| P14–P16 → **v1.0** | Sugerencias de modelo, GUI (Tauri), validación final | ⏳ |
+| P11.5 · Pendientes | `ctx://` robusto, permisos en config, deltas en el chat, merge chat → `main` con revisión | ✅ p115-done |
+| P12 · Plugins | Validators y context transformers como procesos aparte | ✅ p12-done |
+| P14 · Sugerencias | Sugerencias de cambio de modelo (nunca se aplican solas), aprendizaje determinista | ✅ p14-done |
+| P15 · GUI | App de escritorio (Tauri) sobre el mismo daemon | ✅ p15-done |
+| P15.5 · Cambios de rumbo | Daemon y estado **por proyecto**, acceso local total, modelos al día, **harness de Symphony** (mismas herramientas para todos los modelos), proyectos que no son código | ✅ p155-done |
+| P13 · Endurecimiento → **v0.9** | Seguridad, fuzzing, recuperación, rendimiento y disco, docs (mdBook), release | 🟡 en curso |
+| P16 · Validación final → **v1.0** | Checklist de aceptación, E2E, benchmark, validación por tipo de proyecto | ⏳ |
 
 El detalle, paso por paso, está en [`PLAN.md`](PLAN.md).
+
+## Symphony se construye con Symphony
+
+Desde P13, parte del trabajo lo hacen agentes que Symphony lanza sobre su propio repo: Kimi,
+OpenCode (con modelos gratuitos) y Antigravity reciben una tarea con un plan escrito, trabajan en
+su worktree y un integrador revisa y mete el resultado. Lo que falla al usarlo se anota y se
+arregla en [`docs/progress/DOGFOOD.md`](docs/progress/DOGFOOD.md): así salieron, por ejemplo, una
+caída de Kimi en Windows por la codificación de su salida y los worktrees que nunca se borraban.
 
 ## Cómo usar
 
@@ -116,7 +129,7 @@ cd /tu/proyecto
 symphony
 ```
 
-Necesitas Claude Code o Codex instalado y con sesión iniciada; Symphony no toca tus credenciales.
+Necesitas al menos uno de los seis CLIs (Claude Code, Codex, Kimi Code, Antigravity, Copilot u OpenCode) instalado y con sesión iniciada; Symphony no toca tus credenciales. Cada proyecto tiene su propio daemon y su estado en `<proyecto>/.symphony/`; si venías de antes, corre `symphony migrate split` una vez.
 
 ## Compilar
 
@@ -148,6 +161,8 @@ cargo xtask check
 | [`PLAN.md`](PLAN.md) | Plan de implementación y protocolo de trabajo |
 | [`CONSTRAINTS.md`](CONSTRAINTS.md) | Reglas de calidad y presupuestos de rendimiento |
 | [`docs/adr/`](docs/adr/) | Decisiones de arquitectura |
+| [`docs/book/`](docs/book/src/SUMMARY.md) | Libro de uso (mdBook): instalación, configuración, proveedores, uso remoto, problemas y ER |
+| [`docs/progress/DOGFOOD.md`](docs/progress/DOGFOOD.md) | Qué pasó al construir Symphony con Symphony |
 
 ## Contribuir
 
