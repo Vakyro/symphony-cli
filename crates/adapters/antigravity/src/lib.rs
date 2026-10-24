@@ -218,24 +218,95 @@ impl ProviderAdapter for AntigravityAdapter {
         AuthStatus::Unknown
     }
 
-    /// Los de Google que lista `agy models` (agy 1.4.7, 2026-10-23). Los de Anthropic y OpenAI que
-    /// también ofrece (Claude Opus/Sonnet 5.5, GPT-OSS) quedan fuera hasta revisar los ToS
-    /// (docs/research/cli-p11.md; STATUS § Para Leo).
+    /// Todos los que lista `agy models` (agy 1.4.7, 2026-10-23), con el proveedor de cada modelo
+    /// en el id y en el nombre. Leo habilitó los de Anthropic y OpenAI el 2026-10-24.
     /// ponytail: lista fija; si `agy` vuelve a rotar modelos, pedirla a `agy models` con caché.
     fn list_models(&self) -> Vec<ModelInfo> {
         [
-            ("gemini-4-argon-high", "Gemini 4 Argon (High)"),
-            ("gemini-4-argon-medium", "Gemini 4 Argon (Medium)"),
-            ("gemini-4-argon-low", "Gemini 4 Argon (Low)"),
-            ("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
-            ("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"),
-            ("gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"),
+            (
+                "google",
+                "Google",
+                "gemini-4-argon-high",
+                "Gemini 4 Argon (High)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-4-argon-medium",
+                "Gemini 4 Argon (Medium)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-4-argon-low",
+                "Gemini 4 Argon (Low)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-3.8-flash-high",
+                "Gemini 3.8 Flash (High)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-3.8-flash-medium",
+                "Gemini 3.8 Flash (Medium)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-3.8-flash-low",
+                "Gemini 3.8 Flash (Low)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-opus-5-5-high",
+                "Claude Opus 5.5 (High)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-opus-5-5-medium",
+                "Claude Opus 5.5 (Medium)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-opus-5-5-low",
+                "Claude Opus 5.5 (Low)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-sonnet-5-5-high",
+                "Claude Sonnet 5.5 (High)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-sonnet-5-5-medium",
+                "Claude Sonnet 5.5 (Medium)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-sonnet-5-5-low",
+                "Claude Sonnet 5.5 (Low)",
+            ),
+            (
+                "openai",
+                "OpenAI",
+                "gpt-oss-120b-medium",
+                "GPT-OSS 120B (Medium)",
+            ),
         ]
         .iter()
-        .map(|(slug, name)| ModelInfo {
-            id: format!("google/{slug}"),
+        .map(|(vendor, vendor_name, slug, name)| ModelInfo {
+            id: format!("{vendor}/{slug}"),
             cli_model_id: (*slug).into(),
-            display_name: (*name).into(),
+            display_name: format!("{name} · {vendor_name}"),
         })
         .collect()
     }

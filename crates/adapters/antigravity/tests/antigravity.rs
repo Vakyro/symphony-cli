@@ -285,6 +285,15 @@ fn skip_permissions_is_opt_in() {
 #[test]
 fn lists_only_google_models() {
     let models = adapter().list_models();
-    assert!(models.len() >= 3);
-    assert!(models.iter().all(|m| m.id.starts_with("google/gemini-")));
+    assert_eq!(models.len(), 13);
+    // El id y el nombre dicen quién es el proveedor de cada modelo.
+    for (prefix, vendor) in [
+        ("google/gemini-", "Google"),
+        ("anthropic/claude-", "Anthropic"),
+        ("openai/gpt-oss-", "OpenAI"),
+    ] {
+        let of_vendor: Vec<_> = models.iter().filter(|m| m.id.starts_with(prefix)).collect();
+        assert!(!of_vendor.is_empty(), "{prefix}");
+        assert!(of_vendor.iter().all(|m| m.display_name.ends_with(vendor)));
+    }
 }

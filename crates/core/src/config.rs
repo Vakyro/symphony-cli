@@ -185,11 +185,11 @@ pub struct HarnessConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HarnessMode {
-    /// Las herramientas propias de cada CLI (comportamiento de siempre).
-    #[default]
+    /// Las herramientas propias de cada CLI.
     Native,
     /// Las de Symphony, iguales para todos los modelos; se apagan las nativas de los CLIs
-    /// que lo permiten.
+    /// que lo permiten. Es el defecto desde 2026-10-24 (decisión de Leo).
+    #[default]
     Symphony,
 }
 
@@ -410,7 +410,7 @@ min_tasks_per_phase = 2
 # Con qué herramientas trabajan los modelos (ADR-0019): "native" (las de cada CLI) o
 # "symphony" (las de Symphony: leer, escribir, editar, buscar y shell, iguales para todos;
 # se apagan las nativas de los CLIs que lo permiten).
-mode = "native"
+mode = "symphony"
 
 [context]
 # Cuánto se comprime el contexto en un handoff: RAW · SAFE · BALANCED · AGGRESSIVE
@@ -870,18 +870,18 @@ mod tests {
     }
 
     #[test]
-    fn harness_mode_defaults_to_native_and_rejects_unknown_values() {
+    fn harness_mode_defaults_to_symphony_and_rejects_unknown_values() {
         let (_d, home) = home();
         std::fs::create_dir_all(home.root()).unwrap();
-        // El archivo creado con la plantilla trae el modo nativo.
-        assert_eq!(
-            load_or_create(&home).unwrap().harness.mode,
-            HarnessMode::Native
-        );
-        std::fs::write(home.config_path(), "[harness]\nmode = \"symphony\"\n").unwrap();
+        // El archivo creado con la plantilla trae el modo de Symphony.
         assert_eq!(
             load_or_create(&home).unwrap().harness.mode,
             HarnessMode::Symphony
+        );
+        std::fs::write(home.config_path(), "[harness]\nmode = \"native\"\n").unwrap();
+        assert_eq!(
+            load_or_create(&home).unwrap().harness.mode,
+            HarnessMode::Native
         );
         std::fs::write(home.config_path(), "[harness]\nmode = \"otro\"\n").unwrap();
         let err = load_or_create(&home).unwrap_err().to_string();
