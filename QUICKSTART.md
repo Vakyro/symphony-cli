@@ -248,13 +248,13 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 
 - Un modelo que tu cuenta no tenga habilitado falla al instante con «not available» y Symphony pasa al siguiente según la política de failover.
 - Copilot con `auto` puede usar modelos distintos entre turnos, y no informa de tokens: el cambio por umbral de uso no le aplica.
-- Los permisos de Claude, Codex, Antigravity y Copilot se cambian en `~/.symphony/config.toml`, sección `[providers.permissions]` (los valores de la tabla son los predeterminados; reinicia el daemon con `symphony daemon stop` para aplicarlos):
+- Los permisos de Claude, Codex, Antigravity y Copilot se cambian en `~/.symphony/config.toml`, sección `[providers.permissions]` (los valores de la tabla son los predeterminados desde P15.5.S2: **acceso local total**, como una terminal normal; reinicia el daemon con `symphony daemon stop` para aplicarlos). Si prefieres restringir, descomenta y cambia:
   ```toml
   [providers.permissions]
-  claude_permission_mode = "acceptEdits"     # default · acceptEdits · plan · bypassPermissions
-  codex_sandbox = "workspace-write"          # read-only · workspace-write · danger-full-access
-  antigravity_skip_permissions = false       # true: cualquier comando, sin sandbox
-  copilot_allow_all_tools = false            # true: cualquier comando
+  claude_permission_mode = "bypassPermissions"   # default · acceptEdits · plan · bypassPermissions
+  codex_sandbox = "danger-full-access"           # read-only · workspace-write · danger-full-access
+  antigravity_skip_permissions = true            # false: pide permiso para los comandos
+  copilot_allow_all_tools = true                 # false: pide permiso para los comandos
   ```
   Un valor inválido deja los predeterminados y el daemon lo avisa en su log. Kimi y OpenCode no tienen modo restringido: no hay opción.
 - Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.

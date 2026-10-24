@@ -183,9 +183,10 @@ pub struct ProvidersConfig {
     pub permissions: ProviderPermissions,
 }
 
-/// `[providers.permissions]` (P11.5.S2). Los valores por defecto son los que Symphony usaba
-/// antes de que fueran configurables: editar sí, ejecutar comandos solo dentro del sandbox o
-/// con aprobación. Kimi y OpenCode no tienen modo restringido en `--print`/`run`: no hay opción.
+/// `[providers.permissions]` (P11.5.S2). Desde P15.5.S2 (decisión de Leo, 2026-10-23) el valor por
+/// defecto es **acceso local total**, como una terminal normal: el sandbox de Codex bloqueaba
+/// pnpm, la red y la lectura de los worktrees. Para restringir, cambiar los valores aquí.
+/// Kimi y OpenCode no tienen modo restringido en `--print`/`run`: no hay opción.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProviderPermissions {
@@ -202,10 +203,10 @@ pub struct ProviderPermissions {
 impl Default for ProviderPermissions {
     fn default() -> Self {
         Self {
-            claude_permission_mode: "acceptEdits".into(),
-            codex_sandbox: "workspace-write".into(),
-            antigravity_skip_permissions: false,
-            copilot_allow_all_tools: false,
+            claude_permission_mode: "bypassPermissions".into(),
+            codex_sandbox: "danger-full-access".into(),
+            antigravity_skip_permissions: true,
+            copilot_allow_all_tools: true,
         }
     }
 }
@@ -324,12 +325,12 @@ quota_reserve = 0.20
 
 [providers.permissions]
 # Qué puede hacer cada CLI sin preguntarte. Los valores de abajo son los predeterminados:
-# editar archivos sí, ejecutar comandos solo dentro del sandbox o con aprobación.
-# Cambiarlos da más poder al agente (y más riesgo). Kimi y OpenCode no tienen modo restringido.
-# claude_permission_mode = "acceptEdits"       # default · acceptEdits · plan · bypassPermissions
-# codex_sandbox = "workspace-write"            # read-only · workspace-write · danger-full-access
-# antigravity_skip_permissions = false         # true: cualquier comando, sin sandbox
-# copilot_allow_all_tools = false              # true: cualquier comando
+# acceso local total, como una terminal normal (red, instalar paquetes, leer cualquier carpeta).
+# Para restringir, descomenta y cambia. Kimi y OpenCode no tienen modo restringido.
+# claude_permission_mode = "bypassPermissions" # default · acceptEdits · plan · bypassPermissions
+# codex_sandbox = "danger-full-access"         # read-only · workspace-write · danger-full-access
+# antigravity_skip_permissions = true          # false: pide permiso para los comandos
+# copilot_allow_all_tools = true               # false: pide permiso para los comandos
 
 [logging]
 # error · warn · info · debug · trace
@@ -766,9 +767,9 @@ quota_reserve = 0.1
         );
         let p = load_or_create(&home).unwrap().providers.permissions;
         assert_eq!(p, ProviderPermissions::default());
-        assert_eq!(p.claude_permission_mode, "acceptEdits");
-        assert_eq!(p.codex_sandbox, "workspace-write");
-        assert!(!p.antigravity_skip_permissions && !p.copilot_allow_all_tools);
+        assert_eq!(p.claude_permission_mode, "bypassPermissions");
+        assert_eq!(p.codex_sandbox, "danger-full-access");
+        assert!(p.antigravity_skip_permissions && p.copilot_allow_all_tools);
 
         // Parcial: lo no dicho conserva el predeterminado.
         write(
@@ -780,7 +781,7 @@ copilot_allow_all_tools = true
         let p = load_or_create(&home).unwrap().providers.permissions;
         assert_eq!(p.codex_sandbox, "read-only");
         assert!(p.copilot_allow_all_tools);
-        assert_eq!(p.claude_permission_mode, "acceptEdits");
+        assert_eq!(p.claude_permission_mode, "bypassPermissions");
 
         // Inválidos: el error nombra la clave.
         for (text, key) in [
