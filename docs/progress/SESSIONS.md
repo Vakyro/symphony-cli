@@ -57,3 +57,4 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-10-12 · claude-code/sonnet-5.5 · cierre · P14 completa (S1–S5): migración 007, sugerencias por reglas, desempeño aprendido (ADR-0016), ML rechazado (ADR-0017); revisión de código con 10 hallazgos tratados; 634 tests verdes. Sigue P15.
 - 2026-10-12 · claude-code/sonnet-5.5 · cierre · P15 completa: `crates/gui-bridge`, `apps/gui` (Tauri 2 + Solid, 36 vistas, Vitest, bundles MSI/NSIS locales y job de CI aparte). Revisión visual pendiente (Para Leo). Sigue P13.
 - 2026-10-23 · claude-code/sonnet-5.5 · cierre · P15 ✅ (`p15-done`): revisión de código con 10 hallazgos (9 corregidos, 1 falso), 635 tests. Nueva fase P15.5 (ADR-0018, 0019, 0020) por pedido de Leo. Sigue P15.5.S1.
+- 2026-10-23 · claude-code/sonnet-5.5 · cierre · P15.5.S1 ✅: modelos de Codex, Antigravity y Kimi actualizados, router con familias nuevas, 1 mensaje live a Kimi. Sigue P15.5.S2.

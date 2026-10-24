@@ -408,6 +408,26 @@ fn traits(model_id: &str) -> Traits {
                 Some(SpeedClass::Fast),
                 [0.6, 0.6, 0.9, 0.5, 0.7, 0.6, 0.95],
             )
+        } else if has("astra") {
+            // La familia más alta de OpenAI (GPT-6 Astra): lenta y la mejor en código y razonamiento.
+            (
+                None,
+                Some(SpeedClass::Slow),
+                [0.97, 0.97, 0.4, 0.98, 0.9, 0.95, 0.4],
+            )
+        } else if has("argon") {
+            // Gemini 4 Argon: la familia alta de Google (ventana de 1M como el resto de Gemini).
+            (
+                Some(1_000_000),
+                Some(SpeedClass::Slow),
+                [0.9, 0.9, 0.5, 0.9, 0.85, 0.85, 0.55],
+            )
+        } else if has("gpt-oss") {
+            (
+                None,
+                Some(SpeedClass::Medium),
+                [0.6, 0.6, 0.7, 0.55, 0.65, 0.6, 0.85],
+            )
         } else if has("sol") {
             (
                 None,
@@ -496,4 +516,25 @@ pub fn bootstrap(conn: &Connection) -> Result<(), RepoError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::traits;
+
+    /// Los modelos de P15.5.S1 no caen en el puntaje neutro (0,5) de «familia desconocida».
+    #[test]
+    fn new_model_families_have_their_own_scores() {
+        for id in [
+            "openai/gpt-6-astra",
+            "openai/gpt-6.1-sol",
+            "google/gemini-4-argon-high",
+            "opencode/opencode-go:gpt-oss-120b",
+            "moonshot/k3.1-pro",
+        ] {
+            assert_ne!(traits(id).scores, [0.5; 7], "{id}");
+        }
+        // Astra es la cima: supera a Sol en código.
+        assert!(traits("openai/gpt-6-astra").scores[0] > traits("openai/gpt-6-sol").scores[0]);
+    }
 }

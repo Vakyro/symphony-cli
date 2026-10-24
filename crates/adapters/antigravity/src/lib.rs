@@ -218,15 +218,18 @@ impl ProviderAdapter for AntigravityAdapter {
         AuthStatus::Unknown
     }
 
-    /// Los de Google que lista `agy models` (P11.S1). Los de Anthropic y OpenAI que también
-    /// ofrece quedan fuera hasta revisar los ToS (docs/research/cli-p11.md).
+    /// Los de Google que lista `agy models` (agy 1.4.7, 2026-10-23). Los de Anthropic y OpenAI que
+    /// también ofrece (Claude Opus/Sonnet 5.5, GPT-OSS) quedan fuera hasta revisar los ToS
+    /// (docs/research/cli-p11.md; STATUS § Para Leo).
+    /// ponytail: lista fija; si `agy` vuelve a rotar modelos, pedirla a `agy models` con caché.
     fn list_models(&self) -> Vec<ModelInfo> {
         [
+            ("gemini-4-argon-high", "Gemini 4 Argon (High)"),
+            ("gemini-4-argon-medium", "Gemini 4 Argon (Medium)"),
+            ("gemini-4-argon-low", "Gemini 4 Argon (Low)"),
             ("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
             ("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"),
             ("gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"),
-            ("gemini-3.1-pro-high", "Gemini 3.1 Pro (High)"),
-            ("gemini-3.1-pro-low", "Gemini 3.1 Pro (Low)"),
         ]
         .iter()
         .map(|(slug, name)| ModelInfo {

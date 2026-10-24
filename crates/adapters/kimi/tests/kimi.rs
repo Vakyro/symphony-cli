@@ -197,10 +197,13 @@ fn default_model_does_not_pass_dash_m() {
 }
 
 #[test]
-fn lists_one_provider_scoped_model() {
+fn lists_the_configured_model_and_the_named_ones() {
     let models = adapter().list_models();
-    assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "moonshot/default");
+    assert!(models.iter().all(|m| m.id.starts_with("moonshot/")));
+    // `-m` recibe la clave de `[models.*]` de la config de Kimi, no el id corto.
+    let k3 = models.iter().find(|m| m.id == "moonshot/k3.1-pro").unwrap();
+    assert_eq!(k3.cli_model_id, "kimi-code/k3.1-pro");
 }
 
 #[test]

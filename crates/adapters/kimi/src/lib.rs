@@ -191,11 +191,34 @@ impl ProviderAdapter for KimiAdapter {
     }
 
     fn list_models(&self) -> Vec<ModelInfo> {
-        vec![ModelInfo {
+        // `default` es el modelo de `~/.kimi/config.toml`; el resto son las entradas `[models.*]`
+        // que trae esa config (kimi 1.44, 2026-10-23) y que `-m` acepta por su clave.
+        // ponytail: lista fija; si Kimi cambia sus modelos, leer ese TOML en vez de copiarlo.
+        let mut out = vec![ModelInfo {
             id: format!("moonshot/{DEFAULT_MODEL}"),
             cli_model_id: DEFAULT_MODEL.into(),
             display_name: "Kimi (modelo configurado)".into(),
-        }]
+        }];
+        out.extend(
+            [
+                ("kimi-for-coding", "Kimi for Coding"),
+                (
+                    "kimi-for-coding-highspeed",
+                    "Kimi for Coding (alta velocidad)",
+                ),
+                ("k3", "Kimi K3"),
+                ("k3-256k", "Kimi K3 (256k)"),
+                ("k3.1-pro", "Kimi K3.1 Pro"),
+                ("k3.1-pro-highspeed", "Kimi K3.1 Pro (alta velocidad)"),
+            ]
+            .iter()
+            .map(|(slug, name)| ModelInfo {
+                id: format!("moonshot/{slug}"),
+                cli_model_id: format!("kimi-code/{slug}"),
+                display_name: (*name).into(),
+            }),
+        );
+        out
     }
 
     /// Kimi no mostró hooks en `--help`: sin verificar (docs/research/cli-p11.md).
