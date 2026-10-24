@@ -103,3 +103,17 @@ jobs:
           name: symphony-gui-${{ matrix.os }}
           path: apps/gui/src-tauri/target/release/bundle/**
           if-no-files-found: error
+
+  # P13.S5: typos (ortografía) y lychee (links rotos en .md). La configuración
+  # vive en `_typos.toml` y `lychee.toml` en la raíz.
+  docs:
+    name: docs (typos + lychee)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: typos
+        uses: crate-ci/typos@v1.50.2
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2.9.0
+        with:
+          args: --offline --no-progress '**/*.md'

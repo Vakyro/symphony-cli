@@ -1,0 +1,23 @@
+# typos (https://github.com/crate-ci/typos) — P13.S5
+# El repo mezcla español e inglés; typos solo trae diccionario de inglés,
+# así que las palabras del dominio y frases en español van bajo este paraguas.
+
+[files]
+extend-exclude = [
+  # Build output y artefactos generados
+  "target",
+  # Datos de prueba de integración: intencionalmente ruidosos, no se editan
+  "fixtures",
+  # Spec interna (secciones históricas, fuera del alcance de este gate)
+  "docs/spec",
+  # Lockfiles: hashes y binarios, sin texto corregible
+  "Cargo.lock",
+  "pnpm-lock.yaml",
+  # Diagramas y recursos gráficos: URLs o texto generado
+  "*.svg",
+]
+
+[default.extend-identifiers]
+# Nombres del dominio (binarios y crates): nunca corregir
+symphony = "symphony"
+symphonyd = "symphonyd"
