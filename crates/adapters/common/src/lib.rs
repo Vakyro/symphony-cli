@@ -291,7 +291,8 @@ Paths are relative to your working directory. Read a file before editing it, and
 tests and anything else.";
 
 /// El broker (`symphony mcp serve`) en el mismo ejecutable que el hook, con las variables del
-/// agente que tiene que ver (`SYMPHONY_*`: ningún CLI se las pasa solo a un servidor MCP).
+/// agente que tiene que ver (`SYMPHONY_*`: ningún CLI se las pasa solo a un servidor MCP) y el
+/// `CARGO_TARGET_DIR` compartido, que usan los `shell` del harness.
 /// `None` si el spawn no lleva hook o si `SYMPHONY_NO_MCP` está definida (apagado de emergencia).
 pub fn broker(req: &SpawnRequest) -> Option<(HookCommand, Vec<(String, String)>)> {
     if std::env::var_os("SYMPHONY_NO_MCP").is_some() {
@@ -305,7 +306,10 @@ pub fn broker(req: &SpawnRequest) -> Option<(HookCommand, Vec<(String, String)>)
     let env = req
         .env
         .iter()
-        .filter(|(k, _)| k.starts_with("SYMPHONY_") && k != ENV_MCP_EXTRA && k != ENV_PLUGIN_DIR)
+        .filter(|(k, _)| {
+            (k.starts_with("SYMPHONY_") && k != ENV_MCP_EXTRA && k != ENV_PLUGIN_DIR)
+                || k == "CARGO_TARGET_DIR"
+        })
         .cloned()
         .collect();
     Some((command, env))

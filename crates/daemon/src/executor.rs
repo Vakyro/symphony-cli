@@ -147,6 +147,9 @@ pub(crate) fn needs_failover(e: &ProviderError) -> bool {
         )
 }
 
+/// Cuántas líneas de stderr se guardan con un run caído.
+const ERR_TAIL_LINES: usize = 3;
+
 /// Error de las operaciones sobre un agente existente, con frase legible.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -457,6 +460,8 @@ impl Runtime {
     /// Lee la salida del CLI y atiende el control hasta que el proceso termina.
     async fn pump(self, l: Launch, mut proc: Supervised, mut rx: mpsc::UnboundedReceiver<Control>) {
         let mut fatal: Option<ProviderError> = None;
+        // Las últimas líneas de stderr: si el CLI se cae, dicen por qué (dogfooding 2026-10-24).
+        let mut err_tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
         let mut control_open = true;
         let mut monitor = tokio::time::interval(PROCESS_SAMPLE_EVERY);
         monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -477,6 +482,12 @@ impl Runtime {
                     }
                     Some(OutputLine::Stderr(line)) => {
                         self.beat(l.run_id);
+                        if !line.trim().is_empty() {
+                            if err_tail.len() == ERR_TAIL_LINES {
+                                err_tail.pop_front();
+                            }
+                            err_tail.push_back(line.trim().chars().take(300).collect());
+                        }
                         let mut end_turn = false;
                         let events = l.adapter.parse_stderr_line(&line);
                         if !self.apply_events(&l, &proc, events, &mut fatal, &mut end_turn).await {
@@ -613,7 +624,7 @@ impl Runtime {
                 let _ = done.send(());
             }
             (None, Some(err)) => self.failover(&l, &err, code).await,
-            (None, None) => self.finish_natural(&l, exit).await,
+            (None, None) => self.finish_natural(&l, exit, err_tail).await,
         }
         self.bus.run_ended(l.run_id);
     }
@@ -681,7 +692,12 @@ impl Runtime {
     }
 
     /// El CLI terminó solo, sin un fallo de proveedor que pida failover.
-    async fn finish_natural(&self, l: &Launch, exit: ExitStatus) {
+    async fn finish_natural(
+        &self,
+        l: &Launch,
+        exit: ExitStatus,
+        err_tail: std::collections::VecDeque<String>,
+    ) {
         // ponytail: exit 0 = tarea terminada; el heartbeat (P06.S6) cubre los cuelgues.
         if exit == ExitStatus::Exited(0) {
             // Con plan por fases, el CLI que salió bien puede dejar fases pendientes (sesión
@@ -748,6 +764,15 @@ impl Runtime {
             ExitStatus::Killed(None) | ExitStatus::Unknown => {
                 (None, format!("{cli} terminó de forma inesperada"))
             }
+        };
+        let reason = if err_tail.is_empty() {
+            reason
+        } else {
+            let tail = Vec::from(err_tail).join(
+                "
+",
+            );
+            format!("{reason}; stderr: {}", symphony_core::redact(&tail))
         };
         self.finish_failed(l, RunStatus::Failed, code, &reason)
             .await;

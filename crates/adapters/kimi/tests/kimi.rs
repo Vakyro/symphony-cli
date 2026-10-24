@@ -163,7 +163,14 @@ fn session_id_comes_from_stderr_only() {
 #[test]
 fn spawn_and_resume_specs_use_print_mode_and_the_session_flag() {
     let a = adapter();
-    let spawn = args(&a.spawn_spec(&request("kimi-x", Some("abc"))).unwrap());
+    let spec = a.spawn_spec(&request("kimi-x", Some("abc"))).unwrap();
+    // Python en Windows escribe en cp1252 si nadie le dice otra cosa (se caía con «⛔»).
+    assert!(
+        spec.env
+            .iter()
+            .any(|(k, v)| k == "PYTHONIOENCODING" && v == "utf-8")
+    );
+    let spawn = args(&spec);
     assert_eq!(
         spawn,
         [

@@ -1,15 +1,15 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-23 · por claude-code/sonnet-5.5
-**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`), S1 · seguridad
-**Paso actual:** P13.S1 · Seguridad
-**Estado del paso:** por empezar
-**En curso por:** nadie
+**Actualizado:** 2026-10-24 · por claude-code/opus-5.5
+**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, bitácora `docs/phases/P13-endurecimiento.md`)
+**Paso actual:** S1 ✅ · S4 disco 🟡 · S6 docs 🟡 (delegado con Symphony: `docs/progress/DOGFOOD.md`)
+**Estado del paso:** en curso
+**En curso por:** claude-code/opus-5.5 + agentes de Symphony (Kimi, OpenCode, Antigravity)
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: ✅ al cierre de P14 (634 tests; el gate quita `SYMPHONY_LIVE`, nunca corre live).
+- `cargo xtask check`: ✅ 666 tests (2026-10-24, rama de P13; el gate quita `SYMPHONY_LIVE`, nunca corre live).
 - `cargo deny check`: ✅ en la rama `phase/p13-endurecimiento` (tokio 1.54.1 por RUSTSEC-2026-0386); en `main` el job `deny` sigue en rojo hasta que esa rama se integre.
 - CI en `main`: 🔴 solo el job `deny` (aviso nuevo contra tokio 1.53.1, publicado después de P14); los demás ✅. Arreglo ya hecho en la rama de P13 (P13.S1), pendiente de integrar.
 - Tests conocidos en rojo: ninguno.

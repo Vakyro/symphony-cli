@@ -2,8 +2,8 @@
 //!
 //! - Los agentes de un proyecto Rust comparten un `target/` (`<home>/cache/cargo-target`): las
 //!   dependencias se compilan una vez y no una por worktree.
-//! - El worktree de un agente cancelado o ya integrado se borra (la rama queda; el diff sale del
-//!   checkpoint). Uno con cambios sin commitear no se toca.
+//! - El worktree de un agente cancelado, ya integrado o completado hace más de 7 días se borra
+//!   (la rama queda; el diff sale del checkpoint). Uno con cambios sin commitear no se toca.
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +16,9 @@ use crate::runtime::{Runtime, now_ms};
 /// ponytail: tope fijo; hacerlo configurable si alguien lo pide.
 const CARGO_TARGET_CAP: u64 = 15 * 1024 * 1024 * 1024;
 
+/// Cuánto se guarda el worktree de un agente completado que nadie integró con Symphony.
+const COMPLETED_KEEP_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
 fn cargo_target(home: &Path) -> PathBuf {
     home.join("cache").join("cargo-target")
 }
@@ -23,7 +26,12 @@ fn cargo_target(home: &Path) -> PathBuf {
 /// `CARGO_TARGET_DIR` compartido para un worktree de Symphony con `Cargo.toml`, salvo que el
 /// usuario ya haya elegido uno.
 pub fn cargo_env(home: &Path, worktree: &Path) -> Vec<(String, String)> {
-    let ours = worktree.starts_with(home.join("worktrees"));
+    // En Windows las rutas no distinguen mayúsculas (`Desktop` y `desktop` son lo mismo).
+    let norm = |p: &Path| {
+        let s = p.to_string_lossy().replace('\\', "/");
+        if cfg!(windows) { s.to_lowercase() } else { s }
+    };
+    let ours = Path::new(&norm(worktree)).starts_with(norm(&home.join("worktrees")));
     if !ours
         || !worktree.join("Cargo.toml").is_file()
         || std::env::var_os("CARGO_TARGET_DIR").is_some()
@@ -56,7 +64,7 @@ impl Runtime {
     pub async fn reclaim_disk(&self, trim_cache: bool) {
         let rows = {
             let Ok(conn) = self.reader.lock() else { return };
-            repo::reclaimable_worktrees(&conn).unwrap_or_default()
+            repo::reclaimable_worktrees(&conn, now_ms() - COMPLETED_KEEP_MS).unwrap_or_default()
         };
         let home = self.home.clone();
         let removed = tokio::task::spawn_blocking(move || {

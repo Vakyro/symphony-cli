@@ -528,11 +528,13 @@ pub fn get_worktree(conn: &Connection, id: WorktreeId) -> Result<Worktree, RepoE
     .ok_or_else(not_found("worktree", id))
 }
 
-/// Worktrees que ya no hacen falta: los de agentes cancelados y los de agentes completados cuyo
-/// trabajo ya se integró. La rama se queda; el directorio se puede borrar. `(id, ruta, raíz del
-/// repo)`.
+/// Worktrees que ya no hacen falta: los de agentes cancelados, los de agentes completados cuyo
+/// trabajo ya se integró y los de completados sin tocar desde `stale_before` (integrados por fuera
+/// de Symphony o abandonados). La rama se queda; el directorio se puede borrar. `(id, ruta, raíz
+/// del repo)`.
 pub fn reclaimable_worktrees(
     conn: &Connection,
+    stale_before: i64,
 ) -> Result<Vec<(WorktreeId, String, String)>, RepoError> {
     let mut stmt = conn.prepare(
         "SELECT w.id, w.path, p.root_path FROM worktrees w
@@ -540,11 +542,11 @@ pub fn reclaimable_worktrees(
          JOIN projects p ON p.id = w.project_id
          WHERE w.status <> 'REMOVED'
            AND (a.state = 'CANCELLED'
-                OR (a.state = 'COMPLETED' AND EXISTS (
-                    SELECT 1 FROM merge_requests m WHERE m.agent_id = a.id AND m.status = 'MERGED')))",
+                OR (a.state = 'COMPLETED' AND (a.updated_at < ?1 OR EXISTS (
+                    SELECT 1 FROM merge_requests m WHERE m.agent_id = a.id AND m.status = 'MERGED'))))",
     )?;
     let rows = stmt
-        .query_map([], |r| Ok((col(r, 0)?, r.get(1)?, r.get(2)?)))?
+        .query_map([stale_before], |r| Ok((col(r, 0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
     Ok(rows)
 }

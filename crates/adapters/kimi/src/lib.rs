@@ -165,9 +165,13 @@ impl KimiAdapter {
     }
 
     fn base_spec(&self, req: &SpawnRequest) -> Result<ProcessSpec, AdapterError> {
+        // Kimi es Python: en Windows, con la salida en un pipe, escribe en cp1252 y se cae con el
+        // primer carácter que no cabe (p. ej. «⛔» leído de un archivo). Dogfooding 2026-10-24.
         let mut spec = ProcessSpec::new(self.binary()?)
             .args(["--print", "--output-format", "stream-json"])
             .cwd(&req.worktree)
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUTF8", "1")
             .with_stdin();
         if req.model != DEFAULT_MODEL {
             spec = spec.args(["-m", &req.model]);

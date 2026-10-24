@@ -50,21 +50,26 @@ pub fn read(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<String, String> {
+    use std::io::BufRead as _;
     let file = resolve(root, path);
-    let bytes =
-        std::fs::read(&file).map_err(|e| format!("no pude leer {}: {e}", file.display()))?;
-    let text = String::from_utf8(bytes)
-        .map_err(|_| format!("{} no es texto UTF-8 (¿binario?)", file.display()))?;
-    let total = text.lines().count();
+    let opened =
+        std::fs::File::open(&file).map_err(|e| format!("no pude leer {}: {e}", file.display()))?;
     let first = offset.unwrap_or(1).max(1);
     let limit = limit.unwrap_or(READ_LINES).max(1);
-    let shown: Vec<String> = text
-        .lines()
-        .enumerate()
-        .skip(first - 1)
-        .take(limit)
-        .map(|(i, l)| format!("{:>6}\t{}", i + 1, cut_line(l)))
-        .collect();
+    // Línea a línea: un archivo de gigas no se carga entero (revisión de seguridad P13.S1).
+    let (mut total, mut shown) = (0usize, Vec::new());
+    for line in std::io::BufReader::new(opened).lines() {
+        let l = line.map_err(|e| match e.kind() {
+            std::io::ErrorKind::InvalidData => {
+                format!("{} no es texto UTF-8 (¿binario?)", file.display())
+            }
+            _ => format!("no pude leer {}: {e}", file.display()),
+        })?;
+        total += 1;
+        if total >= first && shown.len() < limit {
+            shown.push(format!("{total:>6}\t{}", cut_line(&l)));
+        }
+    }
     if shown.is_empty() {
         return Ok(format!(
             "(sin líneas desde la {first}: el archivo tiene {total})"
@@ -387,16 +392,34 @@ pub async fn shell(
     }
 }
 
-/// Lee un flujo hasta que se cierra, en su propia tarea.
+/// Lee un flujo hasta que se cierra, en su propia tarea. Guarda solo la cabeza y la cola: un
+/// comando que escupe gigas no llena la memoria del broker (revisión de seguridad P13.S1).
 fn drain(
     s: Option<impl tokio::io::AsyncRead + Unpin + Send + 'static>,
 ) -> tokio::task::JoinHandle<Vec<u8>> {
+    // Cabeza + marca + cola caben en SHELL_OUT_MAX: `clip` no vuelve a cortar.
+    const HALF: usize = SHELL_OUT_MAX / 2 - 64;
     tokio::spawn(async move {
-        let mut buf = Vec::new();
+        let (mut head, mut tail) = (Vec::new(), std::collections::VecDeque::<u8>::new());
+        let mut skipped = 0usize;
+        let mut chunk = [0u8; 8192];
         if let Some(mut s) = s {
-            let _ = tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf).await;
+            while let Ok(n @ 1..) = tokio::io::AsyncReadExt::read(&mut s, &mut chunk).await {
+                let mut data = &chunk[..n];
+                let take = HALF.saturating_sub(head.len()).min(data.len());
+                head.extend_from_slice(&data[..take]);
+                data = &data[take..];
+                tail.extend(data);
+                let excess = tail.len().saturating_sub(HALF);
+                tail.drain(..excess);
+                skipped += excess;
+            }
         }
-        buf
+        if skipped > 0 {
+            head.extend_from_slice(format!("\n[… {skipped} bytes omitidos …]\n").as_bytes());
+        }
+        head.extend(tail);
+        head
     })
 }
 
@@ -530,6 +553,35 @@ mod tests {
             started.elapsed() < Duration::from_secs(3),
             "{:?}",
             started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_huge_output_keeps_only_head_and_tail_in_memory() {
+        let big: Vec<u8> = (0..5_000_000u32)
+            .map(|i| if i % 80 == 79 { b'\n' } else { b'x' })
+            .chain(*b"FIN")
+            .collect();
+        let kept = drain(Some(std::io::Cursor::new(big))).await.unwrap();
+        let text = String::from_utf8(kept).unwrap();
+        assert!(text.len() <= SHELL_OUT_MAX, "{}", text.len());
+        assert!(text.contains("bytes omitidos") && text.ends_with("FIN"));
+        assert_eq!(clip(&text), text, "no se corta dos veces");
+    }
+
+    #[test]
+    fn read_streams_lines_and_still_rejects_binaries() {
+        let (_d, root) = tree();
+        std::fs::write(root.join("bin.dat"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
+        assert!(
+            read(&root, "bin.dat", None, None)
+                .unwrap_err()
+                .contains("UTF-8")
+        );
+        std::fs::write(root.join("crlf.txt"), "uno\r\ndos\r\n").unwrap();
+        assert_eq!(
+            read(&root, "crlf.txt", None, None).unwrap(),
+            "     1\tuno\n     2\tdos"
         );
     }
 }

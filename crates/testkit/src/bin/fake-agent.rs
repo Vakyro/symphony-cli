@@ -250,7 +250,11 @@ impl Agent {
                     &json!({"type": "quota", "window": window, "used_fraction": used_fraction, "resets_at": resets_at}),
                 ),
                 Step::AuthError => return self.fail("authentication_failed", json!({})),
-                Step::Crash => std::process::abort(),
+                Step::Crash => {
+                    // Como un CLI de verdad: deja su error en stderr antes de morir.
+                    eprintln!("fake-agent: error fatal simulado");
+                    std::process::abort()
+                }
                 Step::Hang => loop {
                     std::thread::sleep(Duration::from_secs(3600));
                 },

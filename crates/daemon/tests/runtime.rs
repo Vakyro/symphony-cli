@@ -385,6 +385,35 @@ async fn stopping_an_agent_frees_its_clean_worktree_and_keeps_the_branch() {
     e.writer.shutdown();
 }
 
+/// Disco: un agente completado que nadie integró libera su worktree a los 7 días, no antes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_completed_agent_keeps_its_worktree_for_a_week() {
+    let e = env(WORK, None).await;
+    let c = e
+        .runtime
+        .create_agent(req(&e, "Hecho", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    // El fake-agent deja `fix.txt` sin commitear; aquí el trabajo ya está en la rama.
+    if !git(&c.worktree, &["status", "--porcelain"]).is_empty() {
+        git(&c.worktree, &["add", "-A"]);
+        git(&c.worktree, &["commit", "-qm", "hecho"]);
+    }
+    e.runtime.reclaim_disk(false).await;
+    assert!(c.worktree.exists(), "recién completado: se queda");
+    let conn = rusqlite::Connection::open(&e.db).unwrap();
+    conn.execute(
+        "UPDATE agents SET updated_at = 0 WHERE id = ?1",
+        [c.agent_id.to_string()],
+    )
+    .unwrap();
+    e.runtime.reclaim_disk(false).await;
+    assert!(!c.worktree.exists(), "una semana después se borra");
+    e.writer.shutdown();
+}
+
 /// Disco: los agentes de un proyecto Rust comparten `target/`; el repo del usuario no.
 #[test]
 fn cargo_builds_of_agents_share_one_target_dir() {
@@ -415,6 +444,14 @@ fn cargo_builds_of_agents_share_one_target_dir() {
         symphony_daemon::gc::cargo_env(&home, d.path()).is_empty(),
         "el repo del usuario"
     );
+    if cfg!(windows) && std::env::var_os("CARGO_TARGET_DIR").is_none() {
+        let upper = PathBuf::from(wt.to_string_lossy().to_uppercase());
+        assert_eq!(
+            symphony_daemon::gc::cargo_env(&home, &upper).len(),
+            1,
+            "mayúsculas"
+        );
+    }
 }
 
 /// P07.5.S4: crear el chat dos veces devuelve el mismo agente, en `symphony/chat`.
@@ -771,6 +808,11 @@ async fn executor_crash_fails_the_agent_and_opens_recovery() {
         &format!("SELECT state || '|' || state_reason FROM agents WHERE id='{id}'"),
     );
     assert!(state.starts_with("FAILED|fake-agent terminó"), "{state}");
+    // La causa que dejó el CLI en stderr queda con el agente.
+    assert!(
+        state.contains("stderr: fake-agent: error fatal simulado"),
+        "{state}"
+    );
     assert_eq!(
         one::<String>(&e, "SELECT status || '|' || end_reason FROM agent_runs"),
         "FAILED|CRASH"
