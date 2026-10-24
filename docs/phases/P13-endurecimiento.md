@@ -29,6 +29,20 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
   `a_huge_output_keeps_only_head_and_tail_in_memory`, `read_streams_lines_and_still_rejects_binaries`.
 - **tokio 1.54.1** por RUSTSEC-2026-0386 (`cargo deny check` verde).
 
+## S2 · Fuzzing (targets y propiedades, parte 1)
+- `fuzz/` (cargo-fuzz, fuera del workspace, `[workspace]` vacío) con 4 targets:
+  `frame_decoder` (FrameDecoder), `ctx_uri` (CtxUri::parse), `redact` (redact) y
+  `claude_stream` (ClaudeAdapter::parse_stream_line). Necesita nightly; en Windows/MSVC
+  no corre — WSL o job de CI en ubuntu (README de `fuzz/`). No se compiló aquí.
+- Propiedad proptest equivalente en el crate dueño (corre en stable/nextest/CI):
+  `frame::tests::arbitrary_bytes_never_panic`, `uri::tests::parsing_never_panics_and_…`
+  (ya existía), `redact::tests::redact_never_panics_and_is_idempotent` (+ bytes
+  arbitrarios) y `tests/stream_proptest.rs` (línea/JSON arbitrarios, determinismo).
+- Ningún proptest encontró panic real: los 4 parsers ya devolvían Result / ignoraban
+  basura. 145 tests de los 4 crates en verde; clippy `-D warnings` limpio.
+- Pendiente para cerrar S2: correr cada target 30 min con nightly y agregar corpus a
+  CI (corto), o documentar ⛔ si no hay nightly disponible.
+
 ## S4 · Rendimiento y disco (adelantado por pedido de Leo: «Symphony debería ser super ligero»)
 - RAM: el daemon en reposo usa 26 MB.
 - Disco: worktrees que se borran solos (cancelado, integrado o completado hace 7 días; nunca

@@ -152,6 +152,23 @@ mod tests {
             prop_assert_eq!(dec.pending(), cut - consumed);
         }
 
+        /// Basura pura (no frames válidos) no hace panic: solo produce frames dentro
+        /// del límite, termina con bytes pendientes o rechaza la cabecera sobredimensionada.
+        #[test]
+        fn arbitrary_bytes_never_panic(data in prop::collection::vec(any::<u8>(), 0..4096)) {
+            let mut dec = FrameDecoder::new();
+            dec.push(&data);
+            loop {
+                match dec.next_frame() {
+                    Ok(Some(frame)) => prop_assert!(frame.len() as u32 <= MAX_FRAME_LEN),
+                    Ok(None) => break,
+                    Err(ProtocolError::FrameTooLarge { .. }) => break,
+                    Err(e) => panic!("error inesperado con basura: {e}"),
+                }
+            }
+            prop_assert!(dec.pending() <= data.len());
+        }
+
         /// Cualquier cabecera que anuncie más de MAX_FRAME_LEN es error, sin reservar memoria.
         #[test]
         fn oversized_header_is_rejected(len in (MAX_FRAME_LEN + 1)..=u32::MAX) {

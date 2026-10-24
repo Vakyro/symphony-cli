@@ -1,0 +1,34 @@
+# Targets de cargo-fuzz para los parsers críticos de Symphony (STACK §24.5,
+# PLAN P13.S2). Proyecto aparte a propósito: la suite de libFuzzer requiere
+# nightly y no debe entrar en el workspace ni en `cargo nextest`/CI.
+[package]
+name = "symphony-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+symphony-protocol = { path = "../crates/protocol" }
+symphony-context = { path = "../crates/context" }
+symphony-core = { path = "../crates/core" }
+symphony-adapter-claude = { path = "../crates/adapters/claude" }
+symphony-adapter-common = { path = "../crates/adapters/common" }
+
+[[bin]]
+name = "frame_decoder"
+path = "fuzz_targets/frame_decoder.rs"
+
+[[bin]]
+name = "ctx_uri"
+path = "fuzz_targets/ctx_uri.rs"
+
+[[bin]]
+name = "redact"
+path = "fuzz_targets/redact.rs"
+
+[[bin]]
+name = "claude_stream"
+path = "fuzz_targets/claude_stream.rs"

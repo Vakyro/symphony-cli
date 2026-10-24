@@ -82,6 +82,26 @@ pub fn redact(input: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Cualquier texto (comandos, JSON, cabeceras rotas) se redacta sin panic
+        /// y redactar de nuevo no cambia nada: el marcador no crea ni borra reglas.
+        #[test]
+        fn redact_never_panics_and_is_idempotent(s in "\\PC{0,512}") {
+            let once = redact(&s).into_owned();
+            let twice = redact(&once).into_owned();
+            prop_assert_eq!(twice, once);
+        }
+
+        /// Cualquier byte válido como texto (incluidos los inválidos como UTF-8,
+        /// perdidos en la conversión) tampoco puede romper el redactor.
+        #[test]
+        fn redact_handles_arbitrary_bytes(bytes in prop::collection::vec(any::<u8>(), 0..512)) {
+            let s = String::from_utf8_lossy(&bytes);
+            let _ = redact(&s);
+        }
+    }
 
     #[test]
     fn all_rules_compile() {

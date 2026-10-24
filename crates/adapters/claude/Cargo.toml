@@ -16,4 +16,5 @@ symphony-core = { path = "../../core" }
 serde_json.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 tempfile.workspace = true
