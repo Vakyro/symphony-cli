@@ -1259,6 +1259,11 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 **Docs:** todos. En particular IDEA §2–§3, FLOW §18–§21, DB §5, STACK §25.2 y §64.
 **Skills:** `the-council` (veredicto), `health`, `code-review-and-quality`, `make-pdf` (entregable opcional).
 
+### P16.S0 · Validación por tipo de proyecto (ADR-0020, recortado en P15.5.S5)
+- **Qué:** ADR del núcleo para un check nuevo en `validation_checks` (migración) que, en proyectos `document` y `media`, compruebe que cada archivo cambiado existe y su formato se abre (por extensión, sin dependencias nuevas). Los validators de plugin (ADR-0015) siguen sumándose. Un proyecto sin tests no se bloquea.
+- **Por qué:** pedido de Leo (2026-10-24); sin esto un proyecto que no es de código no tiene gate.
+- **Verifica:** test con un proyecto `document` que integra un `.md` válido y rechaza un `.docx` corrupto.
+
 ### P16.S1 · Checklist de aceptación
 - **Qué:** crear `docs/phases/P16-acceptance.md` con una fila por cada elemento, su evidencia (comando, test o captura) y el resultado:
   - las 35 vistas de FLOW §18;
