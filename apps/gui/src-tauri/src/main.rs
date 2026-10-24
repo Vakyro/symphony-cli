@@ -23,7 +23,11 @@ fn failure(e: &BridgeError) -> Value {
 /// `gui.set_project`: la UI eligió otra carpeta de proyecto. Cada proyecto tiene su daemon
 /// (ADR-0018); esto solo apunta el puente al de esa carpeta, no habla con ningún daemon.
 fn set_project(bridge: &Bridge, params: &Value) -> Result<Value, Value> {
-    let root = params.get("root").and_then(Value::as_str).unwrap_or("").trim();
+    let root = params
+        .get("root")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if root.is_empty() {
         bridge.set_home(None);
         return Ok(json!({ "home": null }));
