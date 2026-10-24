@@ -18,18 +18,13 @@ fn arb_json() -> impl Strategy<Value = Value> {
         any::<u64>().prop_map(Value::from),
         "[^\"]{0,32}".prop_map(Value::String),
     ];
-    leaf.prop_recursive(
-        4,
-        32,
-        8,
-        |inner| {
-            prop_oneof![
-                prop::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
-                prop::collection::hash_map("[-_a-z0-9]{1,12}", inner, 0..6)
-                    .prop_map(|m| Value::Object(m.into_iter().collect())),
-            ]
-        },
-    )
+    leaf.prop_recursive(4, 32, 8, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
+            prop::collection::hash_map("[-_a-z0-9]{1,12}", inner, 0..6)
+                .prop_map(|m| Value::Object(m.into_iter().collect())),
+        ]
+    })
 }
 
 proptest! {
