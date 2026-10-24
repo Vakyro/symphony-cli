@@ -385,7 +385,7 @@ El último mensaje del usuario puede estar sin responder o a medias: revisa el w
         render_diff(&input.diff, diff_max, input.diff_uri.as_deref(), summarize);
 
     let prompt = format!(
-        "Retomas una tarea de código que otro executor dejó a medias. {reason}
+        "Retomas una tarea que otro executor dejó a medias. {reason}
 Ya estás en su worktree, con su rama y sus cambios. No empieces de cero: revisa lo que ya existe y continúa desde donde quedó.
 
 ## Objetivo

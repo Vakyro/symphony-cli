@@ -13,6 +13,22 @@ fn main() -> ExitCode {
             println!("symphonyd {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Some("migrate-split") => {
+            let Some(home) = std::env::args_os().nth(2) else {
+                eprintln!("uso: symphonyd migrate-split <home del usuario>");
+                return ExitCode::from(2);
+            };
+            match symphony_daemon::migrate::split_all(std::path::Path::new(&home)) {
+                Ok(lines) => {
+                    lines.iter().for_each(|l| println!("{l}"));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         None => match run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(report) => {
@@ -21,7 +37,9 @@ fn main() -> ExitCode {
             }
         },
         Some(_) => {
-            eprintln!("uso: symphonyd [--version]\nNormalmente lo arranca `symphony`.");
+            eprintln!(
+                "uso: symphonyd [--version | migrate-split <home>]\nNormalmente lo arranca `symphony`."
+            );
             ExitCode::from(2)
         }
     }
@@ -31,7 +49,8 @@ fn run() -> miette::Result<()> {
     // Ruta larga: los worktrees que reciben los CLIs cuelgan de aquí.
     let home = SymphonyHome::resolve().into_diagnostic()?;
     let home = SymphonyHome::at(symphony_protocol::transport::long_path(home.root()));
-    let config = symphony_core::load_or_create(&home).into_diagnostic()?;
+    let config =
+        symphony_core::load_or_create(&SymphonyHome::user_for(home.root())).into_diagnostic()?;
     let _log_guard = symphony_daemon::logging::init(&home.logs_dir(), &config.logging.level)
         .into_diagnostic()
         .wrap_err("no se pudo iniciar el log")?;

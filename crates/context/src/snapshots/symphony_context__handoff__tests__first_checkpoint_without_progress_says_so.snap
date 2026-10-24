@@ -2,7 +2,7 @@
 source: crates/context/src/handoff.rs
 expression: "assemble(&input, ContextMode::Balanced).prompt"
 ---
-Retomas una tarea de código que otro executor dejó a medias. El executor anterior terminó de forma inesperada.
+Retomas una tarea que otro executor dejó a medias. El executor anterior terminó de forma inesperada.
 Ya estás en su worktree, con su rama y sus cambios. No empieces de cero: revisa lo que ya existe y continúa desde donde quedó.
 
 ## Objetivo

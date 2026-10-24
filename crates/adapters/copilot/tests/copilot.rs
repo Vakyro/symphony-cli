@@ -261,3 +261,38 @@ fn lists_only_auto() {
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "github/auto");
 }
+
+/// ADR-0019: en el harness de Symphony Copilot solo tiene disponible el broker; sin la marca no
+/// cambia nada.
+#[test]
+fn the_symphony_harness_limits_copilot_to_the_broker() {
+    let mut req = request("auto", None);
+    req.hook = Some(symphony_adapter_common::HookCommand {
+        program: "symphony".into(),
+        args: vec!["hook".into(), "emit".into()],
+    });
+    let args_of = |req: &SpawnRequest| -> Vec<String> {
+        adapter()
+            .spawn_spec(req)
+            .unwrap()
+            .args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    };
+    let plain = args_of(&req);
+    assert!(
+        !plain
+            .iter()
+            .any(|a| a == "--available-tools" || a == "--additional-mcp-config")
+    );
+
+    req.env.push(("SYMPHONY_HARNESS".into(), "1".into()));
+    let a = args_of(&req);
+    let at = |flag: &str| a[a.iter().position(|x| x == flag).unwrap() + 1].clone();
+    assert_eq!(at("--available-tools"), "symphony-context");
+    let mcp: serde_json::Value = serde_json::from_str(&at("--additional-mcp-config")).unwrap();
+    let server = &mcp["mcpServers"]["symphony-context"];
+    assert_eq!(server["tools"], serde_json::json!(["*"]));
+    assert_eq!(server["env"]["SYMPHONY_HARNESS"], "1");
+}

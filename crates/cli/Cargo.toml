@@ -20,12 +20,14 @@ symphony-core = { path = "../core" }
 symphony-protocol = { path = "../protocol" }
 symphony-tui = { path = "../tui" }
 clap.workspace = true
+ignore.workspace = true
 miette = { workspace = true, features = ["fancy"] }
+regex.workspace = true
 rmcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "time", "macros"] }
+tokio = { workspace = true, features = ["rt", "time", "macros", "process", "io-util"] }
 
 [dev-dependencies]
 symphony-adapter-claude = { path = "../adapters/claude" }

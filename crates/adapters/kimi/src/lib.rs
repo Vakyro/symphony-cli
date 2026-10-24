@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, ModelInfo, ProcessSpec, ProviderAdapter,
     ProviderError, ResumeRequest, SpawnRequest, ToolKind, find_on_path, has_token, json_str,
@@ -26,6 +26,30 @@ const DEFAULT_MODEL: &str = "default";
 #[derive(Debug, Clone, Default)]
 pub struct KimiAdapter {
     pub binary: Option<PathBuf>,
+}
+
+/// Agente de Kimi sin herramientas propias: hereda el prompt de sistema del predeterminado.
+const HARNESS_AGENT: &str = "version: 1\nagent:\n  extend: default\n  tools: []\n  subagents: {}\n";
+
+/// El archivo de [`HARNESS_AGENT`] (Kimi solo acepta un archivo). Se crea una vez por versión del
+/// texto, en el directorio temporal; `None` si no se pudo escribir.
+fn harness_agent_file() -> Option<PathBuf> {
+    let path = std::env::temp_dir().join(format!(
+        "symphony-kimi-harness-{:08x}.yaml",
+        HARNESS_AGENT
+            .bytes()
+            .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
+    ));
+    // Nunca se confía en un archivo que ya estaba (otro usuario de la máquina pudo crearlo con
+    // ese nombre): si su contenido no es el esperado se escribe uno propio de este proceso.
+    let is_ours = |p: &Path| std::fs::read_to_string(p).is_ok_and(|t| t == HARNESS_AGENT);
+    if is_ours(&path) {
+        return Some(path);
+    }
+    let own = path.with_extension(format!("{}.yaml", std::process::id()));
+    let _ = std::fs::remove_file(&own);
+    std::fs::write(&own, HARNESS_AGENT).ok()?;
+    is_ours(&own).then_some(own)
 }
 
 /// El contenido de un mensaje: un texto, o una lista de partes (`think`, `text`).
@@ -148,6 +172,23 @@ impl KimiAdapter {
         if req.model != DEFAULT_MODEL {
             spec = spec.args(["-m", &req.model]);
         }
+        // Harness de Symphony (ADR-0019): un agente sin herramientas propias y el broker como
+        // única fuente (verificado en vivo con kimi 1.44).
+        if symphony_adapter_common::harness_on(req)
+            && let Some((cmd, env)) = symphony_adapter_common::broker(req)
+            && let Some(agent) = harness_agent_file()
+        {
+            let servers = json!({ "mcpServers": { symphony_adapter_common::MCP_SERVER_NAME: {
+                "command": cmd.program.to_string_lossy(),
+                "args": cmd.args,
+                "env": env.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+            } } });
+            spec = spec
+                .arg("--agent-file")
+                .arg(agent)
+                .arg("--mcp-config")
+                .arg(servers.to_string());
+        }
         for (k, v) in &req.env {
             spec = spec.env(k, v);
         }
@@ -191,11 +232,34 @@ impl ProviderAdapter for KimiAdapter {
     }
 
     fn list_models(&self) -> Vec<ModelInfo> {
-        vec![ModelInfo {
+        // `default` es el modelo de `~/.kimi/config.toml`; el resto son las entradas `[models.*]`
+        // que trae esa config (kimi 1.44, 2026-10-23) y que `-m` acepta por su clave.
+        // ponytail: lista fija; si Kimi cambia sus modelos, leer ese TOML en vez de copiarlo.
+        let mut out = vec![ModelInfo {
             id: format!("moonshot/{DEFAULT_MODEL}"),
             cli_model_id: DEFAULT_MODEL.into(),
             display_name: "Kimi (modelo configurado)".into(),
-        }]
+        }];
+        out.extend(
+            [
+                ("kimi-for-coding", "Kimi for Coding"),
+                (
+                    "kimi-for-coding-highspeed",
+                    "Kimi for Coding (alta velocidad)",
+                ),
+                ("k3", "Kimi K3"),
+                ("k3-256k", "Kimi K3 (256k)"),
+                ("k3.1-pro", "Kimi K3.1 Pro"),
+                ("k3.1-pro-highspeed", "Kimi K3.1 Pro (alta velocidad)"),
+            ]
+            .iter()
+            .map(|(slug, name)| ModelInfo {
+                id: format!("moonshot/{slug}"),
+                cli_model_id: format!("kimi-code/{slug}"),
+                display_name: (*name).into(),
+            }),
+        );
+        out
     }
 
     /// Kimi no mostró hooks en `--help`: sin verificar (docs/research/cli-p11.md).

@@ -137,14 +137,66 @@ async fn recover(writer: &Writer) -> Result<(), DaemonError> {
     Ok(())
 }
 
+/// El profile por defecto del tipo de este proyecto (`project.toml`); `None` si el home no es de
+/// un proyecto o es de código.
+fn project_kind_profile(home: &Path) -> Option<&'static str> {
+    let root = home
+        .parent()
+        .filter(|_| home.file_name().is_some_and(|n| n == ".symphony"))?;
+    let kind = symphony_core::load_project(root)
+        .ok()
+        .flatten()?
+        .project
+        .kind;
+    (kind != symphony_core::ProjectKind::Code).then(|| kind.default_profile())
+}
+
+/// `<proyecto>/.symphony/.gitignore`: el estado del daemon (base, worktrees, logs) no entra a git;
+/// `project.toml` sí. Solo cuando el home es de un proyecto y no el del usuario (ADR-0018).
+fn ignore_state_in_git(home: &Path) {
+    if symphony_core::SymphonyHome::user_for(home).root() == home {
+        return;
+    }
+    let path = home.join(".gitignore");
+    if !path.exists() {
+        // Sin esto el repo vería todo el estado como archivos nuevos. Si falla, solo se avisa.
+        if let Err(e) = std::fs::write(
+            &path,
+            "*
+!.gitignore
+!project.toml
+",
+        ) {
+            tracing::warn!(error = %e, "no se pudo escribir {}", path.display());
+        }
+    }
+}
+
 /// Corre el daemon hasta que se cancele `shutdown` (señal o request `shutdown`).
 pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), DaemonError> {
     let _lock = InstanceLock::acquire(home)?;
+    ignore_state_in_git(home);
     let db_path = symphony_core::SymphonyHome::at(home).db_path();
     let writer = Writer::start(&db_path)?;
     recover(&writer).await?;
     if let Err(e) = refresh_providers(&writer.handle()).await {
         tracing::warn!(error = %e, "no se pudo registrar a los proveedores");
+    }
+    // Lo aprendido se comparte entre proyectos a través del home del usuario (ADR-0018). Sin
+    // un home de usuario distinto del del proyecto (tests de un solo directorio) no se comparte.
+    let user = symphony_core::SymphonyHome::user_for(home);
+    if user.root() != home {
+        crate::learning::set_shared_db(Some(user.root().join("learning.db")));
+        let (done, wait) = tokio::sync::oneshot::channel();
+        writer
+            .handle()
+            .write(Box::new(move |t| {
+                crate::learning::sync_from_shared(t);
+                let _ = done.send(());
+                Ok(())
+            }))
+            .await?;
+        let _ = wait.await;
     }
     let reader = writer.reader()?;
     let runtime_reader = writer.reader()?;
@@ -172,7 +224,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     });
     // La config se lee antes que el runtime: los permisos de los proveedores (`[providers.
     // permissions]`) se fijan al crear los adapters. Una config inválida deja los predeterminados.
-    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home));
+    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home));
     let permissions = config
         .as_ref()
         .map(|c| c.providers.permissions.clone())
@@ -210,7 +262,11 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
             );
             // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
             if config.routing.default_profile.starts_with('@') {
-                runtime.set_default_profile(&config.routing.default_profile);
+                // Un proyecto de documentos o multimedia (ADR-0020) parte de su propio profile,
+                // salvo que el usuario haya elegido otro por defecto.
+                let by_kind = project_kind_profile(home)
+                    .filter(|_| config.routing.default_profile == "@code");
+                runtime.set_default_profile(by_kind.unwrap_or(&config.routing.default_profile));
             }
             runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
         }
@@ -1106,9 +1162,16 @@ async fn shared_list(req: Request, state: &State) -> Response {
     };
     let root = PathBuf::from(&project.root_path);
     let pid = project.id.to_string();
-    let skills = shared::scan_skills(&state.home, Some(&root));
+    let skills = shared::scan_skills(
+        symphony_core::SymphonyHome::user_for(&state.home).root(),
+        Some(&root),
+    );
     let mut warnings = Vec::new();
-    let servers = shared::scan_mcp(&state.home, Some(&root), &mut warnings);
+    let servers = shared::scan_mcp(
+        symphony_core::SymphonyHome::user_for(&state.home).root(),
+        Some(&root),
+        &mut warnings,
+    );
     let found_skills: Vec<_> = skills.iter().map(shared::SkillDef::found).collect();
     let found_servers: Vec<_> = servers.iter().map(shared::McpDef::found).collect();
     // Con un `mcp.toml` roto no se borra nada: el interruptor del usuario no se pierde.
@@ -1455,9 +1518,24 @@ async fn project_init(req: Request) -> Response {
         Ok(v) => v,
         Err(e) => return Response::error(req.id, "invalid_params", e),
     };
+    let kind = match enum_param(p, "kind", symphony_core::ProjectKind::Code) {
+        Ok(v) => v,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let git_init = p.get("git_init").and_then(Value::as_bool).unwrap_or(false);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let done = tokio::task::spawn_blocking(move || {
-        let repo = symphony_git::Repo::discover(&root).map_err(|e| e.to_string())?;
+        // Una carpeta sin git (documentos, video…) puede arrancar uno: los worktrees y los
+        // checkpoints lo necesitan (ADR-0020).
+        let repo = match symphony_git::Repo::discover(&root) {
+            Ok(repo) => repo,
+            Err(_) if git_init => symphony_git::Repo::init(&root, "main").map_err(|e| e.to_string())?,
+            Err(e) => {
+                return Err(format!(
+                    "{e}: esta carpeta no es un repositorio git; usa `git_init` (en la CLI, `symphony init --git-init`) para crear uno"
+                ));
+            }
+        };
         let branch = repo
             .current_branch()
             .map_err(|e| e.to_string())?
@@ -1473,6 +1551,7 @@ async fn project_init(req: Request) -> Response {
             &symphony_core::ProjectInit {
                 name: name.trim(),
                 default_branch: &branch,
+                kind,
                 performance,
                 failover,
             },
@@ -1482,7 +1561,10 @@ async fn project_init(req: Request) -> Response {
     })
     .await;
     match done {
-        Ok(Ok((root, name))) => Response::ok(req.id, json!({ "root": root, "name": name })),
+        Ok(Ok((root, name))) => Response::ok(
+            req.id,
+            json!({ "root": root, "name": name, "kind": kind.as_str() }),
+        ),
         Ok(Err(e)) => Response::error(req.id, "init_failed", e),
         Err(e) => Response::error(req.id, "init_failed", e.to_string()),
     }
@@ -2524,7 +2606,8 @@ fn task_list(req: Request, state: &State) -> Response {
 
 /// System / Resources (18): carga actual, slots pesados y quién espera a quién.
 fn system_get(req: Request, state: &State) -> Response {
-    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(&state.home)).ok();
+    let config =
+        symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&state.home)).ok();
     let perf = config
         .as_ref()
         .map(|c| c.performance.clone())
@@ -2600,7 +2683,7 @@ async fn performance_set(req: Request, state: &State) -> Response {
             "`profile` tiene que ser ECO, BALANCED, PERFORMANCE o CUSTOM",
         );
     };
-    let home = symphony_core::SymphonyHome::at(&state.home);
+    let home = symphony_core::SymphonyHome::user_for(&state.home);
     match symphony_core::set_value(
         &home,
         "performance.profile",

@@ -241,3 +241,66 @@ fn mcp_broker_serves_context_tools_from_the_daemon() {
 
     symphony(&home, &repo, &["daemon", "stop"]);
 }
+
+/// ADR-0019: con `SYMPHONY_HARNESS` el broker suma las herramientas de archivos y shell, que
+/// trabajan sobre el directorio del agente. No hace falta daemon: no consultan nada.
+#[test]
+fn mcp_broker_serves_the_harness_tools_when_the_agent_runs_in_the_harness() {
+    let dir = tempfile::tempdir().unwrap();
+    let (home, work) = (dir.path().join("home"), dir.path().join("work"));
+    std::fs::create_dir_all(&work).unwrap();
+    let mut mcp = Mcp::start(&home, &work, &[("SYMPHONY_HARNESS", "1")]);
+
+    let tools = mcp.request("tools/list", json!({}));
+    let mut names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "context_lines",
+            "context_retrieve",
+            "context_search",
+            "edit",
+            "glob",
+            "grep",
+            "read",
+            "shell",
+            "write"
+        ]
+    );
+
+    // Rutas relativas: cuelgan del directorio del agente.
+    let (err, out) = mcp.call(
+        "write",
+        json!({ "path": "notas/a.txt", "content": "uno\ndos\n" }),
+    );
+    assert!(!err, "{out}");
+    assert_eq!(
+        std::fs::read_to_string(work.join("notas/a.txt")).unwrap(),
+        "uno\ndos\n"
+    );
+    let (err, out) = mcp.call(
+        "edit",
+        json!({ "path": "notas/a.txt", "old": "dos", "new": "DOS" }),
+    );
+    assert!(!err, "{out}");
+    let (err, out) = mcp.call("read", json!({ "path": "notas/a.txt" }));
+    assert!(!err && out.contains("     2\tDOS"), "{out}");
+    let (err, out) = mcp.call("grep", json!({ "pattern": "DOS" }));
+    assert!(!err && out.contains("notas/a.txt:2:DOS"), "{out}");
+    let (err, out) = mcp.call("glob", json!({ "pattern": "**/*.txt" }));
+    assert!(!err && out.trim() == "notas/a.txt", "{out}");
+    let (err, out) = mcp.call("shell", json!({ "command": "echo desde-el-harness" }));
+    assert!(!err && out.contains("desde-el-harness"), "{out}");
+    // Un error del modelo (texto que no existe) vuelve como error de la herramienta.
+    let (err, out) = mcp.call(
+        "edit",
+        json!({ "path": "notas/a.txt", "old": "zzz", "new": "y" }),
+    );
+    assert!(err && out.contains("no encontré"), "{out}");
+}

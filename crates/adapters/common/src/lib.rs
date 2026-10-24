@@ -271,6 +271,25 @@ pub const MCP_SERVER_NAME: &str = "symphony-context";
 /// Herramientas del broker: los CLIs que piden permiso por herramienta las permiten por nombre.
 pub const MCP_TOOLS: [&str; 3] = ["context_search", "context_retrieve", "context_lines"];
 
+/// Herramientas del harness de Symphony (ADR-0019) que el broker suma cuando el agente corre en él.
+pub const HARNESS_TOOLS: [&str; 6] = ["read", "write", "edit", "glob", "grep", "shell"];
+/// Variable que marca que el agente corre en el harness de Symphony. Llega al broker por el
+/// filtro `SYMPHONY_*` de [`broker`].
+pub const ENV_HARNESS: &str = "SYMPHONY_HARNESS";
+
+/// ¿Este spawn corre en el harness de Symphony?
+pub fn harness_on(req: &SpawnRequest) -> bool {
+    req.env
+        .iter()
+        .any(|(k, v)| k == ENV_HARNESS && !v.is_empty())
+}
+
+/// Lo que se le dice al modelo cuando corre en el harness (se suma a su prompt de sistema).
+pub const HARNESS_PROMPT: &str = "You are working inside Symphony. Your tools are the MCP tools \
+read, write, edit, glob, grep and shell (server symphony-context); other built-in tools are not available. \
+Paths are relative to your working directory. Read a file before editing it, and use shell for git, builds, \
+tests and anything else.";
+
 /// El broker (`symphony mcp serve`) en el mismo ejecutable que el hook, con las variables del
 /// agente que tiene que ver (`SYMPHONY_*`: ningún CLI se las pasa solo a un servidor MCP).
 /// `None` si el spawn no lleva hook o si `SYMPHONY_NO_MCP` está definida (apagado de emergencia).

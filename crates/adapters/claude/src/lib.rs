@@ -155,6 +155,19 @@ impl ClaudeAdapter {
                     .iter()
                     .map(|t| format!("mcp__{name}__{t}")),
             );
+            // Harness de Symphony (ADR-0019): sin herramientas propias de Claude Code, solo
+            // las del broker. `--tools ""` apaga todas las nativas; los MCP siguen.
+            if symphony_adapter_common::harness_on(req) {
+                allowed.extend(
+                    symphony_adapter_common::HARNESS_TOOLS
+                        .iter()
+                        .map(|t| format!("mcp__{name}__{t}")),
+                );
+                spec = spec
+                    .args(["--tools", ""])
+                    .arg("--append-system-prompt")
+                    .arg(symphony_adapter_common::HARNESS_PROMPT);
+            }
         }
         for m in symphony_adapter_common::extra_mcp(req) {
             let def = if m.http {

@@ -20,6 +20,31 @@ fn failure(e: &BridgeError) -> Value {
     }
 }
 
+/// `gui.set_project`: la UI eligió otra carpeta de proyecto. Cada proyecto tiene su daemon
+/// (ADR-0018); esto solo apunta el puente al de esa carpeta, no habla con ningún daemon.
+fn set_project(bridge: &Bridge, params: &Value) -> Result<Value, Value> {
+    let root = params
+        .get("root")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if root.is_empty() {
+        bridge.set_home(None);
+        return Ok(json!({ "home": null }));
+    }
+    match symphony_core::SymphonyHome::for_project(std::path::Path::new(root)) {
+        Ok(home) => {
+            bridge.set_home(Some(home.root().to_path_buf()));
+            Ok(json!({ "home": home.root().display().to_string() }))
+        }
+        Err(e) => {
+            // Mejor sin proyecto que seguir mostrando (y tocando) el anterior bajo otro nombre.
+            bridge.set_home(None);
+            Err(json!({ "code": "invalid_project", "message": e.to_string() }))
+        }
+    }
+}
+
 /// Un request al daemon. El error es `{code, message}` para que la UI decida qué mostrar.
 #[tauri::command]
 async fn ipc_call(
@@ -27,6 +52,9 @@ async fn ipc_call(
     method: String,
     params: Value,
 ) -> Result<Value, Value> {
+    if method == "gui.set_project" {
+        return set_project(&daemon.0, &params);
+    }
     daemon
         .0
         .call(&method, params)
@@ -50,24 +78,30 @@ fn forward_events(app: AppHandle, bridge: Bridge) {
             let ready = app.clone();
             let was_up = Arc::new(AtomicBool::new(false));
             let up = was_up.clone();
-            let why = bridge
-                .subscribe_with(
-                    move || {
-                        up.store(true, Ordering::Relaxed);
-                        // Evento sintético: las vistas se refrescan y la UI vuelve a «conectado».
-                        let _ = ready.emit(
-                            "symphony://event",
-                            json!({ "topic": "gui.connected", "payload": null }),
-                        );
-                    },
-                    move |ev| {
-                        let _ = emit.emit(
-                            "symphony://event",
-                            json!({ "topic": ev.topic, "payload": ev.payload }),
-                        );
-                    },
-                )
-                .await;
+            let listening = bridge.subscribe_with(
+                move || {
+                    up.store(true, Ordering::Relaxed);
+                    // Evento sintético: las vistas se refrescan y la UI vuelve a «conectado».
+                    let _ = ready.emit(
+                        "symphony://event",
+                        json!({ "topic": "gui.connected", "payload": null }),
+                    );
+                },
+                move |ev| {
+                    let _ = emit.emit(
+                        "symphony://event",
+                        json!({ "topic": ev.topic, "payload": ev.payload }),
+                    );
+                },
+            );
+            let why = tokio::select! {
+                why = listening => why,
+                // Otro proyecto: se deja la suscripción al daemon anterior y se hace la nueva.
+                () = bridge.project_changed() => {
+                    announced = false;
+                    continue;
+                }
+            };
             if was_up.load(Ordering::Relaxed) {
                 announced = false;
             }
@@ -87,11 +121,15 @@ fn die(msg: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
-    let home = match symphony_core::SymphonyHome::resolve() {
-        Ok(h) => h.root().to_path_buf(),
+    // El proyecto del directorio desde donde se abrió la GUI, si lo es; si no, la UI pide uno.
+    let bridge = match symphony_core::SymphonyHome::resolve() {
+        Ok(h) => Bridge::new(h.root()),
+        Err(_) => Bridge::without_project(),
+    };
+    let bridge = match symphony_core::SymphonyHome::user() {
+        Ok(u) => bridge.with_user_home(u.root()),
         Err(e) => die(format!("no pude ubicar ~/.symphony: {e}")),
     };
-    let bridge = Bridge::new(home);
     let events = bridge.clone();
     let built = tauri::Builder::default()
         .manage(Daemon(bridge))

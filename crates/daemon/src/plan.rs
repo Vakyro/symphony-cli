@@ -49,7 +49,7 @@ pub fn planning_prompt(objective: &str, task: TaskId, min_tasks: u32) -> String 
     let path = plan_rel_path(task);
     format!(
         "{objective}{INSTRUCTIONS_MARK}\
-         1. Antes de tocar código, escribe el plan en `{path}` con este formato:\n\
+         1. Antes de empezar a trabajar, escribe el plan en `{path}` con este formato:\n\
          ```\n\
          # Plan: <título corto>\n\
          ## Fase 1: <objetivo verificable>\n\
@@ -182,7 +182,7 @@ pub struct PhaseError(pub String);
 impl Runtime {
     /// `[plan]` de `config.toml`; se relee en cada uso (editarlo aplica a la fase siguiente).
     pub(crate) fn plan_config(&self) -> PlanConfig {
-        symphony_core::load_or_create(&symphony_core::SymphonyHome::at(&self.home))
+        symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&self.home))
             .map(|c| c.plan)
             .unwrap_or_default()
     }

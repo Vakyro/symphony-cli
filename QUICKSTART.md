@@ -57,14 +57,16 @@ cd symphony-cli
 Asume `symphony` en el PATH de aquí en adelante.
 
 ### Dónde guarda Symphony sus datos
-- **Global, en `~/.symphony`** (o `SYMPHONY_HOME`): la base de datos SQLite, el daemon (socket y logs), los worktrees de los agentes y `config.toml`. Se comparte entre todos tus proyectos.
-- **En tu proyecto, en `<proyecto>/.symphony/`**: la configuración propia del proyecto (`project.toml`). Se crea en el primer arranque de la TUI (first-run), no al crear un agente desde la línea de comandos.
+- **En cada proyecto, en `<proyecto>/.symphony/`** (desde P15.5): su base de datos, su daemon (socket y logs), los worktrees de sus agentes, su memoria (hechos, checkpoints, chat) y `project.toml`. Cada proyecto tiene su propio daemon y **no ve nada de los demás**: sesiones, oleadas y chats son de la carpeta donde abres Symphony. Un `.gitignore` dentro de esa carpeta deja fuera de git todo menos `project.toml`.
+- **En tu usuario, en `~/.symphony`** (o `SYMPHONY_USER_HOME`): lo que no es de un proyecto: `config.toml`, skills y `mcp.toml`, plugins, cachés y `learning.db` (lo que el router aprende de cada modelo, compartido entre proyectos).
+- `SYMPHONY_HOME` fuerza un solo directorio para todo (útil en pruebas). `symphony` ubica el proyecto subiendo desde la carpeta actual hasta el primer `.symphony/project.toml` o `.git`; dentro de un worktree de un agente usa el proyecto dueño. En tu carpeta personal no funciona: abre Symphony dentro de un proyecto.
+- **Si venías de antes de P15.5** (una sola base en `~/.symphony`): `symphony migrate split` apaga el daemon global y reparte esa base en cada proyecto. No borra nada; la base global queda sin usarse y la quitas tú.
 
 No hace falta instalar Symphony dentro de cada proyecto.
 
 ### Qué se instala y qué no (regla de diseño)
 - **Una sola instalación global** en tu computadora (`symphony` y `symphonyd`). Después, `symphony` se abre desde cualquier carpeta y es la única puerta de entrada: el daemon lo arranca `symphony` cuando hace falta.
-- **No hay nada que instalar a mano por proyecto o carpeta**: ni Symphony, ni hooks, ni skills, ni el broker MCP en cada proveedor. Symphony los inyecta en cada ejecución del CLI del proveedor y no escribe configuración en tu proyecto (los agentes trabajan en sus worktrees bajo `~/.symphony`).
+- **No hay nada que instalar a mano por proyecto o carpeta**: ni Symphony, ni hooks, ni skills, ni el broker MCP en cada proveedor. Symphony los inyecta en cada ejecución del CLI del proveedor y no escribe configuración en tu proyecto (los agentes trabajan en sus worktrees bajo `<proyecto>/.symphony/worktrees`, que git ignora).
 - Lo único que haces por tu cuenta es instalar y autenticar los CLIs de los proveedores, una vez por computadora.
 - Si algún paso te pide copiar archivos de Symphony a un proyecto, es un defecto: repórtalo (CONSTRAINTS A12).
 
@@ -248,17 +250,43 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 
 - Un modelo que tu cuenta no tenga habilitado falla al instante con «not available» y Symphony pasa al siguiente según la política de failover.
 - Copilot con `auto` puede usar modelos distintos entre turnos, y no informa de tokens: el cambio por umbral de uso no le aplica.
-- Los permisos de Claude, Codex, Antigravity y Copilot se cambian en `~/.symphony/config.toml`, sección `[providers.permissions]` (los valores de la tabla son los predeterminados; reinicia el daemon con `symphony daemon stop` para aplicarlos):
+- Los permisos de Claude, Codex, Antigravity y Copilot se cambian en `~/.symphony/config.toml`, sección `[providers.permissions]` (los valores de la tabla son los predeterminados desde P15.5.S2: **acceso local total**, como una terminal normal; reinicia el daemon con `symphony daemon stop` para aplicarlos). Si prefieres restringir, descomenta y cambia:
   ```toml
   [providers.permissions]
-  claude_permission_mode = "acceptEdits"     # default · acceptEdits · plan · bypassPermissions
-  codex_sandbox = "workspace-write"          # read-only · workspace-write · danger-full-access
-  antigravity_skip_permissions = false       # true: cualquier comando, sin sandbox
-  copilot_allow_all_tools = false            # true: cualquier comando
+  claude_permission_mode = "bypassPermissions"   # default · acceptEdits · plan · bypassPermissions
+  codex_sandbox = "danger-full-access"           # read-only · workspace-write · danger-full-access
+  antigravity_skip_permissions = true            # false: pide permiso para los comandos
+  copilot_allow_all_tools = true                 # false: pide permiso para los comandos
   ```
   Un valor inválido deja los predeterminados y el daemon lo avisa en su log. Kimi y OpenCode no tienen modo restringido: no hay opción.
 - Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.
 - **OpenCode** toma como raíz del proyecto el repo principal, no el worktree del agente: Symphony le avisa en el prompt cuál es su directorio, pero un modelo puede escribir en el repo con una ruta absoluta (`docs/research/cli-opencode.md`). La lista de modelos de OpenCode se pide en segundo plano la primera vez (tarda ~7 s): al principio solo aparece `opencode/default`; haz `symphony providers refresh` unos segundos después. Sus modelos gratuitos son inestables; Claude y Codex siguen siendo los que mejor funcionan (`docs/research/opencode-y-calidad-de-proveedores.md`).
+
+### Trabajo que no es código (documentos, video, lo que sea)
+
+Cualquier carpeta puede ser un proyecto. `symphony init` la prepara y le dice a Symphony qué se trabaja ahí (cambia los valores por defecto, no el flujo):
+
+```bash
+cd mis-informes
+symphony init --kind document --git-init   # code (por defecto) · document · media · general
+symphony spawn "Redactar el informe de octubre" --profile @write
+```
+
+- `--git-init` crea un repositorio con un commit vacío si la carpeta no lo es: los worktrees de los agentes y los checkpoints se apoyan en git.
+- Profiles nuevos: `@write` (documentos), `@media` (orquestar herramientas de video, audio e imágenes) y `@research` (investigación). Un proyecto `document`, `media` o `general` los usa por defecto.
+- Sin `[validation]` en `project.toml` no hay gate de pruebas; los validators de plugin (`symphony plugin`) pueden revisar lo que importe.
+- Quien produce el video o el documento son las herramientas y skills que lleve el harness (siguiente sección) o tus servidores MCP; Symphony orquesta, guarda y versiona.
+
+### Harness de Symphony (mismas herramientas para todos los modelos)
+
+Por defecto cada CLI trabaja con sus propias herramientas. Con el harness de Symphony (ADR-0019) todos los modelos usan las mismas: leer, escribir, editar, buscar archivos y contenido, y shell, servidas por `symphony mcp serve`; las herramientas propias de cada CLI se apagan. Se activa en `~/.symphony/config.toml`:
+
+```toml
+[harness]
+mode = "symphony"   # native (por defecto) · symphony
+```
+
+Funciona con Claude Code, Codex, OpenCode, Copilot y Kimi; Antigravity no lo admite y sigue con las suyas. Verificado en vivo y con la comparación de costo en `docs/research/harness-2026-10.md`. Reinicia el daemon (`symphony daemon stop`) para aplicarlo.
 
 ### Sugerencias de modelo
 

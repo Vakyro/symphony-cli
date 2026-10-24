@@ -15,6 +15,10 @@ use crate::enums::{ContextMode, FailoverPolicy, PerformanceProfile};
 pub enum ConfigError {
     #[error("no se encontró el directorio del usuario; define SYMPHONY_HOME")]
     NoHome,
+    #[error(
+        "{0} es tu carpeta personal, no un proyecto: abre Symphony dentro de la carpeta del proyecto (o define SYMPHONY_HOME)"
+    )]
+    PersonalFolder(PathBuf),
     #[error("no se pudo leer o escribir {path}: {source}")]
     Io {
         path: PathBuf,
@@ -34,23 +38,96 @@ pub enum ConfigError {
     Invalid { path: PathBuf, message: String },
 }
 
-/// Directorio de estado de Symphony: `$SYMPHONY_HOME` o `~/.symphony`.
+/// Directorio de estado de Symphony (ADR-0018). Hay dos:
+/// - el **del proyecto**, `<proyecto>/.symphony`: base de datos, objetos, worktrees, logs y el
+///   socket de su daemon (un daemon por proyecto). Es lo que devuelve [`SymphonyHome::resolve`];
+/// - el **del usuario**, `~/.symphony`: `config.toml`, skills, plugins y cachés
+///   ([`SymphonyHome::user`]).
+///
+/// `$SYMPHONY_HOME` fuerza el del proyecto (y, si no hay `$SYMPHONY_USER_HOME`, también el del
+/// usuario: un solo directorio para todo, como antes de P15.5; es lo que usan los tests y los
+/// hooks que lanza el daemon).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymphonyHome(PathBuf);
 
+fn absolute_env(var: &str) -> Result<Option<PathBuf>, ConfigError> {
+    let Some(dir) = std::env::var_os(var).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    // Absoluta: el nombre del pipe/socket del daemon se deriva de esta ruta.
+    std::path::absolute(&dir)
+        .map(Some)
+        .map_err(|source| ConfigError::Io {
+            path: dir.into(),
+            source,
+        })
+}
+
+/// La raíz del proyecto que contiene `dir`: dentro de un worktree de Symphony
+/// (`<raíz>/.symphony/worktrees/…`), esa raíz; si no, el ancestro más cercano con
+/// `.symphony/project.toml` o con `.git`; si no hay ninguno, `dir` mismo.
+pub fn project_root_of(dir: &Path) -> PathBuf {
+    let in_worktree = dir.ancestors().find(|a| {
+        a.file_name().is_some_and(|n| n == "worktrees")
+            && a.parent()
+                .is_some_and(|p| p.file_name().is_some_and(|n| n == ".symphony"))
+    });
+    if let Some(root) = in_worktree
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .filter(|r| !r.as_os_str().is_empty())
+    {
+        return root.to_path_buf();
+    }
+    let by = |marker: &dyn Fn(&Path) -> bool| dir.ancestors().find(|a| marker(a));
+    by(&|a| project_config_path(a).is_file())
+        .or_else(|| by(&|a| a.join(".git").exists()))
+        .unwrap_or(dir)
+        .to_path_buf()
+}
+
 impl SymphonyHome {
+    /// El home del proyecto donde se trabaja: `$SYMPHONY_HOME` o el del directorio actual.
     pub fn resolve() -> Result<Self, ConfigError> {
-        if let Some(dir) = std::env::var_os("SYMPHONY_HOME").filter(|v| !v.is_empty()) {
-            // Absoluta: el nombre del pipe/socket del daemon se deriva de esta ruta.
-            let dir = std::path::absolute(&dir).map_err(|source| ConfigError::Io {
-                path: dir.into(),
-                source,
-            })?;
+        if let Some(dir) = absolute_env("SYMPHONY_HOME")? {
+            return Ok(Self(dir));
+        }
+        let cwd = std::env::current_dir().map_err(|source| ConfigError::Io {
+            path: PathBuf::from("."),
+            source,
+        })?;
+        Self::for_project(&cwd)
+    }
+
+    /// El home del proyecto que contiene `dir` (`<raíz>/.symphony`).
+    pub fn for_project(dir: &Path) -> Result<Self, ConfigError> {
+        let root = project_root_of(dir);
+        let home = Self(root.join(".symphony"));
+        // La carpeta personal no es un proyecto: su `.symphony` es el home del usuario.
+        if Self::user().is_ok_and(|u| u == home) {
+            return Err(ConfigError::PersonalFolder(root));
+        }
+        Ok(home)
+    }
+
+    /// El home del usuario: `$SYMPHONY_USER_HOME`, o `$SYMPHONY_HOME` si está definido (un solo
+    /// directorio), o `~/.symphony`.
+    pub fn user() -> Result<Self, ConfigError> {
+        if let Some(dir) = absolute_env("SYMPHONY_USER_HOME")?.or(absolute_env("SYMPHONY_HOME")?) {
             return Ok(Self(dir));
         }
         std::env::home_dir()
             .map(|h| Self(h.join(".symphony")))
             .ok_or(ConfigError::NoHome)
+    }
+
+    /// El home del usuario visto desde el daemon de `project_home`: `$SYMPHONY_USER_HOME` (que le
+    /// pasa quien lo arranca) o, sin él, el mismo directorio.
+    pub fn user_for(project_home: &Path) -> Self {
+        match absolute_env("SYMPHONY_USER_HOME") {
+            Ok(Some(dir)) => Self(dir),
+            _ => Self(project_home.to_path_buf()),
+        }
     }
 
     pub fn at(dir: impl Into<PathBuf>) -> Self {
@@ -95,6 +172,25 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub chat: ChatConfig,
     pub plan: PlanConfig,
+    pub harness: HarnessConfig,
+}
+
+/// `[harness]` (ADR-0019): con qué herramientas trabajan los modelos.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HarnessConfig {
+    pub mode: HarnessMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HarnessMode {
+    /// Las herramientas propias de cada CLI (comportamiento de siempre).
+    #[default]
+    Native,
+    /// Las de Symphony, iguales para todos los modelos; se apagan las nativas de los CLIs
+    /// que lo permiten.
+    Symphony,
 }
 
 /// `[plan]`: plan por fases y tareas de cada agente (ADR-0011, ADR-0013).
@@ -183,9 +279,10 @@ pub struct ProvidersConfig {
     pub permissions: ProviderPermissions,
 }
 
-/// `[providers.permissions]` (P11.5.S2). Los valores por defecto son los que Symphony usaba
-/// antes de que fueran configurables: editar sí, ejecutar comandos solo dentro del sandbox o
-/// con aprobación. Kimi y OpenCode no tienen modo restringido en `--print`/`run`: no hay opción.
+/// `[providers.permissions]` (P11.5.S2). Desde P15.5.S2 (decisión de Leo, 2026-10-23) el valor por
+/// defecto es **acceso local total**, como una terminal normal: el sandbox de Codex bloqueaba
+/// pnpm, la red y la lectura de los worktrees. Para restringir, cambiar los valores aquí.
+/// Kimi y OpenCode no tienen modo restringido en `--print`/`run`: no hay opción.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProviderPermissions {
@@ -202,10 +299,10 @@ pub struct ProviderPermissions {
 impl Default for ProviderPermissions {
     fn default() -> Self {
         Self {
-            claude_permission_mode: "acceptEdits".into(),
-            codex_sandbox: "workspace-write".into(),
-            antigravity_skip_permissions: false,
-            copilot_allow_all_tools: false,
+            claude_permission_mode: "bypassPermissions".into(),
+            codex_sandbox: "danger-full-access".into(),
+            antigravity_skip_permissions: true,
+            copilot_allow_all_tools: true,
         }
     }
 }
@@ -309,6 +406,12 @@ enabled = true
 phase_start = "auto"
 min_tasks_per_phase = 2
 
+[harness]
+# Con qué herramientas trabajan los modelos (ADR-0019): "native" (las de cada CLI) o
+# "symphony" (las de Symphony: leer, escribir, editar, buscar y shell, iguales para todos;
+# se apagan las nativas de los CLIs que lo permiten).
+mode = "native"
+
 [context]
 # Cuánto se comprime el contexto en un handoff: RAW · SAFE · BALANCED · AGGRESSIVE
 mode = "BALANCED"
@@ -324,12 +427,12 @@ quota_reserve = 0.20
 
 [providers.permissions]
 # Qué puede hacer cada CLI sin preguntarte. Los valores de abajo son los predeterminados:
-# editar archivos sí, ejecutar comandos solo dentro del sandbox o con aprobación.
-# Cambiarlos da más poder al agente (y más riesgo). Kimi y OpenCode no tienen modo restringido.
-# claude_permission_mode = "acceptEdits"       # default · acceptEdits · plan · bypassPermissions
-# codex_sandbox = "workspace-write"            # read-only · workspace-write · danger-full-access
-# antigravity_skip_permissions = false         # true: cualquier comando, sin sandbox
-# copilot_allow_all_tools = false              # true: cualquier comando
+# acceso local total, como una terminal normal (red, instalar paquetes, leer cualquier carpeta).
+# Para restringir, descomenta y cambia. Kimi y OpenCode no tienen modo restringido.
+# claude_permission_mode = "bypassPermissions" # default · acceptEdits · plan · bypassPermissions
+# codex_sandbox = "danger-full-access"         # read-only · workspace-write · danger-full-access
+# antigravity_skip_permissions = true          # false: pide permiso para los comandos
+# copilot_allow_all_tools = true               # false: pide permiso para los comandos
 
 [logging]
 # error · warn · info · debug · trace
@@ -571,6 +674,61 @@ pub struct WorktreeConfig {
 pub struct ProjectSection {
     pub name: String,
     pub default_branch: String,
+    /// Qué se trabaja aquí (ADR-0020). Cambia los valores por defecto, no el flujo.
+    #[serde(default)]
+    pub kind: ProjectKind,
+}
+
+/// Tipo de trabajo del proyecto (ADR-0020).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectKind {
+    /// Código: el gate de validación corre build y pruebas si el proyecto los define.
+    #[default]
+    Code,
+    /// Documentos (textos, hojas, presentaciones).
+    Document,
+    /// Video, audio, imágenes.
+    Media,
+    /// Cualquier otra cosa.
+    General,
+}
+
+impl ProjectKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Document => "document",
+            Self::Media => "media",
+            Self::General => "general",
+        }
+    }
+
+    /// El profile del router que mejor describe este trabajo cuando nadie eligió otro.
+    pub fn default_profile(self) -> &'static str {
+        match self {
+            Self::Code => "@code",
+            Self::Document => "@write",
+            Self::Media => "@media",
+            Self::General => "@research",
+        }
+    }
+}
+
+impl std::str::FromStr for ProjectKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().as_str() {
+            "code" => Ok(Self::Code),
+            "document" => Ok(Self::Document),
+            "media" => Ok(Self::Media),
+            "general" => Ok(Self::General),
+            other => Err(format!(
+                "`{other}` no es un tipo de proyecto (code, document, media, general)"
+            )),
+        }
+    }
 }
 
 pub fn project_config_path(project_root: &Path) -> PathBuf {
@@ -633,6 +791,7 @@ pub fn load_project(project_root: &Path) -> Result<Option<ProjectConfig>, Config
 pub struct ProjectInit<'a> {
     pub name: &'a str,
     pub default_branch: &'a str,
+    pub kind: ProjectKind,
     pub performance: PerformanceProfile,
     pub failover: FailoverPolicy,
 }
@@ -647,6 +806,7 @@ pub fn init_project(project_root: &Path, init: &ProjectInit) -> Result<ProjectCo
     let mut doc = DocumentMut::new();
     doc["project"]["name"] = toml_edit::value(init.name);
     doc["project"]["default_branch"] = toml_edit::value(init.default_branch);
+    doc["project"]["kind"] = toml_edit::value(init.kind.as_str());
     doc["performance"]["profile"] = toml_edit::value(init.performance.as_str());
     doc["routing"]["failover"] = toml_edit::value(init.failover.as_str());
     let text = format!("# Configuración de Symphony para este proyecto.\n{doc}");
@@ -710,6 +870,25 @@ mod tests {
     }
 
     #[test]
+    fn harness_mode_defaults_to_native_and_rejects_unknown_values() {
+        let (_d, home) = home();
+        std::fs::create_dir_all(home.root()).unwrap();
+        // El archivo creado con la plantilla trae el modo nativo.
+        assert_eq!(
+            load_or_create(&home).unwrap().harness.mode,
+            HarnessMode::Native
+        );
+        std::fs::write(home.config_path(), "[harness]\nmode = \"symphony\"\n").unwrap();
+        assert_eq!(
+            load_or_create(&home).unwrap().harness.mode,
+            HarnessMode::Symphony
+        );
+        std::fs::write(home.config_path(), "[harness]\nmode = \"otro\"\n").unwrap();
+        let err = load_or_create(&home).unwrap_err().to_string();
+        assert!(err.contains("otro") || err.contains("mode"), "{err}");
+    }
+
+    #[test]
     fn missing_keys_take_defaults() {
         let (_d, home) = home();
         std::fs::create_dir_all(home.root()).unwrap();
@@ -766,9 +945,9 @@ quota_reserve = 0.1
         );
         let p = load_or_create(&home).unwrap().providers.permissions;
         assert_eq!(p, ProviderPermissions::default());
-        assert_eq!(p.claude_permission_mode, "acceptEdits");
-        assert_eq!(p.codex_sandbox, "workspace-write");
-        assert!(!p.antigravity_skip_permissions && !p.copilot_allow_all_tools);
+        assert_eq!(p.claude_permission_mode, "bypassPermissions");
+        assert_eq!(p.codex_sandbox, "danger-full-access");
+        assert!(p.antigravity_skip_permissions && p.copilot_allow_all_tools);
 
         // Parcial: lo no dicho conserva el predeterminado.
         write(
@@ -780,7 +959,7 @@ copilot_allow_all_tools = true
         let p = load_or_create(&home).unwrap().providers.permissions;
         assert_eq!(p.codex_sandbox, "read-only");
         assert!(p.copilot_allow_all_tools);
-        assert_eq!(p.claude_permission_mode, "acceptEdits");
+        assert_eq!(p.claude_permission_mode, "bypassPermissions");
 
         // Inválidos: el error nombra la clave.
         for (text, key) in [
@@ -845,12 +1024,26 @@ antigravity_skip_permissions = \"si\"
         let init = ProjectInit {
             name: "arete-mobile",
             default_branch: "main",
+            kind: ProjectKind::Document,
             performance: PerformanceProfile::Eco,
             failover: FailoverPolicy::SameProvider,
         };
         let created = init_project(dir.path(), &init).unwrap();
         assert_eq!(created.project.name, "arete-mobile");
         assert_eq!(created.project.default_branch, "main");
+        assert_eq!(created.project.kind, ProjectKind::Document);
+        // Sin la clave (proyectos de antes) el tipo es código.
+        assert_eq!(
+            parse::<ProjectConfig>(
+                Path::new("project.toml"),
+                "[project]\nname = \"x\"\ndefault_branch = \"main\"\n"
+            )
+            .unwrap()
+            .project
+            .kind,
+            ProjectKind::Code
+        );
+        assert!("video".parse::<ProjectKind>().is_err());
         assert_eq!(
             created.performance.map(|p| p.profile),
             Some(PerformanceProfile::Eco)
@@ -873,6 +1066,30 @@ antigravity_skip_permissions = \"si\"
                 mode: ContextMode::Raw
             })
         );
+    }
+
+    #[test]
+    fn project_root_is_found_from_inside_the_project_or_its_worktrees() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("app");
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        // Con `.git`: la raíz del repo.
+        assert_eq!(project_root_of(&root.join("src/deep")), root);
+        // Con `project.toml`: manda sobre un `.git` más cercano (un repo anidado).
+        std::fs::create_dir_all(root.join("sub/.git")).unwrap();
+        std::fs::create_dir_all(root.join(".symphony")).unwrap();
+        std::fs::write(project_config_path(&root), "").unwrap();
+        assert_eq!(project_root_of(&root.join("sub")), root);
+        // Dentro de un worktree de Symphony (que tiene su propio `.git`): el proyecto dueño.
+        let wt = root.join(".symphony/worktrees/p1/agent-001");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: x").unwrap();
+        assert_eq!(project_root_of(&wt), root);
+        // Sin nada: el propio directorio.
+        let loose = d.path().join("suelta");
+        std::fs::create_dir_all(&loose).unwrap();
+        assert_eq!(project_root_of(&loose), loose);
     }
 
     #[test]

@@ -7,7 +7,8 @@ use serde_json::Value;
 
 /// Prompt de un handoff: lo lee el modelo nuevo, no es parte de la conversación.
 // ponytail: se reconoce por su frase inicial (crates/context/src/handoff.rs), igual que en la TUI.
-const HANDOFF_PROMPT: &str = "Retomas una tarea de código";
+// Sin «de código»: los handoffs viejos lo decían y los nuevos no (ADR-0020).
+const HANDOFF_PROMPT: &str = "Retomas una tarea";
 
 pub struct Meta<'a> {
     pub title: &'a str,

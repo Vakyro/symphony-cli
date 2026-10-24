@@ -5,6 +5,7 @@ import {
   markConnected,
   projectRoot,
   setProjectRoot,
+  pushProject,
   setTheme,
   setView,
   startBus,
@@ -32,8 +33,11 @@ export default function App() {
   onMount(() => {
     const stop = startBus();
     onCleanup(stop);
-    // Como `symphony`: si el daemon no está, se arranca.
-    void transport().ensureDaemon().then(markConnected).catch(() => undefined);
+    // Como `symphony`: si el daemon del proyecto no está, se arranca.
+    void (projectRoot().trim() ? pushProject(projectRoot()) : Promise.resolve())
+      .then(() => transport().ensureDaemon())
+      .then(markConnected)
+      .catch(() => undefined);
   });
 
   createMemo(() => {

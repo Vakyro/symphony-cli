@@ -32,7 +32,7 @@ const PROCESS_SAMPLE_EVERY: Duration = Duration::from_secs(5);
 
 /// Límites del SO según `[performance]` del `config.toml` (se relee en cada lanzamiento).
 pub(crate) fn os_limits(home: &Path) -> symphony_process::Limits {
-    let limits = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home))
+    let limits = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home))
         .map(|c| symphony_scheduler::OsLimits::from_config(&c.performance))
         .unwrap_or_default();
     symphony_process::Limits {
@@ -229,9 +229,16 @@ impl Runtime {
             return Vec::new();
         };
         let root = PathBuf::from(&project.root_path);
-        let skills = shared::scan_skills(&self.home, Some(&root));
+        let skills = shared::scan_skills(
+            symphony_core::SymphonyHome::user_for(&self.home).root(),
+            Some(&root),
+        );
         let mut warnings = Vec::new();
-        let servers = shared::scan_mcp(&self.home, Some(&root), &mut warnings);
+        let servers = shared::scan_mcp(
+            symphony_core::SymphonyHome::user_for(&self.home).root(),
+            Some(&root),
+            &mut warnings,
+        );
         for w in &warnings {
             tracing::warn!("{w}");
         }
@@ -285,7 +292,23 @@ impl Runtime {
             ("SYMPHONY_TASK_ID".into(), l.task_id.to_string()),
             ("SYMPHONY_PROVIDER".into(), l.provider_id.clone()),
             ("SYMPHONY_HOME".into(), self.home.display().to_string()),
+            ("SYMPHONY_WORKTREE".into(), l.worktree.display().to_string()),
+            (
+                "SYMPHONY_USER_HOME".into(),
+                symphony_core::SymphonyHome::user_for(&self.home)
+                    .root()
+                    .display()
+                    .to_string(),
+            ),
         ];
+        // Harness de Symphony (ADR-0019): el modelo trabaja con las herramientas del broker.
+        let harness =
+            symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&self.home))
+                .map(|c| c.harness.mode)
+                .unwrap_or_default();
+        if harness == symphony_core::HarnessMode::Symphony {
+            env.push((symphony_adapter_common::ENV_HARNESS.into(), "1".into()));
+        }
         env.extend(self.shared_env(&l).await);
         let spawn_req = SpawnRequest {
             worktree: l.worktree.clone(),

@@ -199,6 +199,9 @@ async fn reconcile_and_start(rt: &Runtime, task: TaskId, outcome: Finished) {
 /// Un agente liberado arranca solo si ya sabe con qué modelo (exacto o profile); si quedó
 /// «decidir después», espera en `READY` a que el usuario elija.
 pub async fn start_released(rt: &Runtime, agent_id: AgentId) {
+    // Mismo candado que `fill_batches`: sin él, el reactor y el repaso periódico calculan el mismo
+    // cupo a la vez y arrancan más agentes de los que caben (carrera de P11.5.S5 vista con carga).
+    let _one_at_a_time = rt.batch_fill.lock().await;
     // Un agente de un lote espera si la cuota de ahora no deja cupo; `fill_batches` lo arranca.
     if !rt.batch_has_room_for(agent_id) {
         rt.hold_for_batch(agent_id).await;

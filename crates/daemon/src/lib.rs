@@ -16,6 +16,7 @@ pub mod health;
 pub mod learning;
 pub mod logging;
 pub mod merge;
+pub mod migrate;
 pub mod plan;
 pub mod plugins;
 pub mod providers;

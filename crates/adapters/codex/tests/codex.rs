@@ -348,3 +348,67 @@ fn sandbox_comes_from_the_config() {
     assert_eq!(&args[..3], ["exec", "-s", "read-only"]);
     assert!(!args.iter().any(|a| a == "workspace-write"), "{args:?}");
 }
+
+/// ADR-0019: en el harness de Symphony Codex pierde el shell y la lectura de imágenes; el broker
+/// recibe la marca para sumar sus herramientas. Sin la marca todo queda igual.
+#[test]
+fn the_symphony_harness_turns_off_codexs_own_tools() {
+    let hook = HookCommand {
+        program: "symphony".into(),
+        args: vec!["hook".into(), "emit".into()],
+    };
+    let args_for = |env: Vec<(String, String)>| -> Vec<String> {
+        let req = SpawnRequest {
+            worktree: std::env::temp_dir(),
+            model: "gpt-6-luna".into(),
+            prompt: "hola".into(),
+            session_id: None,
+            hook: Some(hook.clone()),
+            env,
+        };
+        adapter()
+            .spawn_spec(&req)
+            .unwrap()
+            .args
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    };
+    let on = args_for(vec![("SYMPHONY_HARNESS".into(), "1".into())]);
+    let disabled: Vec<&String> = on
+        .iter()
+        .zip(on.iter().skip(1))
+        .filter(|(k, _)| *k == "--disable")
+        .map(|(_, v)| v)
+        .collect();
+    assert_eq!(
+        disabled,
+        ["shell_tool", "unified_exec", "view_image"],
+        "{on:?}"
+    );
+    assert!(on.iter().any(
+        |o| o.contains("mcp_servers.symphony-context.env={") && o.contains("SYMPHONY_HARNESS")
+    ));
+    assert!(!args_for(vec![]).iter().any(|a| a == "--disable"));
+}
+
+/// Sin broker (sin hook, o `SYMPHONY_NO_MCP`) no se apagan las herramientas: quedaría sin ninguna.
+#[test]
+fn the_harness_keeps_codexs_tools_when_there_is_no_broker() {
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "gpt-6-luna".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        hook: None,
+        env: vec![("SYMPHONY_HARNESS".into(), "1".into())],
+    };
+    let args: Vec<String> = adapter()
+        .spawn_spec(&req)
+        .unwrap()
+        .args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    assert!(!args.iter().any(|a| a == "--disable"), "{args:?}");
+}
