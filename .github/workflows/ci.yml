@@ -109,6 +109,8 @@ jobs:
   docs:
     name: docs (typos + lychee)
     runs-on: ubuntu-latest
+    # Hasta revisar la primera corrida: el repo es casi todo español y typos trae diccionario inglés.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: typos
