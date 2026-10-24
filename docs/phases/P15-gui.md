@@ -39,3 +39,14 @@ GUI funcional sobre IPC, con las 36 vistas, tests de componentes, bundles locale
 ## Notas para el siguiente agente
 - Para probar con un daemon real: `pnpm tauri dev` en `apps/gui` (necesita `symphony` y `symphonyd` instalados). La raíz del proyecto se elige en el campo «Proyecto» de la cabecera.
 - Cambiar un método IPC del daemon exige revisar `views.tsx`; los parámetros de proyecto son `project_root`.
+
+## Revisión de código (S6, 2026-10-23)
+10 hallazgos: 9 corregidos y 1 era falso.
+- `main.rs`: sin `expect` ni ruta relativa de respaldo; un error de arranque sale con código 1 y mensaje.
+- `bridge`: `ensure_daemon` con un solo arranque a la vez y reintentos de conexión (5 s); `subscribe_with` avisa cuando la suscripción queda hecha.
+- `forward_events`: avisa la caída una vez por corte y emite `gui.connected` al volver (las vistas se refrescan).
+- `state.ts`: eventos del bus agrupados (300 ms); `null` es un resultado válido; el sondeo de 15 s no corre en vistas no vivas ni sin parámetros; el tema guardado se valida.
+- `tauri.conf.json`: `devCsp` con el servidor de Vite (puerto 1420).
+- CI: `fmt` y `clippy -D warnings --locked` de `src-tauri`, y `tauri build -- --locked`.
+- Falso: `view` guardado inválido. `viewById` ya cae a la vista por defecto.
+- Sin test nuevo para el reintento de conexión y el arranque único del puente (necesitan un `symphony` falso); anotado como deuda para P13.

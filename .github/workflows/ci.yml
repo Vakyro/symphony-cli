@@ -94,7 +94,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/gui/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm tauri build
+      # src-tauri es un workspace aparte: el gate del repo no lo cubre.
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked -- -D warnings
+      - run: pnpm tauri build -- --locked
       - uses: actions/upload-artifact@v4
         with:
           name: symphony-gui-${{ matrix.os }}

@@ -1,12 +1,12 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-12 · por claude-code/sonnet-5.5
-**Fase actual:** P15 · GUI de escritorio (rama `phase/p15-gui`): cierre pendiente (gate, revisión de código, merge, tag `p15-done`)
-**Paso actual:** P15.S6 · Cierre
+**Actualizado:** 2026-10-23 · por claude-code/sonnet-5.5
+**Fase actual:** P15.5 · Cambios de rumbo (rama `phase/p155-cambios-de-rumbo`), S1 · modelos de las seis suscripciones
+**Paso actual:** P15.5.S1 · Modelos
 **Estado del paso:** código hecho; falta gate, revisión y merge
 **En curso por:** nadie
 
-**Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P13 → P16**. El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
+**Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
 - `cargo xtask check`: ✅ al cierre de P14 (634 tests; el gate quita `SYMPHONY_LIVE`, nunca corre live).
@@ -34,7 +34,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P14 · Sugerencias de modelo** (`phase/p14-sugerencias`, `docs/phases/P14-sugerencias.md`): ✅ S1 · ✅ S2 · ✅ S3 · ✅ S4 (ML rechazado, ADR-0017) · ✅ S5 cierre (`p14-done`)
 
-**P15 · GUI de escritorio** (`phase/p15-gui`, `docs/phases/P15-gui.md`): ✅ S1 · ✅ S2 · ✅ S3 · 🟡 S4 (falta revisión visual) · ✅ S5 · ⏳ S6 cierre (`p15-done`, pendiente)
+**P15 · GUI de escritorio** (`phase/p15-gui`, `docs/phases/P15-gui.md`): ✅ S1 · ✅ S2 · ✅ S3 · 🟡 S4 (falta revisión visual) · ✅ S5 · ✅ S6 cierre (`p15-done`)
 
 **P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · S1 modelos de las 6 suscripciones · S2 Codex/Copilot/agy sin bloqueos de sandbox · S3 estado y daemon por proyecto · S4 harness completo · S5 más allá del código · S6 cierre (`p155-done`)
 
@@ -94,5 +94,5 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P11.5 | ✅ (live de pago pendientes → Para Leo) | p115-done |
 | P12 | ✅ | p12-done |
 | P14 | ✅ | p14-done |
-| P15 | ⏳ cierre pendiente (gate, revisión, merge, tag) | |
+| P15 | ✅ (revisión visual → Para Leo) | p15-done |
 | P13, P16 | ⏳ en ese orden (ADR-0014) | |

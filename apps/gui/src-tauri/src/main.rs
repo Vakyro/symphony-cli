@@ -3,6 +3,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde_json::{Value, json};
 use symphony_gui_bridge::{Bridge, BridgeError};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -40,29 +43,57 @@ async fn daemon_ensure(daemon: State<'_, Daemon>) -> Result<(), Value> {
 /// Reemite el bus al WebView; si se corta, avisa y reintenta (el daemon puede reiniciarse).
 fn forward_events(app: AppHandle, bridge: Bridge) {
     tauri::async_runtime::spawn(async move {
+        // Se avisa una vez por caída, no en cada reintento.
+        let mut announced = false;
         loop {
             let emit = app.clone();
+            let ready = app.clone();
+            let was_up = Arc::new(AtomicBool::new(false));
+            let up = was_up.clone();
             let why = bridge
-                .subscribe(move |ev| {
-                    let _ = emit.emit(
-                        "symphony://event",
-                        json!({ "topic": ev.topic, "payload": ev.payload }),
-                    );
-                })
+                .subscribe_with(
+                    move || {
+                        up.store(true, Ordering::Relaxed);
+                        // Evento sintético: las vistas se refrescan y la UI vuelve a «conectado».
+                        let _ = ready.emit(
+                            "symphony://event",
+                            json!({ "topic": "gui.connected", "payload": null }),
+                        );
+                    },
+                    move |ev| {
+                        let _ = emit.emit(
+                            "symphony://event",
+                            json!({ "topic": ev.topic, "payload": ev.payload }),
+                        );
+                    },
+                )
                 .await;
-            let _ = app.emit("symphony://disconnected", why.to_string());
+            if was_up.load(Ordering::Relaxed) {
+                announced = false;
+            }
+            if !announced {
+                let _ = app.emit("symphony://disconnected", why.to_string());
+                announced = true;
+            }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     });
 }
 
+/// Sin consola (`windows_subsystem`), un error de arranque solo se ve en el código de salida.
+fn die(msg: impl std::fmt::Display) -> ! {
+    eprintln!("symphony-gui: {msg}");
+    std::process::exit(1)
+}
+
 fn main() {
-    let home = symphony_core::SymphonyHome::resolve()
-        .map(|h| h.root().to_path_buf())
-        .unwrap_or_else(|_| std::path::PathBuf::from(".symphony"));
+    let home = match symphony_core::SymphonyHome::resolve() {
+        Ok(h) => h.root().to_path_buf(),
+        Err(e) => die(format!("no pude ubicar ~/.symphony: {e}")),
+    };
     let bridge = Bridge::new(home);
     let events = bridge.clone();
-    tauri::Builder::default()
+    let built = tauri::Builder::default()
         .manage(Daemon(bridge))
         .setup(move |app| {
             forward_events(app.handle().clone(), events.clone());
@@ -70,6 +101,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![ipc_call, daemon_ensure])
-        .run(tauri::generate_context!())
-        .expect("error al iniciar la GUI de Symphony");
+        .run(tauri::generate_context!());
+    if let Err(e) = built {
+        die(format!("error al iniciar la GUI: {e}"));
+    }
 }

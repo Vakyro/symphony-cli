@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -12,6 +13,8 @@ use symphony_protocol::{Connection, Message, Outcome, Request, Subscribe};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const START_TIMEOUT: Duration = Duration::from_secs(35);
+const CONNECT_RETRIES: u32 = 20;
+const CONNECT_RETRY_EVERY: Duration = Duration::from_millis(250);
 
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeError {
@@ -34,11 +37,16 @@ pub struct BusEvent {
 #[derive(Debug, Clone)]
 pub struct Bridge {
     home: PathBuf,
+    /// Un solo `ensure_daemon` a la vez: el arranque de la GUI y el botón «Arrancarlo» coinciden.
+    starting: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Bridge {
     pub fn new(home: impl Into<PathBuf>) -> Self {
-        Self { home: home.into() }
+        Self {
+            home: home.into(),
+            starting: Arc::default(),
+        }
     }
 
     pub fn home(&self) -> &Path {
@@ -85,7 +93,17 @@ impl Bridge {
 
     /// Se suscribe al bus (`agent.event`) y llama a `on_event` por cada evento hasta que la
     /// conexión se corte (devuelve entonces el motivo).
-    pub async fn subscribe(&self, mut on_event: impl FnMut(BusEvent)) -> BridgeError {
+    pub async fn subscribe(&self, on_event: impl FnMut(BusEvent)) -> BridgeError {
+        self.subscribe_with(|| {}, on_event).await
+    }
+
+    /// Como [`Bridge::subscribe`], y avisa con `on_ready` en cuanto la suscripción queda hecha
+    /// (la GUI lo usa para saber que el daemon volvió).
+    pub async fn subscribe_with(
+        &self,
+        on_ready: impl FnOnce(),
+        mut on_event: impl FnMut(BusEvent),
+    ) -> BridgeError {
         let mut conn = match self.connect().await {
             Ok(c) => c,
             Err(e) => return e,
@@ -94,6 +112,7 @@ impl Bridge {
         if let Err(e) = conn.send(&Message::Subscribe(sub)).await {
             return BridgeError::Unavailable(e.to_string());
         }
+        on_ready();
         loop {
             match conn.recv().await {
                 Ok(Some(Message::Event(e))) => on_event(BusEvent {
@@ -113,6 +132,7 @@ impl Bridge {
     /// de este proceso) y espera a que conteste. `symphony` se busca junto al ejecutable actual
     /// y en el PATH (o `$SYMPHONY_BIN`).
     pub async fn ensure_daemon(&self) -> Result<(), BridgeError> {
+        let _one_at_a_time = self.starting.lock().await;
         if self.connect().await.is_ok() {
             return Ok(());
         }
@@ -137,7 +157,18 @@ impl Bridge {
             Ok(Ok(s)) if !s.success() => Err(BridgeError::Unavailable(format!(
                 "`symphony daemon start` terminó con {s}"
             ))),
-            Ok(Ok(_)) => self.connect().await.map(|_| ()),
+            // `daemon start` puede volver antes de que el socket escuche: se reintenta un rato.
+            Ok(Ok(_)) => {
+                let mut last = BridgeError::Unavailable("el daemon no contestó".into());
+                for _ in 0..CONNECT_RETRIES {
+                    match self.connect().await {
+                        Ok(_) => return Ok(()),
+                        Err(e) => last = e,
+                    }
+                    tokio::time::sleep(CONNECT_RETRY_EVERY).await;
+                }
+                Err(last)
+            }
         }
     }
 }

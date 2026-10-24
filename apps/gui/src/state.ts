@@ -22,7 +22,9 @@ function persist(key: string, value: string) {
 
 export type Theme = "auto" | "light" | "dark";
 
-const [theme, setThemeSignal] = createSignal<Theme>(stored("theme", "auto") as Theme);
+const THEMES: Theme[] = ["auto", "light", "dark"];
+const savedTheme = stored("theme", "auto") as Theme;
+const [theme, setThemeSignal] = createSignal<Theme>(THEMES.includes(savedTheme) ? savedTheme : "auto");
 export { theme };
 export function setTheme(t: Theme) {
   setThemeSignal(t);
@@ -56,14 +58,24 @@ const [connected, setConnected] = createSignal(true);
 export { connected };
 
 // Cada evento del bus invalida las vistas abiertas (el daemon es la fuente de verdad).
+// Un agente en marcha emite muchos eventos por segundo: se agrupan en un solo refresco.
+const BUS_DEBOUNCE_MS = 300;
 const [tick, setTick] = createSignal(0);
 export function startBus(): () => void {
   const t = transport();
-  const offEvent = t.onEvent(() => setTick((n) => n + 1));
+  let pending: ReturnType<typeof setTimeout> | undefined;
+  const offEvent = t.onEvent(() => {
+    if (pending === undefined)
+      pending = setTimeout(() => {
+        pending = undefined;
+        setTick((n) => n + 1);
+      }, BUS_DEBOUNCE_MS);
+  });
   const offDown = t.onDisconnected(() => setConnected(false));
   return () => {
     offEvent();
     offDown();
+    clearTimeout(pending);
   };
 }
 export const busTick = tick;
@@ -101,14 +113,17 @@ export function useCall<T = unknown>(
   let last: T | undefined;
   createEffect(() => {
     const r = res();
-    if (r && "ok" in r && r.ok !== undefined) last = r.ok;
+    if (r && "ok" in r) last = r.ok;
   });
-  const timer = setInterval(() => refetch(), 15000);
+  // Respaldo por si se pierde algún evento; no aplica a lo que no es en vivo ni a lo que no se pide.
+  const timer = setInterval(() => {
+    if (opts.live !== false && params() !== null) void refetch();
+  }, 15000);
   onCleanup(() => clearInterval(timer));
   return {
     data: () => {
       const r = res();
-      return r && r.ok !== undefined ? r.ok : last;
+      return r && "ok" in r ? r.ok : last;
     },
     error: () => res()?.err,
     loading: () => res.loading,
