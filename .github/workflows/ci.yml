@@ -119,3 +119,31 @@ jobs:
         uses: lycheeverse/lychee-action@v2.9.0
         with:
           args: --offline --no-progress '**/*.md'
+
+  # P13.S5: cobertura con cargo-llvm-cov en CI.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    # Sin umbral que falle todavía: se revisa de forma informativa en CI.
+    continue-on-error: true
+    env:
+      SYMPHONY_LIVE: ""
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2.87.30
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - name: Correr pruebas y generar lcov.info
+        run: cargo llvm-cov nextest --workspace --lcov --output-path lcov.info
+        env:
+          SYMPHONY_LIVE: ""
+      - name: Imprimir resumen por crate
+        run: cargo llvm-cov report --workspace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov.info
+          path: lcov.info
+          if-no-files-found: error
