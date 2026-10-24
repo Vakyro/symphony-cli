@@ -285,7 +285,13 @@ fn shell_command(command: &str) -> tokio::process::Command {
         let git_bash = ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"]
             .iter()
             .filter_map(std::env::var_os)
-            .map(|d| PathBuf::from(d).join("Git").join("bin").join("bash.exe"))
+            .flat_map(|d| {
+                let d = PathBuf::from(d);
+                [
+                    d.join("Git").join("bin").join("bash.exe"),
+                    d.join("Programs").join("Git").join("bin").join("bash.exe"),
+                ]
+            })
             .find(|p| p.is_file());
         if let Some(bash) = git_bash {
             let mut c = tokio::process::Command::new(bash);
@@ -313,13 +319,19 @@ pub async fn shell(
     timeout: Option<Duration>,
 ) -> Result<String, String> {
     let dir = cwd.map_or_else(|| root.to_path_buf(), |c| resolve(root, c));
-    let timeout = timeout.unwrap_or(SHELL_TIMEOUT).min(SHELL_TIMEOUT_MAX);
+    let timeout = timeout
+        .filter(|t| !t.is_zero())
+        .unwrap_or(SHELL_TIMEOUT)
+        .min(SHELL_TIMEOUT_MAX);
     let mut cmd = shell_command(command);
     cmd.current_dir(&dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    // Su propio grupo de procesos: al vencer el tiempo se mata el grupo entero, no solo el shell.
+    #[cfg(unix)]
+    cmd.process_group(0);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("no pude lanzar el shell en {}: {e}", dir.display()))?;
@@ -401,8 +413,8 @@ fn kill_tree(pid: Option<u32>) {
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("pkill")
-            .args(["-KILL", "-P", &pid.to_string()])
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", "--", &format!("-{pid}")])
             .status();
     }
 }

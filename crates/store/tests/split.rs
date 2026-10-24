@@ -75,3 +75,14 @@ fn a_split_keeps_one_project_and_everything_global() {
     drop(conn);
     symphony_store::open(&target).unwrap();
 }
+
+#[test]
+fn a_failed_split_leaves_no_database_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("alfa.db");
+    // La base de origen no existe: falla antes de terminar, y no queda nada que un reintento
+    // pueda dar por bueno.
+    assert!(split_project(&dir.path().join("no-existe.db"), &target, "alfa").is_err());
+    assert!(!target.exists());
+    assert!(!target.with_extension("splitting").exists());
+}

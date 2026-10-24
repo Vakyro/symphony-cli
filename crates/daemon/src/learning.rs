@@ -17,7 +17,9 @@ use symphony_store::suggestions;
 static SHARED: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Cuánto espera una escritura si otro daemon está escribiendo en la base compartida.
-const SHARED_BUSY: Duration = Duration::from_secs(3);
+// Corto: se escribe dentro de la transacción que cierra un run, y esa transacción es la del único
+// escritor del proyecto. Si la base compartida está ocupada se salta la muestra.
+const SHARED_BUSY: Duration = Duration::from_millis(500);
 
 /// Dónde está la base compartida (`None` = no se comparte, como en los tests de un solo proceso).
 pub fn set_shared_db(path: Option<PathBuf>) {
@@ -67,7 +69,7 @@ fn apply_total(
     conn.execute(
         "UPDATE profile_models
          SET sample_count = ?3, outcome_score_sum = ?4, learned_adjustment = ?5
-         WHERE profile_id = ?1 AND model_id = ?2",
+         WHERE profile_id = ?1 AND model_id = ?2 AND sample_count <= ?3",
         params![profile, model, n, sum, learning::learned_adjustment(n, sum)],
     )?;
     Ok(())
@@ -201,5 +203,21 @@ mod tests {
         share(&b, run, "@code", "m", Outcome::Failed);
         share(&b, run, "@code", "m", Outcome::Failed);
         assert_eq!(row(&b).0, learning::MIN_SAMPLES + 1);
+    }
+
+    /// Lo que un proyecto aprendió antes de compartir no se pierde si el total compartido es menor.
+    #[test]
+    fn the_shared_total_never_makes_a_project_forget() {
+        let dir = tempfile::tempdir().unwrap();
+        set_shared_db(Some(dir.path().join("learning.db")));
+        let a = project_db();
+        a.execute(
+            "UPDATE profile_models SET sample_count = 40, outcome_score_sum = 30.0",
+            [],
+        )
+        .unwrap();
+        share(&a, RunId::new(), "@code", "m", Outcome::Clean);
+        sync_from_shared(&a);
+        assert_eq!(row(&a).0, 40);
     }
 }

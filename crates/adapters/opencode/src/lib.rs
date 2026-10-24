@@ -151,7 +151,7 @@ pub fn run_config(req: &SpawnRequest) -> Value {
     let mut cfg = json!({ "permission": { "external_directory": external } });
     // Harness de Symphony (ADR-0019): se niegan las herramientas propias de OpenCode y el modelo
     // trabaja con las del broker (verificado en vivo con opencode 2.1.4).
-    if symphony_adapter_common::harness_on(req) {
+    if symphony_adapter_common::harness_on(req) && symphony_adapter_common::broker(req).is_some() {
         for tool in OPENCODE_NATIVE_TOOLS {
             cfg["permission"][tool] = json!("deny");
         }

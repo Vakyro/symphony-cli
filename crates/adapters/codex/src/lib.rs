@@ -202,7 +202,9 @@ impl CodexAdapter {
         }
         // Harness de Symphony (ADR-0019): sin el shell ni la lectura de imágenes de Codex, solo
         // las herramientas del broker (verificado en vivo con codex 0.164).
-        if symphony_adapter_common::harness_on(req) {
+        if symphony_adapter_common::harness_on(req)
+            && symphony_adapter_common::broker(req).is_some()
+        {
             for feature in CODEX_NATIVE_TOOLS {
                 spec = spec.arg("--disable").arg(feature);
             }

@@ -303,7 +303,11 @@ pub async fn serve(home: PathBuf) -> miette::Result<()> {
     }
     let broker = Broker {
         tool_router,
-        root: std::env::current_dir().into_diagnostic()?,
+        // El worktree del agente lo pone el daemon; el directorio actual es solo el respaldo.
+        root: match env("SYMPHONY_WORKTREE") {
+            Some(w) => PathBuf::from(w),
+            None => std::env::current_dir().into_diagnostic()?,
+        },
         home,
         agent: env("SYMPHONY_AGENT_ID"),
         run: env("SYMPHONY_RUN_ID"),

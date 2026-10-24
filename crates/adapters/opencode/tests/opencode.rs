@@ -466,6 +466,10 @@ fn a_finished_background_query_is_promoted_and_a_broken_one_is_dropped() {
 #[test]
 fn the_symphony_harness_denies_opencodes_own_tools() {
     let mut req = request("default");
+    req.hook = Some(symphony_adapter_common::HookCommand {
+        program: "symphony".into(),
+        args: vec!["hook".into(), "emit".into()],
+    });
     req.env.push(("SYMPHONY_HARNESS".into(), "1".into()));
     let cfg = run_config(&req);
     for tool in [
@@ -478,4 +482,13 @@ fn the_symphony_harness_denies_opencodes_own_tools() {
 
     let plain = run_config(&request("default"));
     assert!(plain["permission"].get("bash").is_none());
+}
+
+/// Sin broker no se niegan las herramientas de OpenCode: el modelo se quedaría sin ninguna.
+#[test]
+fn the_harness_keeps_opencodes_tools_when_there_is_no_broker() {
+    let mut req = request("default");
+    req.hook = None;
+    req.env.push(("SYMPHONY_HARNESS".into(), "1".into()));
+    assert!(run_config(&req)["permission"].get("bash").is_none());
 }

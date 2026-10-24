@@ -391,3 +391,24 @@ fn the_symphony_harness_turns_off_codexs_own_tools() {
     ));
     assert!(!args_for(vec![]).iter().any(|a| a == "--disable"));
 }
+
+/// Sin broker (sin hook, o `SYMPHONY_NO_MCP`) no se apagan las herramientas: quedaría sin ninguna.
+#[test]
+fn the_harness_keeps_codexs_tools_when_there_is_no_broker() {
+    let req = SpawnRequest {
+        worktree: std::env::temp_dir(),
+        model: "gpt-6-luna".into(),
+        prompt: "hola".into(),
+        session_id: None,
+        hook: None,
+        env: vec![("SYMPHONY_HARNESS".into(), "1".into())],
+    };
+    let args: Vec<String> = adapter()
+        .spawn_spec(&req)
+        .unwrap()
+        .args
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+    assert!(!args.iter().any(|a| a == "--disable"), "{args:?}");
+}

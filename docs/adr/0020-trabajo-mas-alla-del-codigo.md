@@ -38,3 +38,4 @@ Recortado, a propósito, con su razón:
 - **Tipo por tarea:** solo por proyecto. Hasta que alguien mezcle tipos en un mismo proyecto no hace falta.
 - **Binarios grandes en el almacén de objetos con un puntero en git:** sin hacer. Exige materializar el archivo real en cada worktree y entender el puntero en el merge; es un paso propio. Mientras tanto git los guarda como cualquier archivo (o `git lfs` si el proyecto lo tiene).
 - Los handoffs que dicen «Retomas una tarea de código» siguen reconociéndose (la marca es el prefijo común «Retomas una tarea»).
+- El profile por defecto según el tipo se lee al arrancar el daemon (cambiar `kind` o correr `symphony init` con el daemon vivo aplica tras `symphony daemon stop`), y solo cuando `routing.default_profile` es el `@code` de fábrica: quien lo fija a mano a `@code` no se distingue de quien no lo tocó.

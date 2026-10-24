@@ -4881,7 +4881,15 @@ async fn a_batch_cap_follows_the_quota_that_is_known_now() {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "D nunca quedó esperando cupo"
+            "D nunca quedó esperando cupo; agentes: {:?}",
+            [&a, &b, &c, &d].map(|x| {
+                let state: String = one(&e, &format!("SELECT state FROM agents WHERE id = '{x}'"));
+                let why: Option<String> = one(
+                    &e,
+                    &format!("SELECT state_reason FROM agents WHERE id = '{x}'"),
+                );
+                (state, why)
+            })
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

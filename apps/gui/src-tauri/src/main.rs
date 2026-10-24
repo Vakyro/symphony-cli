@@ -37,7 +37,11 @@ fn set_project(bridge: &Bridge, params: &Value) -> Result<Value, Value> {
             bridge.set_home(Some(home.root().to_path_buf()));
             Ok(json!({ "home": home.root().display().to_string() }))
         }
-        Err(e) => Err(json!({ "code": "invalid_project", "message": e.to_string() })),
+        Err(e) => {
+            // Mejor sin proyecto que seguir mostrando (y tocando) el anterior bajo otro nombre.
+            bridge.set_home(None);
+            Err(json!({ "code": "invalid_project", "message": e.to_string() }))
+        }
     }
 }
 

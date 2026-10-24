@@ -292,6 +292,7 @@ impl Runtime {
             ("SYMPHONY_TASK_ID".into(), l.task_id.to_string()),
             ("SYMPHONY_PROVIDER".into(), l.provider_id.clone()),
             ("SYMPHONY_HOME".into(), self.home.display().to_string()),
+            ("SYMPHONY_WORKTREE".into(), l.worktree.display().to_string()),
             (
                 "SYMPHONY_USER_HOME".into(),
                 symphony_core::SymphonyHome::user_for(&self.home)

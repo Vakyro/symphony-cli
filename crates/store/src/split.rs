@@ -23,6 +23,25 @@ pub fn list_projects(legacy: &Path) -> rusqlite::Result<Vec<(String, String)>> {
 /// Crea `target` con solo lo de `project_id`. Devuelve cuántas filas quitó. `target` no puede
 /// existir.
 pub fn split_project(legacy: &Path, target: &Path, project_id: &str) -> rusqlite::Result<usize> {
+    // Se trabaja en un archivo aparte y solo al terminar bien pasa a ser la base del proyecto:
+    // una falla a medias no deja una base con filas de otros proyectos que un reintento daría
+    // por buena.
+    let work = target.with_extension("splitting");
+    let _ = std::fs::remove_file(&work);
+    let result = split_into(legacy, &work, project_id).and_then(|removed| {
+        std::fs::rename(&work, target)
+            .map(|()| removed)
+            .map_err(|e| {
+                rusqlite::Error::InvalidParameterName(format!("no se pudo mover la base: {e}"))
+            })
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&work);
+    }
+    result
+}
+
+fn split_into(legacy: &Path, target: &Path, project_id: &str) -> rusqlite::Result<usize> {
     {
         let src = Connection::open_with_flags(legacy, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         src.execute("VACUUM INTO ?1", [target.to_string_lossy()])?;

@@ -48,8 +48,10 @@ pub fn split_all(user_home: &Path) -> Result<Vec<String>, String> {
         Err(e) => lines.push(format!("aviso: no se pudo compartir lo aprendido: {e}")),
     }
     lines.push(format!(
-        "la base global {} sigue ahí, sin usarse; bórrala cuando confirmes que todo está bien.",
-        legacy.display()
+        "la base global {} sigue ahí, sin usarse. Los worktrees de los agentes que ya existían siguen en {}: \
+         no borres esa carpeta mientras los uses (los agentes nuevos usan <proyecto>/.symphony/worktrees).",
+        legacy.display(),
+        user_home.join("worktrees").display()
     ));
     Ok(lines)
 }

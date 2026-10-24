@@ -44,7 +44,11 @@ export { projectRoot };
 export function setProjectRoot(r: string) {
   setRootSignal(r);
   persist("root", r);
-  void pushProject(r);
+  // Cada proyecto tiene su daemon: se apunta el puente y se arranca el de esa carpeta.
+  void pushProject(r)
+    .then(() => (r.trim() ? transport().ensureDaemon() : undefined))
+    .then(markConnected)
+    .catch(() => undefined);
 }
 
 /** Cada proyecto tiene su daemon: le dice al puente a cuál hablar (sin puente, p. ej. en las pruebas, no hace nada). */

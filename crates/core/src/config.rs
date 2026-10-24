@@ -16,7 +16,7 @@ pub enum ConfigError {
     #[error("no se encontró el directorio del usuario; define SYMPHONY_HOME")]
     NoHome,
     #[error(
-        "{0} es tu carpeta personal, no un proyecto: abre Symphony dentro de la carpeta del          proyecto (o define SYMPHONY_HOME)"
+        "{0} es tu carpeta personal, no un proyecto: abre Symphony dentro de la carpeta del proyecto (o define SYMPHONY_HOME)"
     )]
     PersonalFolder(PathBuf),
     #[error("no se pudo leer o escribir {path}: {source}")]

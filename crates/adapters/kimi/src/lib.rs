@@ -40,15 +40,16 @@ fn harness_agent_file() -> Option<PathBuf> {
             .bytes()
             .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
     ));
-    if !path.is_file() {
-        // A un nombre temporal y luego renombrado: otro agente no lee un archivo a medias.
-        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-        std::fs::write(&tmp, HARNESS_AGENT).ok()?;
-        if std::fs::rename(&tmp, &path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
+    // Nunca se confía en un archivo que ya estaba (otro usuario de la máquina pudo crearlo con
+    // ese nombre): si su contenido no es el esperado se escribe uno propio de este proceso.
+    let is_ours = |p: &Path| std::fs::read_to_string(p).is_ok_and(|t| t == HARNESS_AGENT);
+    if is_ours(&path) {
+        return Some(path);
     }
-    path.is_file().then_some(path)
+    let own = path.with_extension(format!("{}.yaml", std::process::id()));
+    let _ = std::fs::remove_file(&own);
+    std::fs::write(&own, HARNESS_AGENT).ok()?;
+    is_ours(&own).then_some(own)
 }
 
 /// El contenido de un mensaje: un texto, o una lista de partes (`think`, `text`).
