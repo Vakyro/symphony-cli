@@ -57,7 +57,7 @@ cd symphony-cli
 Asume `symphony` en el PATH de aquí en adelante.
 
 ### Dónde guarda Symphony sus datos
-- **En cada proyecto, en `<proyecto>/.symphony/`** (desde P15.5): su base de datos, su daemon (socket y logs), los worktrees de sus agentes, su memoria (hechos, checkpoints, chat) y `project.toml`. Cada proyecto tiene su propio daemon y **no ve nada de los demás**: sesiones, oleadas y chats son de la carpeta donde abres Symphony. Un `.gitignore` dentro de esa carpeta deja fuera de git todo menos `project.toml`.
+- **En cada proyecto, en `<proyecto>/.symphony/`** (desde P15.5): su base de datos, su daemon (socket, pid y logs), los worktrees de sus agentes, su memoria (hechos, checkpoints, chat) y `project.toml`. Cada proyecto tiene su propio daemon y **no ve nada de los demás**: sesiones, oleadas y chats son de la carpeta donde abres Symphony. `symphony daemon status|stop` actúan sobre el daemon de la carpeta actual (todavía no hay `--all`). Un `.gitignore` dentro de esa carpeta deja fuera de git todo menos `project.toml`.
 - **En tu usuario, en `~/.symphony`** (o `SYMPHONY_USER_HOME`): lo que no es de un proyecto: `config.toml`, skills y `mcp.toml`, plugins, cachés y `learning.db` (lo que el router aprende de cada modelo, compartido entre proyectos).
 - `SYMPHONY_HOME` fuerza un solo directorio para todo (útil en pruebas). `symphony` ubica el proyecto subiendo desde la carpeta actual hasta el primer `.symphony/project.toml` o `.git`; dentro de un worktree de un agente usa el proyecto dueño. En tu carpeta personal no funciona: abre Symphony dentro de un proyecto.
 - **Si venías de antes de P15.5** (una sola base en `~/.symphony`): `symphony migrate split` apaga el daemon global y reparte esa base en cada proyecto. No borra nada; la base global queda sin usarse y la quitas tú.
@@ -84,7 +84,7 @@ symphony
 - ✅ El proyecto Git
 - ✅ Dependencias (pnpm, npm, pip, etc.)
 
-Si todo está verde, pasas a **Home**.
+Si todo está verde, pasas a **Home**. Si la carpeta no es un repositorio git (documentos, video, cualquier trabajo que no sea código), prepárala antes con `symphony init --git-init` (ver «Trabajo que no es código»).
 
 ---
 
@@ -186,14 +186,15 @@ Presiona [ a ]  →  Se abre Claude Code en su propia terminal
                    Después vuelve a Symphony
 ```
 
-### Hacer un comando en la barra
+### Desde el terminal
+```bash
+symphony agents        # ver todos los agentes
+symphony logs 1        # historial del agente #1
+symphony diff 1        # ver el diff del agente #1
+symphony inspect 1     # detalles del agente #1
 ```
-Presiona [ : ]
-agents           # ver todos los agentes
-logs 1           # ver logs del agente #1
-diff 1           # ver diff del agente #1
-inspect 1        # detalles del agente #1
-```
+
+En la barra de la TUI (`:` en Home) hay atajos: `spawn [modelo] <tarea>`, `agent <n>`, `new`, `providers`, `recovery`, `tasks`, `milestones`, `context`, `skills`, `mcp`, `stats`, `system`, `profile` y `quit`.
 
 ---
 
@@ -202,13 +203,12 @@ inspect 1        # detalles del agente #1
 Si Claude se queda sin cuota o quieres otro modelo:
 
 ```
-Presiona [ s ]  →  Men menú de "Switch model"
+Presiona [ s ]  →  el menú de "Switch model"
 ```
 
-O comando:
-```
-:
-switch 1 codex/gpt-5.x
+O desde el terminal:
+```bash
+symphony switch 1 openai/gpt-6-luna
 ```
 
 **Lo que pasa:**
@@ -221,7 +221,7 @@ switch 1 codex/gpt-5.x
 
 ### Profiles, salud y failover
 
-En vez de un modelo exacto puedes pedir un **profile** (`@code`, `@debug`, `@fast`, `@reasoning`, `@docs`, `@review`, `@conserve`): Symphony elige entre los modelos que se pueden usar **ahora**.
+En vez de un modelo exacto puedes pedir un **profile** (`@code`, `@debug`, `@fast`, `@reasoning`, `@docs`, `@review`, `@conserve`, y desde P15.5 `@write`, `@media`, `@research`): Symphony elige entre los modelos que se pueden usar **ahora**.
 
 ```bash
 symphony spawn "Arreglar el login" --profile @fast     # el router elige el modelo
@@ -241,16 +241,17 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 
 | Proveedor | Id de modelo | Qué puede hacer el agente | Skills en el chat |
 |---|---|---|---|
-| Claude Code | `claude/haiku`, `sonnet`, `opus`, … | editar archivos | sí (`/skill`) |
-| Codex | `openai/gpt-5.6-luna`, … | editar dentro del worktree | sí (`$skill`) |
+| Claude Code | `claude/haiku`, `sonnet`, `opus`, … | editar archivos y ejecutar comandos | sí (`/skill`) |
+| Codex | `openai/gpt-6.1-sol`, `openai/gpt-6-{astra,sol,luna}`, `openai/gpt-5.6-{sol,terra,luna}` | editar y ejecutar en su worktree, con red y rutas locales (sin sandbox por defecto) | sí (`$skill`) |
 | Kimi Code | `moonshot/default` (el modelo que tengas configurado en Kimi) | **todo, sin pedir permiso**: `--print` aprueba las herramientas y Kimi no tiene sandbox | no |
-| Antigravity | `google/gemini-3.8-flash-low`, `…-medium`, `…-high`, `gemini-3.1-pro-high/low` | editar archivos; **no ejecuta comandos** (en headless deniega lo que pide permiso) | no |
-| Copilot | `github/auto` (el único que aceptó `--model` en la cuenta de prueba) | editar archivos; comandos solo de lectura | no |
+| Antigravity | Google: `google/gemini-4-argon-{high,medium,low}`, `google/gemini-3.8-flash-{high,medium,low}` · Anthropic: `anthropic/claude-opus-5-5-{high,medium,low}`, `anthropic/claude-sonnet-5-5-{high,medium,low}` · OpenAI: `openai/gpt-oss-120b-medium` | editar archivos y ejecutar comandos (por defecto sin pedir permiso); es el único que no usa el harness de Symphony | no |
+| Copilot | `github/auto` (el único que aceptó `--model` en la cuenta de prueba) | editar archivos y ejecutar comandos (`--allow-all-tools`) | no |
 | OpenCode | `opencode/default` y lo que liste `opencode models`: `opencode/big-pickle`, `opencode/<proveedor>:<modelo>` | **todo, sin pedir permiso** en `run`, sin sandbox; Symphony le permite escribir solo en su worktree | no |
 
+- En los modelos de Antigravity el id lleva delante el proveedor del modelo (Google, Anthropic u OpenAI) y el nombre lo muestra en el selector: `agy models` lista los trece.
 - Un modelo que tu cuenta no tenga habilitado falla al instante con «not available» y Symphony pasa al siguiente según la política de failover.
 - Copilot con `auto` puede usar modelos distintos entre turnos, y no informa de tokens: el cambio por umbral de uso no le aplica.
-- Los permisos de Claude, Codex, Antigravity y Copilot se cambian en `~/.symphony/config.toml`, sección `[providers.permissions]` (los valores de la tabla son los predeterminados desde P15.5.S2: **acceso local total**, como una terminal normal; reinicia el daemon con `symphony daemon stop` para aplicarlos). Si prefieres restringir, descomenta y cambia:
+- Los permisos de Claude, Codex, Antigravity y Copilot se cambian en `~/.symphony/config.toml`, sección `[providers.permissions]`. Los valores predeterminados (desde P15.5.S2) son **acceso local total**, como una terminal normal: red, instalar paquetes y leer cualquier carpeta. Mandan cuando el CLI usa sus propias herramientas (modo `native` y siempre en Antigravity); con el harness de Symphony las herramientas las ejecuta Symphony con tu usuario. Reinicia el daemon con `symphony daemon stop` para aplicarlos. Si prefieres restringir, descomenta y cambia:
   ```toml
   [providers.permissions]
   claude_permission_mode = "bypassPermissions"   # default · acceptEdits · plan · bypassPermissions
@@ -272,21 +273,21 @@ symphony init --kind document --git-init   # code (por defecto) · document · m
 symphony spawn "Redactar el informe de octubre" --profile @write
 ```
 
-- `--git-init` crea un repositorio con un commit vacío si la carpeta no lo es: los worktrees de los agentes y los checkpoints se apoyan en git.
-- Profiles nuevos: `@write` (documentos), `@media` (orquestar herramientas de video, audio e imágenes) y `@research` (investigación). Un proyecto `document`, `media` o `general` los usa por defecto.
+- `--git-init` crea un repositorio con un commit vacío si la carpeta no lo es: los worktrees de los agentes y los checkpoints se apoyan en git. Sin esa opción, `symphony init` rechaza una carpeta que no sea repo git.
+- Profiles nuevos: `@write` (documentos), `@media` (orquestar herramientas de video, audio e imágenes) y `@research` (investigación). Un proyecto `document`, `media` o `general` los usa por defecto; el profile del tipo se lee al arrancar el daemon, así que si acabas de cambiar `kind` con el daemon vivo corre `symphony daemon stop` (o pasa `--profile` al crear el agente).
 - Sin `[validation]` en `project.toml` no hay gate de pruebas; los validators de plugin (`symphony plugin`) pueden revisar lo que importe.
 - Quien produce el video o el documento son las herramientas y skills que lleve el harness (siguiente sección) o tus servidores MCP; Symphony orquesta, guarda y versiona.
 
 ### Harness de Symphony (mismas herramientas para todos los modelos)
 
-Por defecto cada CLI trabaja con sus propias herramientas. Con el harness de Symphony (ADR-0019) todos los modelos usan las mismas: leer, escribir, editar, buscar archivos y contenido, y shell, servidas por `symphony mcp serve`; las herramientas propias de cada CLI se apagan. Se activa en `~/.symphony/config.toml`:
+Desde P15.5 el **harness de Symphony es el modo por defecto**: todos los modelos usan las mismas herramientas —leer, escribir, editar, buscar archivos y contenido, y shell (más las `context_*`)—, servidas por `symphony mcp serve`; las herramientas propias de cada CLI se apagan, así que todos trabajan con la misma interfaz y los mismos permisos (ADR-0019). Se elige en `~/.symphony/config.toml`:
 
 ```toml
 [harness]
-mode = "symphony"   # native (por defecto) · symphony
+mode = "symphony"   # symphony (por defecto) · native (las herramientas de cada CLI)
 ```
 
-Funciona con Claude Code, Codex, OpenCode, Copilot y Kimi; Antigravity no lo admite y sigue con las suyas. Verificado en vivo y con la comparación de costo en `docs/research/harness-2026-10.md`. Reinicia el daemon (`symphony daemon stop`) para aplicarlo.
+Funciona con Claude Code, Codex, OpenCode, Copilot y Kimi; **Antigravity no lo admite** (no deja apagar sus herramientas sin tocar su configuración) y sigue con las suyas. Con `native` cada CLI vuelve a trabajar con sus herramientas y sus propios permisos. Verificado en vivo, con la comparación de costo, en `docs/research/harness-2026-10.md`: la misma tarea mínima con Claude costó un 68 % menos con el harness de Symphony. Reinicia el daemon (`symphony daemon stop`) para aplicarlo.
 
 ### Sugerencias de modelo
 
@@ -338,19 +339,20 @@ Las skills que ya tienes instaladas en cada CLI funcionan en el chat (las de usu
 
 Cuando el agente dice "listo":
 
-1. **Revisar diff** desde Home:
+1. **Revisar diff** desde la vista del agente:
    ```
    Elige el agente #1
    [ d ]  →  git diff
    ```
 
-2. **Mergear a main** desde Home:
+2. **Integrar la tarea en el chat** desde la vista del agente:
    ```
-   [ : ]
-   merge 1
+   [ g ]  →  preflight de integración (p lo corre, c conflictos, w revisión)
+   [ a ]  →  aprueba, si la política del proyecto lo pide
+   [ i ]  →  integra en la rama del chat
    ```
 
-O manualmente:
+O manualmente, sin pasar por el chat:
 ```bash
 cd /ruta/a/tu/proyecto
 git branch      # ves symphony/session-xyz/agent-1
@@ -403,9 +405,9 @@ Selecciona uno con `↑ ↓` / número y entra a su vista.
 ## 10. Si algo falla
 
 ### Agente se cuelga
-```
-[ : ]
-kill 1
+En la vista del agente, `x` dos veces lo detiene (el workspace se conserva). Desde el terminal:
+```bash
+symphony kill 1
 ```
 
 ### Necesitas recuperarte de un crash
@@ -417,9 +419,8 @@ Home → [ r ]  Recovery Center
 ```
 
 ### Ver logs
-```
-[ : ]
-logs 1 --tail 50    # últimas 50 líneas
+```bash
+symphony logs 1 --limit 50    # últimas 50 entradas
 ```
 
 ---
@@ -461,14 +462,13 @@ symphony inspect 1
 symphony diff 1
 
 # Ver logs
-symphony logs 1
+symphony logs 1 --limit 20
 
 # Matar agente
 symphony kill 1
-
-# Merge
-symphony merge 1
 ```
+
+La integración de un agente (preflight, aprobación y merge) se hace en la TUI, en su vista: `g` → `i` (ver «Ver cambios y mergear»). Para llevar el chat a `main`, `symphony chat merge`.
 
 ---
 
@@ -493,6 +493,18 @@ reserve = 0.30
 window_hours = 720
 window_tokens = 5000000
 
+[providers.permissions]
+# Acceso local total por defecto. Descomenta y cambia para restringir (ver «Proveedores y permisos»).
+# claude_permission_mode = "bypassPermissions" # default · acceptEdits · plan · bypassPermissions
+# codex_sandbox = "danger-full-access"         # read-only · workspace-write · danger-full-access
+# antigravity_skip_permissions = true          # false: pide permiso para los comandos
+# copilot_allow_all_tools = true               # false: pide permiso para los comandos
+
+[harness]
+# Herramientas con las que trabajan los modelos: symphony (por defecto, las de Symphony)
+# o native (las de cada CLI). Reinicia el daemon para aplicarlo.
+mode = "symphony"
+
 [chat]
 # Apagado por defecto: si el último turno llegó a estos tokens, el chat pasa al siguiente proveedor.
 # switch_at_tokens = 150000
@@ -511,8 +523,8 @@ El archivo completo, con sus comentarios, se crea la primera vez en `~/.symphony
 4. Ves al agente trabajar
 5. Presiona [ d ] para ver cambios
 6. Presiona [ s ] para cambiar modelo si falta cuota
-7. Cuando termina, presiona [ : ] y escribe "merge 1"
-8. Los cambios van a main
+7. Cuando termina, en su vista [ g ] y luego [ i ] lo integran en el chat
+8. `symphony chat merge` hace el preflight del chat y `--yes` lo integra en main
 9. [ q ] para salir
 ```
 
@@ -534,10 +546,11 @@ Cuando Leo use v0.1 durante 2+ semanas y documente learnings:
 - ⏳ **P08**: Scheduler de 3+ agentes, DAG de tareas
 - ⏳ **P09**: Context Engine (handoff sin explicación)
 - ⏳ **P10**: Failover automático
-- ✅ **P11**: Más proveedores (Kimi, Antigravity, Copilot): ver «Proveedores y permisos»
+- ✅ **P11**: Más proveedores (Kimi, Antigravity, Copilot, OpenCode): ver «Proveedores y permisos»
+- ✅ **P15.5**: estado y daemon por proyecto, harness de Symphony por defecto, acceso local total y trabajo que no es código
 - ⏳ **P15**: GUI de escritorio (Tauri)
 
-Por ahora: **v0.1 + chat general + cinco proveedores (Claude Code, Codex, Kimi, Antigravity, Copilot) + handoff entre ellos**.
+Por ahora: **v0.1 + chat general + seis proveedores (Claude Code, Codex, Kimi, Antigravity, Copilot y OpenCode) + handoff entre ellos**, cada proyecto aislado en su carpeta y con las mismas herramientas para todos los modelos.
 
 ---
 
