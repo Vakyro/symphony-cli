@@ -1,6 +1,8 @@
 # Summary
 
 - [Introducción](./introduccion.md)
+- [Arquitectura](./arquitectura.md)
+- [Protocolo IPC](./protocolo.md)
 - [Instalación](./instalacion.md)
 - [Configuración](./configuracion.md)
 - [Proveedores](./proveedores.md)
