@@ -1,9 +1,9 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-12 · por claude-code/sonnet-5.5
-**Fase actual:** P15 · GUI de escritorio (rama `phase/p15-gui`, por crear desde `main`). P14 cerrada (`p14-done`)
-**Paso actual:** P15.S1 · Puente (cliente IPC en Rust)
-**Estado del paso:** sin empezar
+**Fase actual:** P15 · GUI de escritorio (rama `phase/p15-gui`): cierre pendiente (gate, revisión de código, merge, tag `p15-done`)
+**Paso actual:** P15.S6 · Cierre
+**Estado del paso:** código hecho; falta gate, revisión y merge
 **En curso por:** nadie
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P13 → P16**. El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
@@ -34,7 +34,9 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P14 · Sugerencias de modelo** (`phase/p14-sugerencias`, `docs/phases/P14-sugerencias.md`): ✅ S1 · ✅ S2 · ✅ S3 · ✅ S4 (ML rechazado, ADR-0017) · ✅ S5 cierre (`p14-done`)
 
-**P15 · GUI de escritorio** (`phase/p15-gui`): S1 puente · S2 scaffold · S3 vistas · S4 diseño y QA · S5 bundles en CI · S6 cierre (`p15-done`)
+**P15 · GUI de escritorio** (`phase/p15-gui`, `docs/phases/P15-gui.md`): ✅ S1 · ✅ S2 · ✅ S3 · 🟡 S4 (falta revisión visual) · ✅ S5 · ⏳ S6 cierre (`p15-done`, pendiente)
+
+**P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · S1 modelos de las 6 suscripciones · S2 Codex/Copilot/agy sin bloqueos de sandbox · S3 estado y daemon por proyecto · S4 harness completo · S5 más allá del código · S6 cierre (`p155-done`)
 
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): S1 seguridad · S2 fuzzing · S3 recuperación y 4 h · S4 rendimiento y retención · S5 calidad del repo · S6 mdBook (+ guía SSH) · S7 pipeline de release en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
 
@@ -50,6 +52,8 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 ## Permisos vigentes (sin preguntar)
 - Merge `--no-ff` de la rama de fase a `main`, tag `pNN-done`, push de `main` y del tag (memoria «merge a main OK»).
 - Live (`SYMPHONY_LIVE=1`) **solo con modelos gratuitos de OpenCode** (`opencode/…-free`, `opencode/big-pickle`), 2026-10-10.
+- Live con los modelos de pago de las 6 suscripciones (Claude Code, Codex, Antigravity, Kimi Code, OpenCode, Copilot), **tope de 2 mensajes por corrida**, 2026-10-23.
+- Acceso local total por defecto para todos los proveedores (P15.5.S2), 2026-10-23.
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
@@ -57,6 +61,7 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 Formato: paso · qué hace falta · comando exacto si aplica.
 - **Siempre ⛔:** live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); push de ramas que no sean `main`; publicar releases o pushear tags `v*`; cambiar defaults de permisos de proveedores; ToS.
 - **2026-10-12 · cuota gastada sin permiso (error del agente):** la sesión arrancó con `SYMPHONY_LIVE=1` en el entorno y el `cargo xtask check` de baseline de P11.5 corrió los 6 tests live con CLIs reales (`live_benchmark`, `live_handoff`, `live_cost`, `live_resume`, `live_sessions`, `live` de la TUI; ~9 min, 557 pasaron). **Falló `symphony-tui::live live_journey_a_with_claude_code`** (47 s): no se investigó; no es un cambio de P11.5, pero conviene que Leo lo revise (¿Claude Code, auth o cambio de CLI?). Corrección: `unset SYMPHONY_LIVE` antes de todo comando de cargo. Leo: revisa tu terminal de lanzamiento (`echo $SYMPHONY_LIVE`) para que no vuelva a heredarse.
+- P15.S4 · Revisión visual de la GUI en una ventana real (`cd apps/gui && pnpm tauri dev`, con `symphony`/`symphonyd` instalados) y con DevTools del WebView; no pude hacerla (extensión de Chrome desconectada). Los bundles de macOS/Linux solo se construyen en CI.
 - P08 · Live de plan por fases y bloque ```review con Claude/Codex (si S9 con OpenCode no basta).
 - P11.5.S3 · Capturar un fixture real del stream parcial de Claude (`--include-partial-messages`) y ver el texto avanzar en una terminal real (gasta cuota: ⛔).
 - P11.5.S9 · Un modelo gratuito de OpenCode escribió `n1.txt`…`n8.txt` en la raíz del repo de Symphony durante una corrida live (causa sin explicar; ver bitácora P11.5 § Incidentes). Si vuelve a pasar con otro modelo, es un riesgo de aislamiento (CONSTRAINTS A4).
@@ -89,4 +94,5 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P11.5 | ✅ (live de pago pendientes → Para Leo) | p115-done |
 | P12 | ✅ | p12-done |
 | P14 | ✅ | p14-done |
-| P15, P13, P16 | ⏳ en ese orden (ADR-0014) | |
+| P15 | ⏳ cierre pendiente (gate, revisión, merge, tag) | |
+| P13, P16 | ⏳ en ese orden (ADR-0014) | |
