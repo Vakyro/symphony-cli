@@ -10,8 +10,8 @@
 
 ## Salud del repo
 - `cargo xtask check`: ✅ al cierre de P14 (634 tests; el gate quita `SYMPHONY_LIVE`, nunca corre live).
-- `cargo deny check`: ✅ (solo avisos de duplicados).
-- CI en `main`: ✅ (ubuntu, windows, macos, msrv, deny).
+- `cargo deny check`: ✅ en la rama `phase/p13-endurecimiento` (tokio 1.54.1 por RUSTSEC-2026-0386); en `main` el job `deny` sigue en rojo hasta que esa rama se integre.
+- CI en `main`: 🔴 solo el job `deny` (aviso nuevo contra tokio 1.53.1, publicado después de P14); los demás ✅. Arreglo ya hecho en la rama de P13 (P13.S1), pendiente de integrar.
 - Tests conocidos en rojo: ninguno.
 
 ## Cola de trabajo (en orden)
