@@ -19,3 +19,8 @@ node_modules/
 # Local tool output (not part of the spec)
 graphify-smart-out/
 *.snap.new
+
+# GUI (P15)
+apps/gui/dist/
+apps/gui/src-tauri/target/
+apps/gui/src-tauri/gen/
