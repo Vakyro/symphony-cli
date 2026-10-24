@@ -44,6 +44,18 @@ enum Cmd {
         #[arg(long, default_value_t = 7)]
         days: i64,
     },
+    /// Prepara la carpeta actual como proyecto de Symphony (crea `.symphony/project.toml`).
+    Init {
+        /// Qué se trabaja aquí: code, document, media o general.
+        #[arg(long, default_value = "code")]
+        kind: String,
+        /// Nombre del proyecto (por defecto, el de la carpeta).
+        #[arg(long)]
+        name: Option<String>,
+        /// Si la carpeta no es un repositorio git, crea uno (los worktrees lo necesitan).
+        #[arg(long)]
+        git_init: bool,
+    },
     /// Crea un agente nuevo con su tarea y workspace aislado.
     Spawn {
         /// Tarea u objetivo del agente.
@@ -564,6 +576,29 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
         Some(Cmd::Status) => {
             let mut conn = client::connect_or_start(home).await?;
             print_status(&client::call(&mut conn, "status", json!({})).await?);
+        }
+        Some(Cmd::Init {
+            kind,
+            name,
+            git_init,
+        }) => {
+            let cwd = std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .display()
+                .to_string();
+            let mut conn = client::connect_or_start(home).await?;
+            let res = client::call(
+                &mut conn,
+                "project.init",
+                json!({ "project_root": cwd, "kind": kind, "name": name, "git_init": git_init }),
+            )
+            .await?;
+            println!(
+                "proyecto \"{}\" ({}) listo en {}",
+                res["name"].as_str().unwrap_or(""),
+                res["kind"].as_str().unwrap_or(""),
+                res["root"].as_str().unwrap_or("")
+            );
         }
         Some(Cmd::Spawn {
             task,

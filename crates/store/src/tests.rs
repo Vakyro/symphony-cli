@@ -152,7 +152,7 @@ fn file_db_has_the_schema_and_pragmas() {
         })
         .unwrap()
     };
-    assert_eq!(pragma("user_version"), "7");
+    assert_eq!(pragma("user_version"), "8");
     assert_eq!(pragma("journal_mode"), "wal");
     assert_eq!(pragma("foreign_keys"), "1");
     assert_eq!(pragma("synchronous"), "1"); // NORMAL
@@ -170,7 +170,7 @@ fn file_db_has_the_schema_and_pragmas() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        7
+        8
     );
 }
 
@@ -368,7 +368,7 @@ fn migration_002_keeps_v01_data_and_adds_the_pending_foreign_keys() {
         ("acct-anthropic", "QUOTA_EXHAUSTED")
     );
     assert_eq!(count("SELECT COUNT(*) FROM provider_accounts"), 2);
-    assert_eq!(count("SELECT COUNT(*) FROM profiles WHERE builtin = 1"), 7);
+    assert_eq!(count("SELECT COUNT(*) FROM profiles WHERE builtin = 1"), 10);
 
     // Las FKs nuevas existen (y las de las hijas siguen apuntando a las tablas reconstruidas).
     let fk_targets = |table: &str| -> Vec<String> {

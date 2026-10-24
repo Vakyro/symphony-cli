@@ -185,3 +185,42 @@ fn migrate_split_moves_a_global_database_into_each_project() {
     let (ok, out) = symphony(&user, &a, &["daemon", "stop"]);
     assert!(ok, "daemon stop: {out}");
 }
+
+/// ADR-0020: una carpeta cualquiera (sin git) pasa a ser un proyecto de documentos y el router
+/// conoce el profile `@write`.
+#[test]
+fn a_plain_folder_becomes_a_document_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let user = dir.path().join("user");
+    let folder = dir.path().join("informes");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("borrador.md"), "# Borrador\n").unwrap();
+
+    // Sin `--git-init` avisa cómo seguir y no crea nada.
+    let (ok, out) = symphony(&user, &folder, &["init", "--kind", "document"]);
+    assert!(!ok && out.contains("--git-init"), "{out}");
+    let (ok, out) = symphony(&user, &folder, &["init", "--kind", "video"]);
+    assert!(!ok && out.contains("tipo de proyecto"), "{out}");
+
+    let (ok, out) = symphony(
+        &user,
+        &folder,
+        &["init", "--kind", "document", "--git-init"],
+    );
+    assert!(ok, "init: {out}");
+    assert!(out.contains("(document)"), "{out}");
+    let toml = std::fs::read_to_string(folder.join(".symphony/project.toml")).unwrap();
+    assert!(toml.contains("kind = \"document\""), "{toml}");
+    // El repo tiene un commit inicial: sin él no hay worktrees.
+    git(&folder, &["rev-parse", "--verify", "HEAD"]);
+
+    let (ok, out) = symphony(
+        &user,
+        &folder,
+        &["spawn", "Redactar el informe", "--profile", "@write"],
+    );
+    assert!(ok, "spawn con @write: {out}");
+    assert!(out.contains("agente #1 creado"), "{out}");
+    let (ok, out) = symphony(&user, &folder, &["daemon", "stop"]);
+    assert!(ok, "daemon stop: {out}");
+}

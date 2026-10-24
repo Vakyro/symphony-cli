@@ -262,6 +262,21 @@ En la TUI: **Nuevo agente → Ejecución → Profile**, o `s` en un agente; con 
 - Los tres últimos se actualizan solos; si algo deja de funcionar tras una actualización, mira `docs/research/cli-p11.md`.
 - **OpenCode** toma como raíz del proyecto el repo principal, no el worktree del agente: Symphony le avisa en el prompt cuál es su directorio, pero un modelo puede escribir en el repo con una ruta absoluta (`docs/research/cli-opencode.md`). La lista de modelos de OpenCode se pide en segundo plano la primera vez (tarda ~7 s): al principio solo aparece `opencode/default`; haz `symphony providers refresh` unos segundos después. Sus modelos gratuitos son inestables; Claude y Codex siguen siendo los que mejor funcionan (`docs/research/opencode-y-calidad-de-proveedores.md`).
 
+### Trabajo que no es código (documentos, video, lo que sea)
+
+Cualquier carpeta puede ser un proyecto. `symphony init` la prepara y le dice a Symphony qué se trabaja ahí (cambia los valores por defecto, no el flujo):
+
+```bash
+cd mis-informes
+symphony init --kind document --git-init   # code (por defecto) · document · media · general
+symphony spawn "Redactar el informe de octubre" --profile @write
+```
+
+- `--git-init` crea un repositorio con un commit vacío si la carpeta no lo es: los worktrees de los agentes y los checkpoints se apoyan en git.
+- Profiles nuevos: `@write` (documentos), `@media` (orquestar herramientas de video, audio e imágenes) y `@research` (investigación). Un proyecto `document`, `media` o `general` los usa por defecto.
+- Sin `[validation]` en `project.toml` no hay gate de pruebas; los validators de plugin (`symphony plugin`) pueden revisar lo que importe.
+- Quien produce el video o el documento son las herramientas y skills que lleve el harness (siguiente sección) o tus servidores MCP; Symphony orquesta, guarda y versiona.
+
 ### Harness de Symphony (mismas herramientas para todos los modelos)
 
 Por defecto cada CLI trabaja con sus propias herramientas. Con el harness de Symphony (ADR-0019) todos los modelos usan las mismas: leer, escribir, editar, buscar archivos y contenido, y shell, servidas por `symphony mcp serve`; las herramientas propias de cada CLI se apagan. Se activa en `~/.symphony/config.toml`:

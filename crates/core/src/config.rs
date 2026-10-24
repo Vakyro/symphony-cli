@@ -674,6 +674,61 @@ pub struct WorktreeConfig {
 pub struct ProjectSection {
     pub name: String,
     pub default_branch: String,
+    /// Qué se trabaja aquí (ADR-0020). Cambia los valores por defecto, no el flujo.
+    #[serde(default)]
+    pub kind: ProjectKind,
+}
+
+/// Tipo de trabajo del proyecto (ADR-0020).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectKind {
+    /// Código: el gate de validación corre build y pruebas si el proyecto los define.
+    #[default]
+    Code,
+    /// Documentos (textos, hojas, presentaciones).
+    Document,
+    /// Video, audio, imágenes.
+    Media,
+    /// Cualquier otra cosa.
+    General,
+}
+
+impl ProjectKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Document => "document",
+            Self::Media => "media",
+            Self::General => "general",
+        }
+    }
+
+    /// El profile del router que mejor describe este trabajo cuando nadie eligió otro.
+    pub fn default_profile(self) -> &'static str {
+        match self {
+            Self::Code => "@code",
+            Self::Document => "@write",
+            Self::Media => "@media",
+            Self::General => "@research",
+        }
+    }
+}
+
+impl std::str::FromStr for ProjectKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().as_str() {
+            "code" => Ok(Self::Code),
+            "document" => Ok(Self::Document),
+            "media" => Ok(Self::Media),
+            "general" => Ok(Self::General),
+            other => Err(format!(
+                "`{other}` no es un tipo de proyecto (code, document, media, general)"
+            )),
+        }
+    }
 }
 
 pub fn project_config_path(project_root: &Path) -> PathBuf {
@@ -736,6 +791,7 @@ pub fn load_project(project_root: &Path) -> Result<Option<ProjectConfig>, Config
 pub struct ProjectInit<'a> {
     pub name: &'a str,
     pub default_branch: &'a str,
+    pub kind: ProjectKind,
     pub performance: PerformanceProfile,
     pub failover: FailoverPolicy,
 }
@@ -750,6 +806,7 @@ pub fn init_project(project_root: &Path, init: &ProjectInit) -> Result<ProjectCo
     let mut doc = DocumentMut::new();
     doc["project"]["name"] = toml_edit::value(init.name);
     doc["project"]["default_branch"] = toml_edit::value(init.default_branch);
+    doc["project"]["kind"] = toml_edit::value(init.kind.as_str());
     doc["performance"]["profile"] = toml_edit::value(init.performance.as_str());
     doc["routing"]["failover"] = toml_edit::value(init.failover.as_str());
     let text = format!("# Configuración de Symphony para este proyecto.\n{doc}");
@@ -967,12 +1024,26 @@ antigravity_skip_permissions = \"si\"
         let init = ProjectInit {
             name: "arete-mobile",
             default_branch: "main",
+            kind: ProjectKind::Document,
             performance: PerformanceProfile::Eco,
             failover: FailoverPolicy::SameProvider,
         };
         let created = init_project(dir.path(), &init).unwrap();
         assert_eq!(created.project.name, "arete-mobile");
         assert_eq!(created.project.default_branch, "main");
+        assert_eq!(created.project.kind, ProjectKind::Document);
+        // Sin la clave (proyectos de antes) el tipo es código.
+        assert_eq!(
+            parse::<ProjectConfig>(
+                Path::new("project.toml"),
+                "[project]\nname = \"x\"\ndefault_branch = \"main\"\n"
+            )
+            .unwrap()
+            .project
+            .kind,
+            ProjectKind::Code
+        );
+        assert!("video".parse::<ProjectKind>().is_err());
         assert_eq!(
             created.performance.map(|p| p.profile),
             Some(PerformanceProfile::Eco)

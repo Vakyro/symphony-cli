@@ -49,7 +49,7 @@ pub fn planning_prompt(objective: &str, task: TaskId, min_tasks: u32) -> String 
     let path = plan_rel_path(task);
     format!(
         "{objective}{INSTRUCTIONS_MARK}\
-         1. Antes de tocar código, escribe el plan en `{path}` con este formato:\n\
+         1. Antes de empezar a trabajar, escribe el plan en `{path}` con este formato:\n\
          ```\n\
          # Plan: <título corto>\n\
          ## Fase 1: <objetivo verificable>\n\

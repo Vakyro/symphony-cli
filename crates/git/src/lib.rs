@@ -187,6 +187,30 @@ impl Repo {
         })
     }
 
+    /// Crea un repositorio en `path` (y la carpeta si falta) con un commit inicial vacío: sin él
+    /// no se pueden crear worktrees. Si git no tiene identidad configurada usa una de Symphony
+    /// solo para ese commit.
+    pub fn init(path: &Path, branch: &str) -> Result<Self, GitError> {
+        std::fs::create_dir_all(path).map_err(GitError::Unlink)?;
+        git_cmd(Some(path), ["init", "-q", "-b", branch])?;
+        let configured = |key: &str| {
+            git_cmd(Some(path), ["config", key])
+                .is_ok_and(|o| !o.stdout.iter().all(u8::is_ascii_whitespace))
+        };
+        let mut args: Vec<&str> = Vec::new();
+        if !configured("user.name") || !configured("user.email") {
+            args.extend([
+                "-c",
+                "user.name=Symphony",
+                "-c",
+                "user.email=symphony@localhost",
+            ]);
+        }
+        args.extend(["commit", "-q", "--allow-empty", "-m", "Inicio del proyecto"]);
+        git_cmd(Some(path), args)?;
+        Self::discover(path)
+    }
+
     pub fn at(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }

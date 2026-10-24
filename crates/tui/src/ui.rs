@@ -694,7 +694,8 @@ fn wrap(s: &str, width: usize) -> Vec<String> {
 /// Prompt de un handoff: lo ve el modelo nuevo, no el usuario (FLOW §13.4 ya marca el cambio).
 // ponytail: se reconoce por su frase inicial (crates/context/src/handoff.rs); si cambia, hay que
 // actualizarla acá o el chat mostraría el handoff entero.
-const HANDOFF_PROMPT: &str = "Retomas una tarea de código";
+// Sin «de código»: los handoffs viejos lo decían y los nuevos no (ADR-0020).
+const HANDOFF_PROMPT: &str = "Retomas una tarea";
 
 /// Líneas de un mensaje (vacío si no se muestra).
 fn message_lines(m: &Value, width: usize) -> Vec<Line<'static>> {

@@ -78,7 +78,7 @@ pub enum CreateError {
         source: GitError,
     },
     #[error(
-        "el profile `{profile}` no existe. Disponibles: @code, @debug, @fast, @reasoning, @docs, @review, @conserve"
+        "el profile `{profile}` no existe. Disponibles: @code, @debug, @fast, @reasoning, @docs, @review, @conserve, @write, @media, @research"
     )]
     UnknownProfile { profile: String, task: String },
     #[error("ningún modelo es elegible para {profile} ahora.\n{explanation}")]

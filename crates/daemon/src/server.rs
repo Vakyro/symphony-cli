@@ -137,6 +137,20 @@ async fn recover(writer: &Writer) -> Result<(), DaemonError> {
     Ok(())
 }
 
+/// El profile por defecto del tipo de este proyecto (`project.toml`); `None` si el home no es de
+/// un proyecto o es de código.
+fn project_kind_profile(home: &Path) -> Option<&'static str> {
+    let root = home
+        .parent()
+        .filter(|_| home.file_name().is_some_and(|n| n == ".symphony"))?;
+    let kind = symphony_core::load_project(root)
+        .ok()
+        .flatten()?
+        .project
+        .kind;
+    (kind != symphony_core::ProjectKind::Code).then(|| kind.default_profile())
+}
+
 /// `<proyecto>/.symphony/.gitignore`: el estado del daemon (base, worktrees, logs) no entra a git;
 /// `project.toml` sí. Solo cuando el home es de un proyecto y no el del usuario (ADR-0018).
 fn ignore_state_in_git(home: &Path) {
@@ -248,7 +262,11 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
             );
             // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
             if config.routing.default_profile.starts_with('@') {
-                runtime.set_default_profile(&config.routing.default_profile);
+                // Un proyecto de documentos o multimedia (ADR-0020) parte de su propio profile,
+                // salvo que el usuario haya elegido otro por defecto.
+                let by_kind = project_kind_profile(home)
+                    .filter(|_| config.routing.default_profile == "@code");
+                runtime.set_default_profile(by_kind.unwrap_or(&config.routing.default_profile));
             }
             runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
         }
@@ -1500,9 +1518,24 @@ async fn project_init(req: Request) -> Response {
         Ok(v) => v,
         Err(e) => return Response::error(req.id, "invalid_params", e),
     };
+    let kind = match enum_param(p, "kind", symphony_core::ProjectKind::Code) {
+        Ok(v) => v,
+        Err(e) => return Response::error(req.id, "invalid_params", e),
+    };
+    let git_init = p.get("git_init").and_then(Value::as_bool).unwrap_or(false);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let done = tokio::task::spawn_blocking(move || {
-        let repo = symphony_git::Repo::discover(&root).map_err(|e| e.to_string())?;
+        // Una carpeta sin git (documentos, video…) puede arrancar uno: los worktrees y los
+        // checkpoints lo necesitan (ADR-0020).
+        let repo = match symphony_git::Repo::discover(&root) {
+            Ok(repo) => repo,
+            Err(_) if git_init => symphony_git::Repo::init(&root, "main").map_err(|e| e.to_string())?,
+            Err(e) => {
+                return Err(format!(
+                    "{e}: esta carpeta no es un repositorio git; usa `git_init` (en la CLI, `symphony init --git-init`) para crear uno"
+                ));
+            }
+        };
         let branch = repo
             .current_branch()
             .map_err(|e| e.to_string())?
@@ -1518,6 +1551,7 @@ async fn project_init(req: Request) -> Response {
             &symphony_core::ProjectInit {
                 name: name.trim(),
                 default_branch: &branch,
+                kind,
                 performance,
                 failover,
             },
@@ -1527,7 +1561,10 @@ async fn project_init(req: Request) -> Response {
     })
     .await;
     match done {
-        Ok(Ok((root, name))) => Response::ok(req.id, json!({ "root": root, "name": name })),
+        Ok(Ok((root, name))) => Response::ok(
+            req.id,
+            json!({ "root": root, "name": name, "kind": kind.as_str() }),
+        ),
         Ok(Err(e)) => Response::error(req.id, "init_failed", e),
         Err(e) => Response::error(req.id, "init_failed", e.to_string()),
     }

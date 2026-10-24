@@ -1365,7 +1365,7 @@ segundo",
         "fuera de orden:\n{p}"
     );
     assert_eq!(
-        p.matches("Retomas una tarea de código").count(),
+        p.matches("Retomas una tarea").count(),
         1,
         "el prompt del handoff anterior no debe entrar a la conversación:\n{p}"
     );

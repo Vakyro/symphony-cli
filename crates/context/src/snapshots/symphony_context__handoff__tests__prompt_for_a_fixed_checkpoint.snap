@@ -2,7 +2,7 @@
 source: crates/context/src/handoff.rs
 expression: h.prompt
 ---
-Retomas una tarea de código que otro executor dejó a medias. El executor anterior (anthropic/claude-sonnet) se quedó sin cuota.
+Retomas una tarea que otro executor dejó a medias. El executor anterior (anthropic/claude-sonnet) se quedó sin cuota.
 Ya estás en su worktree, con su rama y sus cambios. No empieces de cero: revisa lo que ya existe y continúa desde donde quedó.
 
 ## Objetivo
