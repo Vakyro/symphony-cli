@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 mod er;
+mod metrics;
 
 const CHECK: &[&[&str]] = &[
     &["fmt", "--all", "--check"],
@@ -21,6 +22,13 @@ const CHECK: &[&[&str]] = &[
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("check") => check(),
+        Some("metrics") => match metrics::run(&workspace_root(), std::env::args().skip(2)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("xtask: metrics: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Some("er") => {
             let root = workspace_root();
             match er::run(&root.join("migrations"), &root.join("docs/book/src/er.md")) {
@@ -32,7 +40,7 @@ fn main() -> ExitCode {
             }
         }
         _ => {
-            eprintln!("uso: cargo xtask <check|er>");
+            eprintln!("uso: cargo xtask <check|er|metrics>");
             ExitCode::from(2)
         }
     }
