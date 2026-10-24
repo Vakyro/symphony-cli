@@ -168,6 +168,22 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     if let Err(e) = refresh_providers(&writer.handle()).await {
         tracing::warn!(error = %e, "no se pudo registrar a los proveedores");
     }
+    // Lo aprendido se comparte entre proyectos a través del home del usuario (ADR-0018). Sin
+    // un home de usuario distinto del del proyecto (tests de un solo directorio) no se comparte.
+    let user = symphony_core::SymphonyHome::user_for(home);
+    if user.root() != home {
+        crate::learning::set_shared_db(Some(user.root().join("learning.db")));
+        let (done, wait) = tokio::sync::oneshot::channel();
+        writer
+            .handle()
+            .write(Box::new(move |t| {
+                crate::learning::sync_from_shared(t);
+                let _ = done.send(());
+                Ok(())
+            }))
+            .await?;
+        let _ = wait.await;
+    }
     let reader = writer.reader()?;
     let runtime_reader = writer.reader()?;
     let listener = transport::listen(home).map_err(io("no se pudo abrir el socket IPC"))?;

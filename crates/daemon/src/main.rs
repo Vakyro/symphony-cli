@@ -13,6 +13,22 @@ fn main() -> ExitCode {
             println!("symphonyd {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Some("migrate-split") => {
+            let Some(home) = std::env::args_os().nth(2) else {
+                eprintln!("uso: symphonyd migrate-split <home del usuario>");
+                return ExitCode::from(2);
+            };
+            match symphony_daemon::migrate::split_all(std::path::Path::new(&home)) {
+                Ok(lines) => {
+                    lines.iter().for_each(|l| println!("{l}"));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         None => match run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(report) => {
@@ -21,7 +37,9 @@ fn main() -> ExitCode {
             }
         },
         Some(_) => {
-            eprintln!("uso: symphonyd [--version]\nNormalmente lo arranca `symphony`.");
+            eprintln!(
+                "uso: symphonyd [--version | migrate-split <home>]\nNormalmente lo arranca `symphony`."
+            );
             ExitCode::from(2)
         }
     }

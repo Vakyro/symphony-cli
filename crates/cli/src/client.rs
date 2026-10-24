@@ -60,7 +60,7 @@ pub async fn try_connect(home: &Path) -> Option<Connection<LocalStream>> {
 }
 
 /// Ruta de `symphonyd`: `$SYMPHONYD`, junto a este ejecutable o en el PATH.
-fn daemon_binary() -> Result<PathBuf, ClientError> {
+pub(crate) fn daemon_binary() -> Result<PathBuf, ClientError> {
     if let Some(p) = std::env::var_os("SYMPHONYD").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(p));
     }

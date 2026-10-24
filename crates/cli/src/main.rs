@@ -22,6 +22,11 @@ struct Cli {
 enum Cmd {
     /// Estado del daemon (lo arranca si no está vivo).
     Status,
+    /// Pasa lo que había antes de P15.5 (una base global) al estado por proyecto.
+    Migrate {
+        #[command(subcommand)]
+        action: MigrateCmd,
+    },
     /// Controla el daemon `symphonyd`.
     Daemon {
         #[command(subcommand)]
@@ -345,6 +350,44 @@ enum DaemonCmd {
     Status,
 }
 
+#[derive(Subcommand)]
+enum MigrateCmd {
+    /// Reparte la base global (`~/.symphony/symphony.db`) en `<proyecto>/.symphony/`. No borra nada.
+    Split,
+}
+
+/// `symphony migrate split`: apaga el daemon global de antes y le pide a `symphonyd` que reparta
+/// la base entre los proyectos que conoce.
+fn migrate_split() -> miette::Result<()> {
+    let user = SymphonyHome::user().into_diagnostic()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .into_diagnostic()?;
+    runtime.block_on(async {
+        // El daemon global (el de antes) tiene la base abierta: se apaga para que quede quieta.
+        if let Some(mut conn) = client::try_connect(user.root()).await {
+            client::call(&mut conn, "shutdown", json!({})).await?;
+            drop(conn);
+            if !client::wait_stopped(user.root(), Duration::from_secs(10)).await {
+                miette::bail!("el daemon global recibió la orden de apagarse pero sigue corriendo");
+            }
+            println!("daemon global: detenido");
+        }
+        Ok::<(), miette::Report>(())
+    })?;
+    let bin = client::daemon_binary()?;
+    let status = std::process::Command::new(&bin)
+        .arg("migrate-split")
+        .arg(user.root())
+        .status()
+        .into_diagnostic()?;
+    if !status.success() {
+        miette::bail!("la migración terminó con {status}");
+    }
+    Ok(())
+}
+
 /// `symphony skills|mcp list|enable|disable`: llama al daemon con el proyecto del directorio actual.
 async fn shared_command(
     home: &std::path::Path,
@@ -443,6 +486,13 @@ fn main() -> miette::Result<()> {
         hook::emit();
         return Ok(());
     }
+    // La migración mira el home del usuario, no un proyecto: no necesita estar dentro de uno.
+    if let Some(Cmd::Migrate {
+        action: MigrateCmd::Split,
+    }) = cli.command
+    {
+        return migrate_split();
+    }
     let home = SymphonyHome::resolve().into_diagnostic()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -454,6 +504,8 @@ fn main() -> miette::Result<()> {
 async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
     let home = home.root();
     match cli.command {
+        // Ya atendida en `main`, antes de buscar el proyecto.
+        Some(Cmd::Migrate { .. }) => {}
         None => {
             use std::io::IsTerminal;
             if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {

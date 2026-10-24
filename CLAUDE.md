@@ -63,7 +63,7 @@ MSRV is 1.95 (`Cargo.toml` `rust-version`); CI runs `cargo xtask check` + `cargo
 symphony (crates/cli: clap commands; no args → TUI from crates/tui)
   │ IPC: length-prefixed JSON frames, protocol v1 (crates/protocol), named pipe / unix socket
   ▼
-symphonyd (crates/daemon) — owns all project state
+symphonyd (crates/daemon) — one per project (ADR-0018, state in <project>/.symphony; user-level config in ~/.symphony) — owns all project state
   ├─ server.rs     dispatch table of IPC methods ("agent.create", "chat.get", "fact.set", "hook.emit", …)
   ├─ runtime.rs    create agent: git worktree first, then ONE transaction (project, session, task,
   │                worktree, agent, initial checkpoint, run); rolls back the worktree on failure

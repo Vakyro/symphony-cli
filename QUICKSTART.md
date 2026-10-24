@@ -57,14 +57,16 @@ cd symphony-cli
 Asume `symphony` en el PATH de aquí en adelante.
 
 ### Dónde guarda Symphony sus datos
-- **Global, en `~/.symphony`** (o `SYMPHONY_HOME`): la base de datos SQLite, el daemon (socket y logs), los worktrees de los agentes y `config.toml`. Se comparte entre todos tus proyectos.
-- **En tu proyecto, en `<proyecto>/.symphony/`**: la configuración propia del proyecto (`project.toml`). Se crea en el primer arranque de la TUI (first-run), no al crear un agente desde la línea de comandos.
+- **En cada proyecto, en `<proyecto>/.symphony/`** (desde P15.5): su base de datos, su daemon (socket y logs), los worktrees de sus agentes, su memoria (hechos, checkpoints, chat) y `project.toml`. Cada proyecto tiene su propio daemon y **no ve nada de los demás**: sesiones, oleadas y chats son de la carpeta donde abres Symphony. Un `.gitignore` dentro de esa carpeta deja fuera de git todo menos `project.toml`.
+- **En tu usuario, en `~/.symphony`** (o `SYMPHONY_USER_HOME`): lo que no es de un proyecto: `config.toml`, skills y `mcp.toml`, plugins, cachés y `learning.db` (lo que el router aprende de cada modelo, compartido entre proyectos).
+- `SYMPHONY_HOME` fuerza un solo directorio para todo (útil en pruebas). `symphony` ubica el proyecto subiendo desde la carpeta actual hasta el primer `.symphony/project.toml` o `.git`; dentro de un worktree de un agente usa el proyecto dueño. En tu carpeta personal no funciona: abre Symphony dentro de un proyecto.
+- **Si venías de antes de P15.5** (una sola base en `~/.symphony`): `symphony migrate split` apaga el daemon global y reparte esa base en cada proyecto. No borra nada; la base global queda sin usarse y la quitas tú.
 
 No hace falta instalar Symphony dentro de cada proyecto.
 
 ### Qué se instala y qué no (regla de diseño)
 - **Una sola instalación global** en tu computadora (`symphony` y `symphonyd`). Después, `symphony` se abre desde cualquier carpeta y es la única puerta de entrada: el daemon lo arranca `symphony` cuando hace falta.
-- **No hay nada que instalar a mano por proyecto o carpeta**: ni Symphony, ni hooks, ni skills, ni el broker MCP en cada proveedor. Symphony los inyecta en cada ejecución del CLI del proveedor y no escribe configuración en tu proyecto (los agentes trabajan en sus worktrees bajo `~/.symphony`).
+- **No hay nada que instalar a mano por proyecto o carpeta**: ni Symphony, ni hooks, ni skills, ni el broker MCP en cada proveedor. Symphony los inyecta en cada ejecución del CLI del proveedor y no escribe configuración en tu proyecto (los agentes trabajan en sus worktrees bajo `<proyecto>/.symphony/worktrees`, que git ignora).
 - Lo único que haces por tu cuenta es instalar y autenticar los CLIs de los proveedores, una vez por computadora.
 - Si algún paso te pide copiar archivos de Symphony a un proyecto, es un defecto: repórtalo (CONSTRAINTS A12).
 

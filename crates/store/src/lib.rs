@@ -14,6 +14,7 @@ pub mod processes;
 pub mod repo;
 pub mod resources;
 pub mod shared;
+pub mod split;
 pub mod suggestions;
 pub mod validation;
 mod writer;

@@ -7,6 +7,7 @@ Usage: symphony[EXE] [COMMAND]
 
 Commands:
   status         Estado del daemon (lo arranca si no está vivo)
+  migrate        Pasa lo que había antes de P15.5 (una base global) al estado por proyecto
   daemon         Controla el daemon `symphonyd`
   providers      CLIs de IA detectados (Claude Code, Codex, …)
   usage          Uso de tokens por proveedor y modelo: lo que informa cada CLI frente a lo que se estima

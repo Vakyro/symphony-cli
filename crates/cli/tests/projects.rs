@@ -126,3 +126,62 @@ fn each_project_keeps_its_own_state_and_cannot_see_the_others() {
         assert!(ok, "daemon stop: {out}");
     }
 }
+
+#[test]
+fn migrate_split_moves_a_global_database_into_each_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let user = dir.path().join("user");
+    let (a, b) = (repo(dir.path(), "alfa"), repo(dir.path(), "beta"));
+    {
+        let conn = symphony_store::open(&user.join("symphony.db")).unwrap();
+        for (id, name, root, at) in [("pa", "alfa", &a, 1), ("pb", "beta", &b, 2)] {
+            conn.execute(
+                "INSERT INTO projects (id, name, root_path, default_branch, created_at)
+                 VALUES (?1, ?2, ?3, 'main', ?4)",
+                rusqlite::params![id, name, root.to_string_lossy(), at],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO sessions (id, project_id, status, started_at) VALUES
+                 ('sa','pa','ACTIVE',0), ('sb','pb','ACTIVE',0);
+             INSERT INTO providers (id, display_name, cli_name, adapter_mode, setup_state)
+                 VALUES ('anthropic','Claude','claude','CLI','READY');
+             INSERT INTO models (id, provider_id, cli_model_id, display_name, discovered_at)
+                 VALUES ('claude/haiku','anthropic','haiku','Haiku',0);",
+        )
+        .unwrap();
+    }
+    std::fs::create_dir_all(user.join("objects/ab")).unwrap();
+    std::fs::write(user.join("objects/ab/cdef"), b"contenido").unwrap();
+
+    let (ok, out) = symphony(&user, dir.path(), &["migrate", "split"]);
+    assert!(ok, "migrate split: {out}");
+    assert!(out.contains("base creada"), "{out}");
+
+    for (root, own, other) in [(&a, "pa", "pb"), (&b, "pb", "pa")] {
+        let db = rusqlite::Connection::open(root.join(".symphony/symphony.db")).unwrap();
+        let sessions = |id: &str| -> i64 {
+            db.query_row(
+                "SELECT COUNT(*) FROM sessions WHERE project_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!((sessions(own), sessions(other)), (1, 0), "{root:?}");
+        assert_eq!(
+            std::fs::read(root.join(".symphony/objects/ab/cdef")).unwrap(),
+            b"contenido"
+        );
+    }
+    // Idempotente, y no borra la base global.
+    let (ok, out) = symphony(&user, dir.path(), &["migrate", "split"]);
+    assert!(ok && out.contains("ya tenía su base"), "{out}");
+    assert!(user.join("symphony.db").is_file());
+    // El daemon del proyecto abre la base ya repartida.
+    let (ok, out) = symphony(&user, &a, &["agents"]);
+    assert!(ok, "agents tras migrar: {out}");
+    let (ok, out) = symphony(&user, &a, &["daemon", "stop"]);
+    assert!(ok, "daemon stop: {out}");
+}
