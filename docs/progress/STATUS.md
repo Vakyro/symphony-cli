@@ -3,7 +3,7 @@
 **Actualizado:** 2026-10-23 · por claude-code/sonnet-5.5
 **Fase actual:** P15.5 · Cambios de rumbo (rama `phase/p155-cambios-de-rumbo`), S1 · modelos de las seis suscripciones
 **Paso actual:** P15.5.S1 · Modelos
-**Estado del paso:** código hecho; falta gate, revisión y merge
+**Estado del paso:** por empezar (sondeo local de `agy models`, `opencode models` y los demás CLIs)
 **En curso por:** nadie
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
