@@ -137,9 +137,31 @@ async fn recover(writer: &Writer) -> Result<(), DaemonError> {
     Ok(())
 }
 
+/// `<proyecto>/.symphony/.gitignore`: el estado del daemon (base, worktrees, logs) no entra a git;
+/// `project.toml` sí. Solo cuando el home es de un proyecto y no el del usuario (ADR-0018).
+fn ignore_state_in_git(home: &Path) {
+    if symphony_core::SymphonyHome::user_for(home).root() == home {
+        return;
+    }
+    let path = home.join(".gitignore");
+    if !path.exists() {
+        // Sin esto el repo vería todo el estado como archivos nuevos. Si falla, solo se avisa.
+        if let Err(e) = std::fs::write(
+            &path,
+            "*
+!.gitignore
+!project.toml
+",
+        ) {
+            tracing::warn!(error = %e, "no se pudo escribir {}", path.display());
+        }
+    }
+}
+
 /// Corre el daemon hasta que se cancele `shutdown` (señal o request `shutdown`).
 pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), DaemonError> {
     let _lock = InstanceLock::acquire(home)?;
+    ignore_state_in_git(home);
     let db_path = symphony_core::SymphonyHome::at(home).db_path();
     let writer = Writer::start(&db_path)?;
     recover(&writer).await?;
@@ -172,7 +194,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     });
     // La config se lee antes que el runtime: los permisos de los proveedores (`[providers.
     // permissions]`) se fijan al crear los adapters. Una config inválida deja los predeterminados.
-    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(home));
+    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home));
     let permissions = config
         .as_ref()
         .map(|c| c.providers.permissions.clone())
@@ -1106,9 +1128,16 @@ async fn shared_list(req: Request, state: &State) -> Response {
     };
     let root = PathBuf::from(&project.root_path);
     let pid = project.id.to_string();
-    let skills = shared::scan_skills(&state.home, Some(&root));
+    let skills = shared::scan_skills(
+        symphony_core::SymphonyHome::user_for(&state.home).root(),
+        Some(&root),
+    );
     let mut warnings = Vec::new();
-    let servers = shared::scan_mcp(&state.home, Some(&root), &mut warnings);
+    let servers = shared::scan_mcp(
+        symphony_core::SymphonyHome::user_for(&state.home).root(),
+        Some(&root),
+        &mut warnings,
+    );
     let found_skills: Vec<_> = skills.iter().map(shared::SkillDef::found).collect();
     let found_servers: Vec<_> = servers.iter().map(shared::McpDef::found).collect();
     // Con un `mcp.toml` roto no se borra nada: el interruptor del usuario no se pierde.
@@ -2524,7 +2553,8 @@ fn task_list(req: Request, state: &State) -> Response {
 
 /// System / Resources (18): carga actual, slots pesados y quién espera a quién.
 fn system_get(req: Request, state: &State) -> Response {
-    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::at(&state.home)).ok();
+    let config =
+        symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&state.home)).ok();
     let perf = config
         .as_ref()
         .map(|c| c.performance.clone())
@@ -2600,7 +2630,7 @@ async fn performance_set(req: Request, state: &State) -> Response {
             "`profile` tiene que ser ECO, BALANCED, PERFORMANCE o CUSTOM",
         );
     };
-    let home = symphony_core::SymphonyHome::at(&state.home);
+    let home = symphony_core::SymphonyHome::user_for(&state.home);
     match symphony_core::set_value(
         &home,
         "performance.profile",

@@ -51,7 +51,7 @@ impl Runtime {
         if cfg.validators.is_empty() && cfg.context_transformers.is_empty() {
             return Active::default();
         }
-        let installed = discover(&SymphonyHome::at(&self.home).plugins_dir());
+        let installed = discover(&SymphonyHome::user_for(&self.home).plugins_dir());
         let resolve = |names: &[String], want: Kind| -> Vec<Result<Plugin, Unavailable>> {
             names
                 .iter()
@@ -241,7 +241,7 @@ impl Runtime {
 
     /// Lo instalado y lo que activa el proyecto, para `plugin.list`.
     pub fn plugin_list(&self, project_root: Option<&str>) -> Value {
-        let installed = discover(&SymphonyHome::at(&self.home).plugins_dir());
+        let installed = discover(&SymphonyHome::user_for(&self.home).plugins_dir());
         let enabled: Vec<String> = project_root
             .and_then(|r| symphony_core::load_project(Path::new(r)).ok().flatten())
             .and_then(|p| p.plugins)
@@ -269,14 +269,14 @@ impl Runtime {
                 .iter()
                 .filter(|n| !installed.plugins.iter().any(|p| &p.manifest.name == *n))
                 .collect::<Vec<_>>(),
-            "installed_dir": SymphonyHome::at(&self.home).plugins_dir().display().to_string(),
+            "installed_dir": SymphonyHome::user_for(&self.home).plugins_dir().display().to_string(),
         })
     }
 
     /// `plugin.check`: lanza el plugin y le pide `describe` (comprueba que arranca y que es quien
     /// dice ser). Devuelve el resultado, nunca falla el daemon.
     pub async fn plugin_check(&self, name: &str) -> Result<Value, String> {
-        let installed = discover(&SymphonyHome::at(&self.home).plugins_dir());
+        let installed = discover(&SymphonyHome::user_for(&self.home).plugins_dir());
         let Some(p) = installed.plugins.iter().find(|p| p.manifest.name == name) else {
             return Err(format!("no hay un plugin `{name}` instalado"));
         };

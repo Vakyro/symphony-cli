@@ -2,9 +2,9 @@
 //! protocolo: `call` hace un request y `subscribe` reenvía los eventos del bus. **Sin lógica de
 //! negocio**: lo que hace la GUI lo hace el daemon (FLOW regla 9).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -34,9 +34,16 @@ pub struct BusEvent {
     pub payload: Value,
 }
 
+/// Un daemon por proyecto (ADR-0018): el puente apunta al del proyecto elegido y se puede
+/// cambiar con [`Bridge::set_home`].
 #[derive(Debug, Clone)]
 pub struct Bridge {
-    home: PathBuf,
+    /// Home del proyecto elegido; `None` hasta que se elija uno.
+    home: Arc<RwLock<Option<PathBuf>>>,
+    /// Home del usuario (config, skills, plugins) que se le pasa al daemon que se arranque.
+    user_home: Option<PathBuf>,
+    /// Se avisa cuando cambia el proyecto, para que la suscripción al bus se rehaga.
+    changed: Arc<tokio::sync::Notify>,
     /// Un solo `ensure_daemon` a la vez: el arranque de la GUI y el botón «Arrancarlo» coinciden.
     starting: Arc<tokio::sync::Mutex<()>>,
 }
@@ -44,17 +51,51 @@ pub struct Bridge {
 impl Bridge {
     pub fn new(home: impl Into<PathBuf>) -> Self {
         Self {
-            home: home.into(),
+            home: Arc::new(RwLock::new(Some(home.into()))),
+            user_home: None,
+            changed: Arc::default(),
             starting: Arc::default(),
         }
     }
 
-    pub fn home(&self) -> &Path {
-        &self.home
+    /// Sin proyecto todavía: las llamadas fallan con un aviso hasta [`Bridge::set_home`].
+    pub fn without_project() -> Self {
+        let bridge = Self::new(PathBuf::new());
+        bridge.set_home(None);
+        bridge
+    }
+
+    /// El home del usuario, para el daemon que haya que arrancar.
+    pub fn with_user_home(mut self, user_home: impl Into<PathBuf>) -> Self {
+        self.user_home = Some(user_home.into());
+        self
+    }
+
+    pub fn home(&self) -> Option<PathBuf> {
+        self.home.read().ok().and_then(|h| h.clone())
+    }
+
+    /// Cambia de proyecto (su home) y avisa a quien escucha el bus.
+    pub fn set_home(&self, home: Option<PathBuf>) {
+        if let Ok(mut h) = self.home.write() {
+            *h = home;
+        }
+        self.changed.notify_waiters();
+    }
+
+    /// Se completa la próxima vez que cambia el proyecto.
+    pub async fn project_changed(&self) {
+        self.changed.notified().await;
+    }
+
+    fn current_home(&self) -> Result<PathBuf, BridgeError> {
+        self.home().ok_or_else(|| {
+            BridgeError::Unavailable("elige un proyecto: escribe su carpeta en «Proyecto»".into())
+        })
     }
 
     async fn connect(&self) -> Result<Connection<LocalStream>, BridgeError> {
-        transport::connect(&self.home)
+        transport::connect(&self.current_home()?)
             .await
             .map_err(|e| BridgeError::Unavailable(e.to_string()))
     }
@@ -139,9 +180,13 @@ impl Bridge {
         let bin = cli_binary().ok_or_else(|| {
             BridgeError::Unavailable("no encontré el ejecutable `symphony` (instálalo)".into())
         })?;
-        let status = tokio::process::Command::new(&bin)
-            .args(["daemon", "start"])
-            .env("SYMPHONY_HOME", &self.home)
+        let mut cmd = tokio::process::Command::new(&bin);
+        cmd.args(["daemon", "start"])
+            .env("SYMPHONY_HOME", self.current_home()?);
+        if let Some(user) = &self.user_home {
+            cmd.env("SYMPHONY_USER_HOME", user);
+        }
+        let status = cmd
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

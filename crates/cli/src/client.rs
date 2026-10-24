@@ -87,6 +87,10 @@ pub async fn start_daemon(home: &Path) -> Result<u32, ClientError> {
     // stderr a archivo (no a un pipe que se rompe cuando este proceso termina).
     let err_path = logs.join("symphonyd-start.err");
     let mut cmd = Command::new(&bin);
+    // El daemon es del proyecto (`home`); lo del usuario (config, skills, plugins) va aparte.
+    if let Ok(user) = symphony_core::SymphonyHome::user() {
+        cmd.env("SYMPHONY_USER_HOME", user.root());
+    }
     cmd.env("SYMPHONY_HOME", home)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

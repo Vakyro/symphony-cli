@@ -31,7 +31,8 @@ fn run() -> miette::Result<()> {
     // Ruta larga: los worktrees que reciben los CLIs cuelgan de aquí.
     let home = SymphonyHome::resolve().into_diagnostic()?;
     let home = SymphonyHome::at(symphony_protocol::transport::long_path(home.root()));
-    let config = symphony_core::load_or_create(&home).into_diagnostic()?;
+    let config =
+        symphony_core::load_or_create(&SymphonyHome::user_for(home.root())).into_diagnostic()?;
     let _log_guard = symphony_daemon::logging::init(&home.logs_dir(), &config.logging.level)
         .into_diagnostic()
         .wrap_err("no se pudo iniciar el log")?;

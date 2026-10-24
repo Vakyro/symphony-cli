@@ -182,7 +182,7 @@ pub struct PhaseError(pub String);
 impl Runtime {
     /// `[plan]` de `config.toml`; se relee en cada uso (editarlo aplica a la fase siguiente).
     pub(crate) fn plan_config(&self) -> PlanConfig {
-        symphony_core::load_or_create(&symphony_core::SymphonyHome::at(&self.home))
+        symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&self.home))
             .map(|c| c.plan)
             .unwrap_or_default()
     }

@@ -15,6 +15,10 @@ use crate::enums::{ContextMode, FailoverPolicy, PerformanceProfile};
 pub enum ConfigError {
     #[error("no se encontró el directorio del usuario; define SYMPHONY_HOME")]
     NoHome,
+    #[error(
+        "{0} es tu carpeta personal, no un proyecto: abre Symphony dentro de la carpeta del          proyecto (o define SYMPHONY_HOME)"
+    )]
+    PersonalFolder(PathBuf),
     #[error("no se pudo leer o escribir {path}: {source}")]
     Io {
         path: PathBuf,
@@ -34,23 +38,96 @@ pub enum ConfigError {
     Invalid { path: PathBuf, message: String },
 }
 
-/// Directorio de estado de Symphony: `$SYMPHONY_HOME` o `~/.symphony`.
+/// Directorio de estado de Symphony (ADR-0018). Hay dos:
+/// - el **del proyecto**, `<proyecto>/.symphony`: base de datos, objetos, worktrees, logs y el
+///   socket de su daemon (un daemon por proyecto). Es lo que devuelve [`SymphonyHome::resolve`];
+/// - el **del usuario**, `~/.symphony`: `config.toml`, skills, plugins y cachés
+///   ([`SymphonyHome::user`]).
+///
+/// `$SYMPHONY_HOME` fuerza el del proyecto (y, si no hay `$SYMPHONY_USER_HOME`, también el del
+/// usuario: un solo directorio para todo, como antes de P15.5; es lo que usan los tests y los
+/// hooks que lanza el daemon).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymphonyHome(PathBuf);
 
+fn absolute_env(var: &str) -> Result<Option<PathBuf>, ConfigError> {
+    let Some(dir) = std::env::var_os(var).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    // Absoluta: el nombre del pipe/socket del daemon se deriva de esta ruta.
+    std::path::absolute(&dir)
+        .map(Some)
+        .map_err(|source| ConfigError::Io {
+            path: dir.into(),
+            source,
+        })
+}
+
+/// La raíz del proyecto que contiene `dir`: dentro de un worktree de Symphony
+/// (`<raíz>/.symphony/worktrees/…`), esa raíz; si no, el ancestro más cercano con
+/// `.symphony/project.toml` o con `.git`; si no hay ninguno, `dir` mismo.
+pub fn project_root_of(dir: &Path) -> PathBuf {
+    let in_worktree = dir.ancestors().find(|a| {
+        a.file_name().is_some_and(|n| n == "worktrees")
+            && a.parent()
+                .is_some_and(|p| p.file_name().is_some_and(|n| n == ".symphony"))
+    });
+    if let Some(root) = in_worktree
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .filter(|r| !r.as_os_str().is_empty())
+    {
+        return root.to_path_buf();
+    }
+    let by = |marker: &dyn Fn(&Path) -> bool| dir.ancestors().find(|a| marker(a));
+    by(&|a| project_config_path(a).is_file())
+        .or_else(|| by(&|a| a.join(".git").exists()))
+        .unwrap_or(dir)
+        .to_path_buf()
+}
+
 impl SymphonyHome {
+    /// El home del proyecto donde se trabaja: `$SYMPHONY_HOME` o el del directorio actual.
     pub fn resolve() -> Result<Self, ConfigError> {
-        if let Some(dir) = std::env::var_os("SYMPHONY_HOME").filter(|v| !v.is_empty()) {
-            // Absoluta: el nombre del pipe/socket del daemon se deriva de esta ruta.
-            let dir = std::path::absolute(&dir).map_err(|source| ConfigError::Io {
-                path: dir.into(),
-                source,
-            })?;
+        if let Some(dir) = absolute_env("SYMPHONY_HOME")? {
+            return Ok(Self(dir));
+        }
+        let cwd = std::env::current_dir().map_err(|source| ConfigError::Io {
+            path: PathBuf::from("."),
+            source,
+        })?;
+        Self::for_project(&cwd)
+    }
+
+    /// El home del proyecto que contiene `dir` (`<raíz>/.symphony`).
+    pub fn for_project(dir: &Path) -> Result<Self, ConfigError> {
+        let root = project_root_of(dir);
+        let home = Self(root.join(".symphony"));
+        // La carpeta personal no es un proyecto: su `.symphony` es el home del usuario.
+        if Self::user().is_ok_and(|u| u == home) {
+            return Err(ConfigError::PersonalFolder(root));
+        }
+        Ok(home)
+    }
+
+    /// El home del usuario: `$SYMPHONY_USER_HOME`, o `$SYMPHONY_HOME` si está definido (un solo
+    /// directorio), o `~/.symphony`.
+    pub fn user() -> Result<Self, ConfigError> {
+        if let Some(dir) = absolute_env("SYMPHONY_USER_HOME")?.or(absolute_env("SYMPHONY_HOME")?) {
             return Ok(Self(dir));
         }
         std::env::home_dir()
             .map(|h| Self(h.join(".symphony")))
             .ok_or(ConfigError::NoHome)
+    }
+
+    /// El home del usuario visto desde el daemon de `project_home`: `$SYMPHONY_USER_HOME` (que le
+    /// pasa quien lo arranca) o, sin él, el mismo directorio.
+    pub fn user_for(project_home: &Path) -> Self {
+        match absolute_env("SYMPHONY_USER_HOME") {
+            Ok(Some(dir)) => Self(dir),
+            _ => Self(project_home.to_path_buf()),
+        }
     }
 
     pub fn at(dir: impl Into<PathBuf>) -> Self {
@@ -874,6 +951,30 @@ antigravity_skip_permissions = \"si\"
                 mode: ContextMode::Raw
             })
         );
+    }
+
+    #[test]
+    fn project_root_is_found_from_inside_the_project_or_its_worktrees() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("app");
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        // Con `.git`: la raíz del repo.
+        assert_eq!(project_root_of(&root.join("src/deep")), root);
+        // Con `project.toml`: manda sobre un `.git` más cercano (un repo anidado).
+        std::fs::create_dir_all(root.join("sub/.git")).unwrap();
+        std::fs::create_dir_all(root.join(".symphony")).unwrap();
+        std::fs::write(project_config_path(&root), "").unwrap();
+        assert_eq!(project_root_of(&root.join("sub")), root);
+        // Dentro de un worktree de Symphony (que tiene su propio `.git`): el proyecto dueño.
+        let wt = root.join(".symphony/worktrees/p1/agent-001");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: x").unwrap();
+        assert_eq!(project_root_of(&wt), root);
+        // Sin nada: el propio directorio.
+        let loose = d.path().join("suelta");
+        std::fs::create_dir_all(&loose).unwrap();
+        assert_eq!(project_root_of(&loose), loose);
     }
 
     #[test]
