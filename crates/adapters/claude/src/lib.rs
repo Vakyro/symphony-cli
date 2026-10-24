@@ -418,45 +418,51 @@ impl ProviderAdapter for ClaudeAdapter {
 
     fn parse_error(&self, text: &str) -> Option<ProviderError> {
         let lower = text.to_lowercase();
-        let (failure_type, code) = if lower.contains("usage limit")
-            || lower.contains("limit will reset")
-            || lower.contains("weekly limit")
-        {
-            (
-                if lower.contains("weekly") {
-                    FailureType::WeeklyQuota
-                } else {
-                    FailureType::DailyQuota
-                },
-                "usage_limit",
-            )
-        } else if lower.contains("rate_limit")
-            || lower.contains("rate limit")
-            || lower.contains("429")
-        {
-            (FailureType::TempRateLimit, "rate_limit")
-        } else if lower.contains("authentication")
-            || lower.contains("/login")
-            || lower.contains("not logged in")
-            || lower.contains("401")
-        {
-            (FailureType::Auth, "authentication_failed")
-        } else if lower.contains("overloaded")
-            || lower.contains("529")
-            || lower.contains("server_error")
-        {
-            (FailureType::ProviderError, "overloaded")
-        } else if lower.contains("model_not_found") || lower.contains("model not found") {
-            (FailureType::ModelUnavailable, "model_not_found")
-        } else if lower.contains("connection error")
-            || lower.contains("network")
-            || lower.contains("enotfound")
-            || lower.contains("econnreset")
-        {
-            (FailureType::Network, "network")
-        } else {
-            return None;
-        };
+        // Un modelo que la suscripción no incluye (p. ej. Fable sin créditos) llega como 429
+        // `rate_limit_error`, pero esperar no lo arregla: es el modelo el que no se puede usar
+        // (dogfooding 2026-10-24: el failover eligió `claude/fable` y quedó esperando).
+        let (failure_type, code) =
+            if lower.contains("credits_required") || lower.contains("usage credits are required") {
+                (FailureType::ModelUnavailable, "credits_required")
+            } else if lower.contains("usage limit")
+                || lower.contains("limit will reset")
+                || lower.contains("weekly limit")
+            {
+                (
+                    if lower.contains("weekly") {
+                        FailureType::WeeklyQuota
+                    } else {
+                        FailureType::DailyQuota
+                    },
+                    "usage_limit",
+                )
+            } else if lower.contains("rate_limit")
+                || lower.contains("rate limit")
+                || lower.contains("429")
+            {
+                (FailureType::TempRateLimit, "rate_limit")
+            } else if lower.contains("authentication")
+                || lower.contains("/login")
+                || lower.contains("not logged in")
+                || lower.contains("401")
+            {
+                (FailureType::Auth, "authentication_failed")
+            } else if lower.contains("overloaded")
+                || lower.contains("529")
+                || lower.contains("server_error")
+            {
+                (FailureType::ProviderError, "overloaded")
+            } else if lower.contains("model_not_found") || lower.contains("model not found") {
+                (FailureType::ModelUnavailable, "model_not_found")
+            } else if lower.contains("connection error")
+                || lower.contains("network")
+                || lower.contains("enotfound")
+                || lower.contains("econnreset")
+            {
+                (FailureType::Network, "network")
+            } else {
+                return None;
+            };
         Some(ProviderError {
             failure_type,
             raw_code: Some(code.into()),

@@ -133,7 +133,7 @@ La siguiente tabla recoge **todos los métodos IPC implementados en la tabla de 
 | `agent.resume` | — | `agent` | Reanuda la ejecución del proceso supervisor de un agente previamente pausado. |
 | `agent.stop` | — | `agent` | Solicita una detención ordenada (*graceful stop*) del ejecutor activo del agente. |
 | `agent.kill` | — | `agent` | Termina de forma inmediata e incondicional el árbol de procesos del ejecutor del agente (*kill-tree*) y marca al agente como cancelado. |
-| `agent.switch` | — | `agent`, `model`, `profile` | Realiza un cambio en caliente del modelo o perfil de un agente, guardando un checkpoint incremental e iniciando un nuevo ejecutor con handoff. |
+| `agent.switch` | — | `agent`, `model` o `profile`, `message` *(opcional)* | Realiza un cambio en caliente del modelo o perfil de un agente, guardando un checkpoint incremental e iniciando un nuevo ejecutor con handoff. |
 | `agent.next_phase` | — | `agent` | Avanza la ejecución del agente a la siguiente fase de su plan formal (`.symphony/plan/<task_id>.md`), arrancando una sesión limpia con contexto sintetizado. |
 | `agent.diff` | — | `agent` | Obtiene la salida de `git diff` correspondiente a los cambios introducidos en el worktree del agente respecto a su commit base. |
 | `agent.logs` | — | `agent`, `limit` *(opcional)* | Recupera el historial secuencial de mensajes, intervenciones del modelo y llamadas a herramientas del agente. |
@@ -178,7 +178,7 @@ La siguiente tabla recoge **todos los métodos IPC implementados en la tabla de 
 | `validation.get` | — | `validation_id` | Recupera el estado, registros y veredicto resultante de una ejecución de validación. |
 | `task.list` | — | `project_root` *(opcional)* | Lista las tareas registradas en el proyecto y su estado en el flujo (`BACKLOG`, `READY`, `RUNNING`, `DONE`, `FAILED`, etc.). |
 | `system.get` | — | Ninguno | Obtiene métricas en tiempo real del sistema anfitrión: carga de CPU, memoria RAM disponible y saturación de slots del planificador. |
-| `performance.set` | — | `profile`, `limits` | Ajusta dinámicamente los parámetros de rendimiento y límites de concurrencia asignados al daemon. |
+| `performance.set` | — | `profile` | Cambia el perfil de rendimiento (`[performance] profile`) del `config.toml`. |
 | `task.depend` | — | `task_id`, `depends_on_id` | Establece una dependencia dirigida en el DAG del proyecto: la primera tarea esperará a que la segunda finalice con éxito. |
 | `task.undepend` | — | `task_id`, `depends_on_id` | Elimina una dependencia previamente establecida entre dos tareas. |
 | `task.deps` | — | `task_id` | Devuelve el grafo de tareas antecedentes y consecuentes vinculadas a una tarea. |

@@ -100,6 +100,8 @@ fn fixtures() -> Fixtures {
             ("Claude AI usage limit reached. Your limit will reset at 5pm".into(), FailureType::DailyQuota),
             ("You've hit your weekly limit".into(), FailureType::WeeklyQuota),
             ("API Error: 429 rate_limit_error".into(), FailureType::TempRateLimit),
+            // Real (claude 2.1.310, 2026-10-24): un modelo fuera de la suscripción no es esperable.
+            (r#"429 {"type":"error","error":{"type":"rate_limit_error","message":"Usage credits are required for this model.","details":{"error_code":"credits_required"}}}"#.into(), FailureType::ModelUnavailable),
             ("Invalid API key · Please run /login (Authorization: Bearer sk-ant-api03-XXXXXXXXXXXXXXXXXXXX)".into(), FailureType::Auth),
             ("API Error: 529 overloaded_error".into(), FailureType::ProviderError),
             ("Connection error: getaddrinfo ENOTFOUND api.anthropic.com".into(), FailureType::Network),

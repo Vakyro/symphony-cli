@@ -8,3 +8,5 @@ agente,fecha,proveedor,modelo,tipo_tarea,dificultad,veredicto,calidad_1a5,retrab
 12,2026-10-24,github,github/auto,docs,baja,rechazado,1,ninguno (no hubo trabajo),con el harness escribió una llamada a herramienta como texto («to=functions.bash») y terminó a los 43 s sin hacer nada
 11,2026-10-24,opencode,opencode/big-pickle,docs,media,no_evaluable,,ninguno,se agotó el uso gratuito de OpenCode a los 4 min; Symphony no lo reconoció (formato de error 2.x) y no hizo failover
 7,2026-10-24,openai,openai/gpt-6.1-sol,codigo_tooling,media,bloqueado_correcto,,ninguno,detectó una contradicción real en el plan (thiserror vs sin dependencias) y paró tras dos intentos sin inventar; 3 fases de plan; el error era del integrador
+13,2026-10-24,anthropic,claude/sonnet,auditoria,alta,aceptado,5,ninguno,15 hallazgos con escenario y línea; encontró un bug real recién introducido (latido por CPU); 4 min
+15,2026-10-24,google,anthropic/claude-opus-5-5-high,auditoria,alta,no_evaluable,,ninguno,cuota individual de Antigravity agotada a los 5 min; el failover pasó a claude/fable que pide créditos y quedó esperando (clasificado mal como 429 transitorio)
