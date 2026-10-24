@@ -1,8 +1,8 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-23 · por claude-code/sonnet-5.5
-**Fase actual:** P15.5 · Cambios de rumbo (rama `phase/p155-cambios-de-rumbo`), S6 · cierre (revisión, CI, merge, `p155-done`)
-**Paso actual:** P15.5.S6 · Cierre
+**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`), S1 · seguridad
+**Paso actual:** P13.S1 · Seguridad
 **Estado del paso:** por empezar
 **En curso por:** nadie
 
@@ -36,7 +36,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P15 · GUI de escritorio** (`phase/p15-gui`, `docs/phases/P15-gui.md`): ✅ S1 · ✅ S2 · ✅ S3 · 🟡 S4 (falta revisión visual) · ✅ S5 · ✅ S6 cierre (`p15-done`)
 
-**P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · ✅ S4 harness de Symphony (ADR-0019; `[harness] mode`, 5 de 6 proveedores) · ✅ S5 más allá del código (ADR-0020; `symphony init --kind`, perfiles `@write/@media/@research`, migración 008) · S6 cierre (`p155-done`)
+**P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · ✅ S4 harness de Symphony (ADR-0019; `[harness] mode`, 5 de 6 proveedores) · ✅ S5 más allá del código (ADR-0020; `symphony init --kind`, perfiles `@write/@media/@research`, migración 008) · ✅ S6 cierre (`p155-done`)
 
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): S1 seguridad · S2 fuzzing · S3 recuperación y 4 h · S4 rendimiento y retención · S5 calidad del repo · S6 mdBook (+ guía SSH) · S7 pipeline de release en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
 
@@ -100,4 +100,5 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P12 | ✅ | p12-done |
 | P14 | ✅ | p14-done |
 | P15 | ✅ (revisión visual → Para Leo) | p15-done |
+| P15.5 | ✅ (ADR-0018, 0019, 0020) | p155-done |
 | P13, P16 | ⏳ en ese orden (ADR-0014) | |
