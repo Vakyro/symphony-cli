@@ -414,9 +414,12 @@ async fn a_completed_agent_keeps_its_worktree_for_a_week() {
     e.writer.shutdown();
 }
 
-/// Disco: los agentes de un proyecto Rust comparten `target/`; el repo del usuario no.
+/// Disco: los agentes de un proyecto Rust comparten el `build-dir` de Cargo (y cada uno guarda
+/// sus binarios en su `target/`); el repo del usuario no.
 #[test]
-fn cargo_builds_of_agents_share_one_target_dir() {
+fn cargo_builds_of_agents_share_one_build_dir() {
+    let user_chose = std::env::var_os("CARGO_TARGET_DIR").is_some()
+        || std::env::var_os("CARGO_BUILD_BUILD_DIR").is_some();
     let d = tempfile::tempdir().unwrap();
     let home = d.path().join(".symphony");
     let wt = home.join("worktrees").join("p").join("agent-001");
@@ -428,13 +431,13 @@ fn cargo_builds_of_agents_share_one_target_dir() {
     std::fs::write(wt.join("Cargo.toml"), "").unwrap();
     std::fs::write(d.path().join("Cargo.toml"), "").unwrap();
     let env = symphony_daemon::gc::cargo_env(&home, &wt);
-    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
+    if !user_chose {
         assert_eq!(
             env,
             [(
-                "CARGO_TARGET_DIR".to_string(),
+                "CARGO_BUILD_BUILD_DIR".to_string(),
                 home.join("cache")
-                    .join("cargo-target")
+                    .join("cargo-build")
                     .join("1")
                     .display()
                     .to_string()
@@ -450,7 +453,7 @@ fn cargo_builds_of_agents_share_one_target_dir() {
         symphony_daemon::gc::cargo_env(&home, d.path()).is_empty(),
         "el repo del usuario"
     );
-    if cfg!(windows) && std::env::var_os("CARGO_TARGET_DIR").is_none() {
+    if cfg!(windows) && !user_chose {
         let upper = PathBuf::from(wt.to_string_lossy().to_uppercase());
         assert_eq!(
             symphony_daemon::gc::cargo_env(&home, &upper).len(),

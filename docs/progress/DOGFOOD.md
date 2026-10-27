@@ -11,8 +11,9 @@ mensajes, **solo** para tareas que mejoren Symphony y siempre con un plan escrit
   `cargo install`). Si sale mala, se vuelve a la anterior.
 - **El repo** es lo que se modifica. Su daemon (el de la copia estable) vive en
   `<repo>/.symphony/`, aparte de los proyectos de Leo; los tests usan carpetas temporales.
-- **Disco:** los agentes comparten `<repo>/.symphony/cache/cargo-target` (`CARGO_TARGET_DIR`),
-  y los worktrees de agentes integrados o cancelados se borran solos.
+- **Disco:** los agentes comparten el `build-dir` de Cargo en `<repo>/.symphony/cache/cargo-build`
+  (`CARGO_BUILD_BUILD_DIR`; los binarios finales quedan en el `target/` de cada worktree), y los
+  worktrees de agentes integrados o cancelados se borran solos.
 
 ## Reglas para cada agente delegado
 
@@ -21,7 +22,8 @@ Cada tarea sale con este plan en la descripción (`symphony spawn -d`):
 1. Lee `AGENTS.md` y el paso de `PLAN.md` que se te asigna; nada fuera de él.
 2. Sin `unwrap`/`expect`/`panic` en runtime; docs, comentarios y commits en español.
 3. Verifica solo lo tuyo: `cargo nextest run -p <crate>` y `cargo clippy -p <crate> -- -D warnings`
-   (el gate completo lo corre quien integra).
+   (el gate completo lo corre quien integra, también el del inicio). Un build que falla por algo
+   ajeno (otro agente, un candado de Cargo) se reintenta, no es motivo para parar.
 4. Un commit por tarea, Conventional Commits con el tag del paso.
 5. Si algo no se puede como está escrito, escríbelo en tu último mensaje y para.
 
@@ -90,3 +92,13 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
 - **2026-10-24 · Symphony integra en `symphony/chat`, no en una rama de fase.** Para este repo la
   integración se hizo a mano (cherry-pick). Pendiente: elegir la rama destino al integrar.
 - **2026-10-24 · RAM.** El daemon en reposo usa 26 MB (9 hilos): no es problema.
+- **2026-10-26 · `target/` compartido: los binarios de un agente pisaban los de otro.** Con
+  `CARGO_TARGET_DIR` compartido, los archivos finales (`target/debug/symphonyd.exe`, lo que
+  apunta `CARGO_BIN_EXE_*`) son los mismos para dos worktrees en la misma carpeta: los tests de
+  uno pueden correr el binario del otro. `gpt-6-astra` lo vio como un fallo de compilación y paró.
+  Arreglado: se comparte solo el `build-dir` (lo intermedio, con hash por ruta del paquete) y
+  cada worktree guarda sus binarios. Verificado con un crate mínimo: `CARGO_BIN_EXE_*` apunta al
+  `target/` del worktree.
+- **2026-10-26 · AGENTS.md pide el gate completo al empezar.** Con varios agentes compilando a
+  la vez se vence o choca. Para delegados, quien integra corre el gate; el agente verifica solo
+  su crate (reglas de delegación).

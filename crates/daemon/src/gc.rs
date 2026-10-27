@@ -1,8 +1,10 @@
 //! Que Symphony no se coma el disco (pedido de Leo, 2026-10-24).
 //!
-//! - Los agentes de un proyecto Rust comparten `target/` en `<home>/cache/cargo-target/<n>`, con
-//!   [`TARGET_SLOTS`] carpetas: las dependencias se compilan pocas veces y no una por worktree, y
-//!   Cargo (que bloquea su carpeta mientras compila) no pone en fila a todos los agentes.
+//! - Los agentes de un proyecto Rust comparten el `build-dir` de Cargo (lo intermedio) en
+//!   `<home>/cache/cargo-build/<n>`, con [`TARGET_SLOTS`] carpetas: las dependencias se compilan
+//!   pocas veces y no una por worktree, y Cargo (que bloquea su carpeta mientras compila) no pone
+//!   en fila a todos los agentes. Los binarios finales quedan en el `target/` de cada worktree:
+//!   compartido, el `symphonyd.exe` de un agente pisaba el de otro (dogfooding 2026-10-26).
 //! - El worktree de un agente cancelado, ya integrado o completado hace más de 7 días se borra
 //!   (la rama queda; el diff sale del checkpoint). Uno con cambios sin commitear no se toca.
 
@@ -25,12 +27,17 @@ const COMPLETED_KEEP_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// ponytail: fijo; ajustarlo al número de agentes simultáneos si eso cambia.
 const TARGET_SLOTS: u32 = 3;
 
-fn cargo_target(home: &Path) -> PathBuf {
+fn cargo_cache(home: &Path) -> PathBuf {
+    home.join("cache").join("cargo-build")
+}
+
+/// Donde estaba la caché antes de 2026-10-26 (un `target/` entero compartido): se borra.
+fn legacy_cargo_target(home: &Path) -> PathBuf {
     home.join("cache").join("cargo-target")
 }
 
-/// `CARGO_TARGET_DIR` compartido para un worktree de Symphony con `Cargo.toml`, salvo que el
-/// usuario ya haya elegido uno.
+/// `CARGO_BUILD_BUILD_DIR` compartido para un worktree de Symphony con `Cargo.toml`, salvo que
+/// el usuario ya haya elegido dónde compila.
 pub fn cargo_env(home: &Path, worktree: &Path) -> Vec<(String, String)> {
     // En Windows las rutas no distinguen mayúsculas (`Desktop` y `desktop` son lo mismo).
     let norm = |p: &Path| {
@@ -41,6 +48,7 @@ pub fn cargo_env(home: &Path, worktree: &Path) -> Vec<(String, String)> {
     if !ours
         || !worktree.join("Cargo.toml").is_file()
         || std::env::var_os("CARGO_TARGET_DIR").is_some()
+        || std::env::var_os("CARGO_BUILD_BUILD_DIR").is_some()
     {
         return Vec::new();
     }
@@ -52,8 +60,8 @@ pub fn cargo_env(home: &Path, worktree: &Path) -> Vec<(String, String)> {
         .and_then(|n| n.parse::<u32>().ok())
         .map_or(0, |n| n % TARGET_SLOTS);
     vec![(
-        "CARGO_TARGET_DIR".into(),
-        cargo_target(home)
+        "CARGO_BUILD_BUILD_DIR".into(),
+        cargo_cache(home)
             .join(slot.to_string())
             .display()
             .to_string(),
@@ -85,10 +93,11 @@ impl Runtime {
         let home = self.home.clone();
         let removed = tokio::task::spawn_blocking(move || {
             if trim_cache {
-                let target = cargo_target(&home);
-                if dir_size(&target) > CARGO_TARGET_CAP {
-                    tracing::info!(path = %target.display(), "target/ compartido sobre el tope: se borra");
-                    let _ = std::fs::remove_dir_all(&target);
+                let _ = std::fs::remove_dir_all(legacy_cargo_target(&home));
+                let cache = cargo_cache(&home);
+                if dir_size(&cache) > CARGO_TARGET_CAP {
+                    tracing::info!(path = %cache.display(), "caché de Cargo compartida sobre el tope: se borra");
+                    let _ = std::fs::remove_dir_all(&cache);
                 }
             }
             rows.into_iter()
