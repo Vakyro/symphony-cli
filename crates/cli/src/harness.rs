@@ -39,6 +39,54 @@ fn resolve(root: &Path, p: &str) -> PathBuf {
     }
 }
 
+/// Ruta normalizada sin `.`/`..` (sin tocar el disco: el archivo puede no existir), en minúsculas
+/// en Windows, para comparar prefijos.
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    if cfg!(windows) {
+        PathBuf::from(out.to_string_lossy().to_lowercase())
+    } else {
+        out
+    }
+}
+
+/// Un worktree por agente (PLAN §2): dentro del repo del proyecto, un agente solo escribe en su
+/// worktree. Fuera del proyecto rige el acceso local que el usuario le dio. Dogfooding
+/// 2026-10-26/27: dos modelos escribieron en el repo principal con rutas absolutas.
+fn outside_own_worktree(project: Option<&Path>, root: &Path, file: &Path) -> bool {
+    let Some(project) = project else {
+        return false;
+    };
+    let file = lexical(file);
+    file.starts_with(lexical(project)) && !file.starts_with(lexical(root))
+}
+
+/// La raíz del proyecto del agente: `SYMPHONY_HOME` es `<proyecto>/.symphony` (ADR-0018).
+fn project_root() -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var_os("SYMPHONY_HOME")?);
+    home.parent().map(Path::to_path_buf)
+}
+
+fn guard_write(root: &Path, file: &Path) -> Result<(), String> {
+    if outside_own_worktree(project_root().as_deref(), root, file) {
+        return Err(format!(
+            "{} está en el repo del proyecto pero fuera de tu worktree: escribe solo dentro de {} (rutas relativas)",
+            file.display(),
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Sufijo único para los temporales de `write_atomic`.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -145,6 +193,7 @@ pub fn read(
 /// Crea o reemplaza un archivo (con sus carpetas).
 pub fn write(root: &Path, path: &str, content: &str) -> Result<String, String> {
     let file = resolve(root, path);
+    guard_write(root, &file)?;
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("no pude crear {}: {e}", dir.display()))?;
@@ -168,6 +217,7 @@ pub fn edit(
     replace_all: bool,
 ) -> Result<String, String> {
     let file = resolve(root, path);
+    guard_write(root, &file)?;
     let text = std::fs::read_to_string(&file)
         .map_err(|e| format!("no pude leer {}: {e}", file.display()))?;
     if old.is_empty() {
@@ -561,6 +611,33 @@ fn kill_tree(pid: Option<u32>) {
 
 #[cfg(test)]
 mod tests {
+    /// Dentro del repo del proyecto solo se escribe en el propio worktree; fuera, sin cambios.
+    #[test]
+    fn writes_inside_the_project_but_outside_the_worktree_are_refused() {
+        let project = Path::new("/p/repo");
+        let wt = Path::new("/p/repo/.symphony/worktrees/x/agent-1");
+        let out = |f: &str| outside_own_worktree(Some(project), wt, Path::new(f));
+        assert!(out("/p/repo/docs/a.md"), "el repo principal");
+        assert!(
+            out("/p/repo/.symphony/worktrees/x/agent-2/a.rs"),
+            "otro agente"
+        );
+        assert!(
+            out("/p/repo/.symphony/worktrees/x/agent-1/../agent-2/a.rs"),
+            "con .."
+        );
+        assert!(!out("/p/repo/.symphony/worktrees/x/agent-1/src/a.rs"));
+        assert!(
+            !out("/tmp/otra/cosa.txt"),
+            "fuera del proyecto rige el acceso local"
+        );
+        assert!(!outside_own_worktree(
+            None,
+            wt,
+            Path::new("/p/repo/docs/a.md")
+        ));
+    }
+
     use super::*;
 
     fn tree() -> (tempfile::TempDir, PathBuf) {
