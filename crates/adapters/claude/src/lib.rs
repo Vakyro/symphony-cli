@@ -379,9 +379,25 @@ impl ProviderAdapter for ClaudeAdapter {
                 .collect(),
             (Some("result"), _) if v.get("is_error").and_then(Value::as_bool) == Some(true) => {
                 let text = s(&v, "result").unwrap_or_default();
-                self.parse_error(&text)
-                    .map(|e| vec![AgentEvent::ProviderError(e)])
-                    .unwrap_or_default()
+                if let Some(e) = self.parse_error(&text) {
+                    vec![AgentEvent::ProviderError(e)]
+                } else {
+                    let subtype = s(&v, "subtype");
+                    let error = ProviderError {
+                        failure_type: FailureType::Unknown,
+                        raw_code: subtype,
+                        message: symphony_core::redact(&text).chars().take(500).collect(),
+                        retry_after_ms: parse_retry_after_ms(&text),
+                        resets_at: None,
+                        transient: false,
+                    };
+                    vec![
+                        AgentEvent::ProviderError(error),
+                        AgentEvent::TurnFinished {
+                            last_message: s(&v, "result"),
+                        },
+                    ]
+                }
             }
             // Fin del turno: con `--input-format stream-json` el CLI no sale solo;
             // el runtime cierra stdin al ver este evento (ADR-0005, adenda P07).
@@ -478,3 +494,35 @@ impl ProviderAdapter for ClaudeAdapter {
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/claude-code")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_with_unrecognized_error_emits_provider_error_and_turn_finished() {
+        let adapter = ClaudeAdapter::default();
+        let line = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Reached maximum number of turns"}"#;
+        let events = adapter.parse_stream_line(line);
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            AgentEvent::ProviderError(e) => {
+                assert_eq!(e.failure_type, FailureType::Unknown);
+                assert_eq!(e.raw_code.as_deref(), Some("error_max_turns"));
+                assert_eq!(e.message, "Reached maximum number of turns");
+                assert!(!e.transient);
+            }
+            other => panic!("esperaba ProviderError, obtuve {other:?}"),
+        }
+        match &events[1] {
+            AgentEvent::TurnFinished { last_message } => {
+                assert_eq!(
+                    last_message.as_deref(),
+                    Some("Reached maximum number of turns")
+                );
+            }
+            other => panic!("esperaba TurnFinished, obtuve {other:?}"),
+        }
+    }
+}
+

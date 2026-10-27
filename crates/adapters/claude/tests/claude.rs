@@ -84,6 +84,7 @@ fn fixtures() -> Fixtures {
         (r#"{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":2000,"error_status":429,"error":"rate_limit"}"#.to_string(), vec!["ProviderError"]),
         (r#"{"type":"user","isReplay":true,"message":{"role":"user","content":"agregá tests"}}"#.to_string(), vec!["UserMessage"]),
         (r#"{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached|1790300000"}"#.to_string(), vec!["ProviderError"]),
+        (r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Reached maximum number of turns"}"#.to_string(), vec!["ProviderError", "TurnFinished"]),
     ]);
     let hooks = lines("hooks.jsonl")
         .into_iter()
