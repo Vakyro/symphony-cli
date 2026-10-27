@@ -171,8 +171,8 @@ jobs:
   docs:
     name: docs (typos + lychee + mdbook)
     runs-on: ubuntu-latest
-    # Hasta revisar la primera corrida: el repo es casi todo español y typos trae diccionario inglés.
-    continue-on-error: true
+    # Bloqueante desde 2026-10-27 (primera corrida revisada: palabras en español en
+    # `_typos.toml` y rutas históricas excluidas en `lychee.toml`).
     steps:
       - uses: actions/checkout@v4
       - name: typos
