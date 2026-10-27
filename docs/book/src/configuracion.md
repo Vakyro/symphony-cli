@@ -26,6 +26,14 @@ profile = "BALANCED"
 # os_max_memory_mb = 4096
 # os_max_processes = 512
 
+[retention]
+# El job corre al arrancar el daemon: purga en lotes lo que ya no se necesita.
+# Eventos de agentes terminados o archivados más viejos que esto (los de agentes vivos,
+# los referenciados por checkpoints o project_facts, y checkpoints y runs no se tocan).
+events_days = 30
+# Muestras por minuto de recursos más viejas que esto.
+samples_days = 14
+
 [routing]
 # Profile o modelo por defecto al crear un agente.
 default_profile = "@code"
@@ -88,6 +96,9 @@ level = "info"
   - `cpu_ceiling_pct` y `ram_ceiling_pct`: techos porcentuales (`1.0` a `100.0`) por encima de los cuales las operaciones pesadas esperan en cola.
   - `hold_max_secs`: segundos máximos que un hook `PreToolUse` retiene una herramienta en cola antes de responder `deny` con la explicación de espera (> 0).
   - `os_cpu_cores`, `os_max_memory_mb`, `os_max_processes`: límites aplicados por el supervisor de procesos del sistema operativo a cada árbol de agente.
+- **`[retention]` (DB §8, P13.S4):**
+  - `events_days`: días que se conservan los `events` de agentes terminales (`COMPLETED`, `FAILED`, `CANCELLED`) o archivados (por defecto `30`). Los eventos de agentes vivos y los referenciados por checkpoints o `project_facts` nunca se borran.
+  - `samples_days`: días que se conservan las muestras por minuto en `resource_samples` (por defecto `14`). El trabajo de purga corre al arrancar el daemon en lotes de 5 000 filas a través del escritor único.
 - **`[routing]`:**
   - `default_profile`: profile inicial cuando no se indica `--model` ni `--profile` (por defecto `"@code"`). Profiles disponibles: `@code`, `@debug`, `@fast`, `@reasoning`, `@docs`, `@review`, `@conserve`, `@write`, `@media`, `@research`.
   - `failover`: `"ANY"` (cambia a cualquier proveedor elegible), `"SAME_PROVIDER"` (solo dentro del mismo proveedor) o `"NONE"` (no cambia automáticamente).

@@ -179,3 +179,36 @@ Esta guía reúne los problemas reales registrados durante el desarrollo y uso d
 - **Síntoma:** En la terminal de Windows, presionar una tecla (como `n`, `q` o las flechas) dispara la acción por duplicado.
 - **Causa:** En Windows, `crossterm` entrega tanto el evento `KeyEventKind::Press` como `KeyEventKind::Release`.
 - **Arreglo:** Ignorar los eventos que no sean `KeyEventKind::Press` en la TUI.
+
+## Hallazgos de dogfooding (P13)
+
+### 28. Espacio en disco ocupado por worktrees o `target/` de Cargo (`DOGFOOD.md`)
+- **Síntoma:** La carpeta `.symphony/worktrees/` acumula decenas de gigabytes por artefactos de compilación (`target/`, `node_modules/`).
+- **Causa:** Cada worktree de un proyecto Rust compilaba desde cero y los worktrees de tareas ya integradas o canceladas permanecían en disco.
+- **Arreglo:**
+  - Al arrancar, `symphonyd` elimina automáticamente los worktrees limpios (sin cambios sin commitear) de agentes cancelados, integrados o completados sin actividad durante 7 días.
+  - Los agentes comparten el directorio intermedio de compilación en `<proyecto>/.symphony/cache/cargo-build` (`CARGO_BUILD_BUILD_DIR`, con tope de 15 GB que se vacía al arrancar si se supera), mientras cada worktree conserva sus binarios finales en su propio `target/` para no pisar ejecutables de pruebas (`CARGO_BIN_EXE_*`) entre agentes concurrentes.
+  - Si vienes de una versión anterior a P15.5 con una base global en `~/.symphony`, corre una vez `symphony migrate split` en cada proyecto.
+
+### 29. El índice de contexto conserva archivos que después se añadieron a `.gitignore` (`DOGFOOD.md`)
+- **Síntoma:** `symphony.db` crece porque archivos generados (`target/**`, `dist/**`) se indexaron antes de estar en `.gitignore`.
+- **Causa:** Las entradas antiguas no se purgaban cuando cambiaban las reglas de ignorado.
+- **Arreglo:** El recorrido inicial del watcher de contexto limpia automáticamente del índice todo archivo borrado o ahora ignorado por `.gitignore`.
+
+### 30. Un agente que compila en silencio cae por `NO_HEARTBEAT` a los 15 minutos (`DOGFOOD.md`)
+- **Síntoma:** un agente que compila sin escribir nada durante más de 15 minutos (`DEFAULT_STALE_AFTER`) se marcaba `FAILED` por `NO_HEARTBEAT`.
+- **Causa:** con herramientas nativas que no emiten eventos mientras corre un comando (p. ej. Antigravity), el watchdog no veía actividad.
+- **Arreglo:** desde P13 el watchdog cuenta como latido la CPU del árbol de procesos del run (un `cargo` que trabaja ya no se mata). Si aun así cae, reanúdalo desde el Recovery Center (`r` en Home).
+
+### 31. Kimi Code falla en Windows con código 1 al leer caracteres Unicode (`⛔`, emojis)
+- **Síntoma:** En Windows, un agente con Kimi termina abruptamente con código 1 (`CRASH`) al leer archivos como `STATUS.md`.
+- **Causa:** Python en Windows usa la codificación `cp1252` cuando su salida estándar va a un pipe y lanza `UnicodeEncodeError` ante caracteres fuera de esa página.
+- **Arreglo:** `KimiAdapter` inyecta `PYTHONIOENCODING=utf-8` y `PYTHONUTF8=1`. Además, el ejecutor guarda las últimas 3 líneas de `stderr` (redactadas) junto a la razón del fallo del agente y en el *recovery item*.
+
+### 32. OpenCode aparece como `NOT_FOUND` o solo lista `opencode/default`
+- **Síntoma:** Symphony no detecta `opencode` tras instalarlo con npm, o recién arrancado el daemon solo aparece el modelo `opencode/default`.
+- **Causa:** El paquete npm cambió de `opencode-ai` a `@opencode/cli`; y `opencode models` tarda ~7 segundos en responder la primera vez, por lo que se consulta en segundo plano.
+- **Arreglo:** El adapter busca el binario en ambas ubicaciones de npm. Espera unos segundos tras el primer arranque y ejecuta:
+  ```bash
+  symphony providers refresh
+  ```

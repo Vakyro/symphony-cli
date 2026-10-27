@@ -76,3 +76,4 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
 ## S6 · Documentación (delegado)
 - Libro mdBook en `docs/book/` (Antigravity), `cargo xtask er` con el ER (Kimi), QUICKSTART al
   día (OpenCode, modelo gratis). Revisados e integrados.
+- Capítulos completos en `docs/book/src/` (`adapters.md`, `plugins.md`, `configuracion.md`, `comandos.md`, `troubleshooting.md`, `remoto-ssh.md`) e índice `SUMMARY.md` actualizado (`mdbook` no está instalado en el entorno local).
