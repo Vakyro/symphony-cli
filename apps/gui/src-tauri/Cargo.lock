@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-core"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "regex",
  "serde",
@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-gui-bridge"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "serde_json",
  "symphony-protocol",
@@ -3025,7 +3025,7 @@ dependencies = [
 
 [[package]]
 name = "symphony-protocol"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "interprocess",
  "serde",
