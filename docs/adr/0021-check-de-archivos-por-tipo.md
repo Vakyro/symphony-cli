@@ -24,7 +24,7 @@ Opción 2.
   - `json`: `serde_json`; `toml`: `toml_edit` (ya están en el workspace).
   - binarios por firma: `png`, `jpg/jpeg`, `gif`, `webp`, `pdf` (`%PDF-` y `%%EOF` al final), `docx/xlsx/pptx/odt/zip/epub` (`PK\x03\x04`), `mp3` (`ID3` o sincronía MPEG), `wav` (`RIFF…WAVE`), `mp4/mov/m4a` (`ftyp` en el byte 4), `webm/mkv` (`1A 45 DF A3`), `ogg` (`OggS`).
   - archivo vacío: `FAIL` salvo extensiones de texto.
-  - extensión desconocida: no se juzga (cuenta como revisado, sin fallo).
+  - extensión desconocida: no se juzga (ni falla ni cuenta como revisado).
 - Resultado: `PASS` si todo se abre; `FAIL` con la lista de archivos y el motivo; sin archivos que revisar, `PASS` con esa nota (`SKIPPED` haría que el merge avise de un check que no pudo correr).
 - Los validators de plugin (ADR-0015) siguen sumándose en el tier 2.
 
