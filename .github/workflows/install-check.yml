@@ -1,0 +1,99 @@
+# P16.S4 · Instalación limpia, sin publicar nada. Baja los archivos que construyó el job
+# `release-dry-run` de CI (P13.S7), los instala en una carpeta fuera del checkout y prueba el
+# primer uso: versiones, daemon, un proyecto nuevo y un agente (Journey A) con un `claude`
+# falso (`fake-agent`) como único proveedor. Los instaladores de dist bajan de un GitHub
+# Release, que no existe hasta publicar: por eso se instala desde el archivo.
+name: Install check
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main, "phase/**"]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run de CI con los artefactos dist-* (release dry run)"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  install:
+    name: install (${{ matrix.target }})
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUN_ID: ${{ github.event.inputs.run_id || github.event.workflow_run.id }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Instalar desde el archivo
+        run: |
+          set -euo pipefail
+          DEST="$RUNNER_TEMP/symphony-bin"
+          mkdir -p "$DEST" "$RUNNER_TEMP/x"
+          for f in dist/symphony-cli-${{ matrix.target }}.* dist/symphony-daemon-${{ matrix.target }}.*; do
+            case "$f" in
+              *.zip) 7z x -y "$f" -o"$RUNNER_TEMP/x" > /dev/null ;;
+              *.tar.xz) tar -xJf "$f" -C "$RUNNER_TEMP/x" ;;
+              *) continue ;;
+            esac
+          done
+          # Los dos binarios en la misma carpeta: `symphony` busca `symphonyd` a su lado.
+          find "$RUNNER_TEMP/x" -type f \( -name 'symphony' -o -name 'symphonyd' -o -name 'symphony.exe' -o -name 'symphonyd.exe' \) -exec cp {} "$DEST/" \;
+          chmod +x "$DEST"/* || true
+          ls -la "$DEST"
+          echo "$DEST" >> "$GITHUB_PATH"
+
+      - name: Versiones
+        run: |
+          symphony --version
+          symphonyd --version
+
+      # El único proveedor del runner: un `claude` falso. Se compila solo `fake-agent`.
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - name: Proveedor falso
+        run: |
+          set -euo pipefail
+          cargo build -q --release --manifest-path src/Cargo.toml -p symphony-testkit --bin fake-agent
+          FAKE="$RUNNER_TEMP/fake-bin"
+          mkdir -p "$FAKE"
+          EXE=""; [ "$RUNNER_OS" = "Windows" ] && EXE=".exe"
+          cp "src/target/release/fake-agent$EXE" "$FAKE/claude$EXE"
+          echo "$FAKE" >> "$GITHUB_PATH"
+
+      - name: Primer uso (Journey A)
+        run: |
+          set -euo pipefail
+          P="$RUNNER_TEMP/proyecto"
+          mkdir -p "$P" && cd "$P"
+          git init -q -b main
+          git config user.email ci@example.com && git config user.name CI
+          echo "# Demo" > README.md && git add . && git commit -q -m init
+          symphony init
+          symphony daemon start
+          symphony status
+          symphony providers
+          symphony spawn "Agregar un archivo de prueba"
+          symphony agents
+          symphony daemon stop

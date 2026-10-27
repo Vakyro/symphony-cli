@@ -28,3 +28,18 @@
   la tarea queda BLOCKED). Store y core: 143 tests verdes.
 - **Pendiente / notas:** sin archivos que revisar el check es PASS (no SKIPPED, que el merge
   muestra como «un check no pudo correr»); el ADR lo dice así.
+
+### P16.S4 · Instalación limpia — 🟡 (falta su primera corrida en CI)
+- **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-10-27
+- **Qué se hizo:** `.github/workflows/install-check.yml`: tras cada CI verde (o a mano con el
+  id del run) baja los artefactos `dist-*` del dry run de P13.S7, los instala fuera del
+  checkout (los dos binarios juntos) y prueba `symphony --version`, `symphonyd --version` y
+  un Journey A en un proyecto nuevo (`init`, `daemon start`, `status`, `providers`, `spawn`,
+  `agents`, `daemon stop`) con un `claude` falso (`fake-agent`) como único proveedor. Los
+  instaladores shell/PowerShell de dist bajan de un GitHub Release: se prueban al publicar.
+- **Cómo se verificó:** el mismo Journey A local con los binarios de `dist build` de Windows
+  (agente #1 creado, `READY`).
+
+### P16.S5 · Documentación as-built — 🟡
+- `docs/spec/desviaciones.md`: anexo de lo que cambió respecto al spec y por qué, con sus ADRs.
+  Falta README final y CHANGELOG (se hacen con el tag).
