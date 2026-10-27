@@ -108,17 +108,3 @@ fn prune_old(dir: &Path, keep: &Path) {
         }
     }
 }
-
-/// Ruta del binario `fake-agent` junto al ejecutable del test que lo llama
-/// (`target/<perfil>/`). Lo construye cargo al compilar los tests del workspace.
-pub fn fake_agent_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let name = format!("fake-agent{}", std::env::consts::EXE_SUFFIX);
-    // Los tests viven en target/<perfil>/deps/; los binarios, un nivel arriba.
-    exe.ancestors()
-        .skip(1)
-        .take(2)
-        .map(|d| d.join(&name))
-        .find(|p| p.is_file())
-        .map(|p| pinned_bin(&p))
-}

@@ -109,11 +109,7 @@ struct State {
     scheduling: Arc<crate::scheduling::Scheduling>,
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+use crate::runtime::now_ms;
 
 /// Recuperación al arrancar (P03.S5): con el lock tomado, toda sesión `ACTIVE`
 /// quedó de un daemon que murió. Se marca `INTERRUPTED` y va al Recovery Center.

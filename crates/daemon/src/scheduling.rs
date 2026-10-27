@@ -20,9 +20,7 @@ use tokio_util::sync::CancellationToken;
 const LEASE_MS: i64 = 30 * 60 * 1000;
 const HEARTBEAT: Duration = Duration::from_secs(1);
 
-fn now_ms() -> i64 {
-    crate::runtime::now_ms()
-}
+use crate::runtime::now_ms;
 
 struct Inner {
     core: Scheduler,

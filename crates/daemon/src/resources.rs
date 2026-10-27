@@ -30,11 +30,7 @@ pub fn heavy_slots(profile: PerformanceProfile) -> u32 {
     }
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+use crate::runtime::now_ms;
 
 /// Lee CPU global y RAM usada (porcentajes 0–100). El primer CPU tras crear el `System`
 /// es 0: quien llama descarta la primera lectura.
