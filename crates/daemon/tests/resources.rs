@@ -16,6 +16,7 @@ async fn samples_cpu_and_ram_into_the_database() {
     let shutdown = CancellationToken::new();
     let task = resources::spawn(
         writer.handle(),
+        dir.path().to_path_buf(),
         PerformanceProfile::Performance,
         Duration::from_millis(50),
         shutdown.clone(),

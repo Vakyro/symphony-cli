@@ -70,7 +70,7 @@ blake3 = "1.8"
 zstd = "0.14"
 criterion = { version = "0.8.2", default-features = false }
 processkit = { version = "3.3", features = ["limits", "stats"] }
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system", "disk"] }
 ratatui = "0.30.2"
 
 [workspace.lints.rust]

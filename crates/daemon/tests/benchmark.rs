@@ -225,6 +225,7 @@ async fn env_with(providers_: &[(&'static str, &str)], heavy_validation: bool) -
     runtime.set_scheduling(scheduling.clone());
     symphony_daemon::resources::spawn(
         writer.handle(),
+        std::env::temp_dir(),
         PerformanceProfile::Balanced,
         Duration::from_millis(200),
         shutdown.clone(),

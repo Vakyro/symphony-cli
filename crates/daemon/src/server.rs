@@ -336,6 +336,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
             let pressure = scheduling.clone();
             crate::resources::spawn(
                 writer.handle(),
+                home.to_path_buf(),
                 config.performance.profile,
                 crate::resources::SAMPLE_EVERY,
                 shutdown.clone(),

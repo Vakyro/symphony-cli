@@ -130,7 +130,9 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
   suponer como máximo 5 h desde el primer uso de la ventana.
 - **2026-10-26 · Disco lleno.** El `target/` del integrador llegó a 104 GB y dejó el disco en
   0: los agentes se colgaron y Symphony solo lo notó 15 min después, por `NO_HEARTBEAT`. El
-  Resource Manager mira CPU y RAM, no el disco. Arreglo inmediato: `cargo clean`.
+  Resource Manager mira CPU y RAM, no el disco. Arreglo inmediato: `cargo clean`. **Arreglado
+  en parte:** una vez por minuto se mira el disco del proyecto y, con menos de 5 GB libres, queda
+  un aviso `MACHINE_PRESSURE` en el Recovery Center (falta que el scheduler frene lo pesado).
 - **2026-10-26 · AGENTS.md pide el gate completo al empezar.** Con varios agentes compilando a
   la vez se vence o choca. Para delegados, quien integra corre el gate; el agente verifica solo
   su crate (reglas de delegación).
