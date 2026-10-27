@@ -105,7 +105,8 @@ impl Runtime {
                     let path = PathBuf::from(path);
                     let repo = Repo::at(&root);
                     if path.exists() {
-                        if !Repo::at(&path).is_clean().unwrap_or(false) {
+                        // Archivos nuevos sin commitear también son trabajo (revisión de P13).
+                        if !Repo::at(&path).has_no_work().unwrap_or(false) {
                             tracing::info!(path = %path.display(), "worktree con cambios sin commitear: no se borra");
                             return None;
                         }

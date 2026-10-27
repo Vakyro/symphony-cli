@@ -364,14 +364,26 @@ async fn stopping_an_agent_frees_its_clean_worktree_and_keeps_the_branch() {
         .create_agent(req(&e, "Con cambios", Execution::DecideLater))
         .await
         .unwrap();
+    // Revisión de código de P13: un archivo nuevo sin seguimiento también es trabajo.
+    let new_file = e
+        .runtime
+        .create_agent(req(&e, "Archivo nuevo", Execution::DecideLater))
+        .await
+        .unwrap();
     std::fs::write(dirty.worktree.join("README.md"), "a medias\n").unwrap();
+    std::fs::write(new_file.worktree.join("nuevo.txt"), "sin commitear\n").unwrap();
     e.runtime.stop(clean.agent_id).await.unwrap();
     e.runtime.stop(dirty.agent_id).await.unwrap();
+    e.runtime.stop(new_file.agent_id).await.unwrap();
     e.writer.handle().flush().await.unwrap();
 
     assert!(!clean.worktree.exists());
     assert!(git(&e.repo, &["branch", "--list", &clean.branch]).contains(&clean.branch));
     assert!(dirty.worktree.join("README.md").is_file());
+    assert!(
+        new_file.worktree.join("nuevo.txt").is_file(),
+        "un archivo nuevo sin commitear no se borra"
+    );
     let status = |id: &symphony_core::AgentId| {
         one::<String>(
             &e,

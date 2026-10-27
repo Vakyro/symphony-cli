@@ -45,6 +45,11 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Escribe el archivo de una vez: temporal en la misma carpeta, `sync_all` y `rename` encima.
 /// Un fallo a mitad deja intacta la versión anterior; nunca se trunca el original (P13.S5).
 fn write_atomic(file: &Path, content: &[u8]) -> Result<(), String> {
+    // A través de un symlink se escribe su destino, y el archivo conserva sus permisos
+    // (el bit ejecutable de un script), como con una escritura normal (revisión de P13).
+    let target = std::fs::canonicalize(file).ok();
+    let file = target.as_deref().unwrap_or(file);
+    let perms = std::fs::metadata(file).ok().map(|m| m.permissions());
     let dir = file.parent().unwrap_or_else(|| Path::new("."));
     let name = file.file_name().map_or_else(
         || "archivo".to_string(),
@@ -61,6 +66,9 @@ fn write_atomic(file: &Path, content: &[u8]) -> Result<(), String> {
             .sync_all()
             .map_err(|e| format!("no pude sincronizar {}: {e}", tmp.display()))?;
         drop(tmp_file);
+        if let Some(p) = &perms {
+            let _ = std::fs::set_permissions(&tmp, p.clone());
+        }
         std::fs::rename(&tmp, file)
             .map_err(|e| format!("no pude reemplazar {}: {e}", file.display()))
     })();
@@ -609,6 +617,19 @@ mod tests {
         opened.read_to_string(&mut previous).unwrap();
         assert_eq!(previous, "nuevo");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "editado");
+    }
+
+    /// Revisión de P13: escribir de forma atómica no le quita el bit ejecutable a un script.
+    #[cfg(unix)]
+    #[test]
+    fn editing_a_script_keeps_it_executable() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_d, root) = tree();
+        let path = root.join("src/b.txt");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write(&root, "src/b.txt", "#!/bin/sh\n").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
     }
 
     #[test]

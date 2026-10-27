@@ -149,11 +149,18 @@ fn message_sources(
         .collect();
     let mut stmt = conn
         .prepare(
-            "SELECT m.run_id, m.role, m.content, co.blob_hash
-             FROM messages m
-             LEFT JOIN context_objects co ON co.id = m.content_object_id
-             WHERE m.agent_id = ?1
-             ORDER BY m.created_at ASC, m.id ASC",
+            // Los últimos `MESSAGES_MAX`, en orden: un chat de meses no se carga entero
+            // (revisión de P13).
+            &format!(
+                "SELECT run_id, role, content, blob_hash FROM (
+                     SELECT m.run_id, m.role, m.content, co.blob_hash, m.created_at, m.id
+                     FROM messages m
+                     LEFT JOIN context_objects co ON co.id = m.content_object_id
+                     WHERE m.agent_id = ?1
+                     ORDER BY m.created_at DESC, m.id DESC LIMIT {}
+                 ) ORDER BY created_at ASC, id ASC",
+                repo::MESSAGES_MAX
+            ),
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -250,7 +257,7 @@ pub(crate) async fn validated_checkpoint(
         };
         let objects = objects.clone();
         let candidate = checkpoint.clone();
-        let invalid = tokio::task::spawn_blocking(move || {
+        let invalid = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
             if let Some(summary) = &candidate.summary_json
                 && serde_json::from_str::<Value>(summary).is_err()
             {
@@ -269,7 +276,12 @@ pub(crate) async fn validated_checkpoint(
                     ) => {
                         return Ok(Some(e.to_string()));
                     }
-                    Err(e) => return Err(e.to_string()),
+                    // Un error pasajero (un antivirus, un lock) no es corrupción ni puede tumbar
+                    // el handoff justo cuando cae un proveedor: se usa el checkpoint igual
+                    // (revisión de P13).
+                    Err(e) => {
+                        tracing::warn!(error = %e, "no se pudo leer el diff del checkpoint; se usa igual");
+                    }
                 }
             }
             Ok(None)
