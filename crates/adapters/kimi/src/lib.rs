@@ -401,4 +401,14 @@ mod tests {
         assert_eq!(err.failure_type, FailureType::TempRateLimit);
         assert!(err.transient);
     }
+
+    /// El mensaje real del límite de 5 h (dogfooding 2026-10-26): trae «429» pero es cuota.
+    #[test]
+    fn the_five_hour_limit_is_quota_not_a_transient_429() {
+        let err = KimiAdapter::default()
+            .parse_error(r#"Error code: 429 - {'error': {'message': "You've reached your 5-hour usage limit"}}"#)
+            .expect("debe clasificar el error");
+        assert_eq!(err.failure_type, FailureType::DailyQuota);
+        assert!(!err.transient);
+    }
 }
