@@ -172,6 +172,25 @@ pub fn delete_file(
     Ok(Some(hash))
 }
 
+/// Borra del índice los archivos cuya URI empieza por `prefix` (un directorio que desapareció)
+/// y devuelve los blobs a soltar. Un `rm -rf` de un directorio llega como un solo evento, así
+/// que sin esto sus archivos seguirían indexados hasta el próximo arranque (P13.S5).
+pub fn delete_file_prefix(
+    conn: &Connection,
+    project: &str,
+    prefix: &str,
+) -> Result<Vec<String>, RepoError> {
+    let mut released = Vec::new();
+    for uri in file_uris(conn, project)? {
+        if uri.starts_with(prefix)
+            && let Some(hash) = delete_file(conn, project, &uri)?
+        {
+            released.push(hash);
+        }
+    }
+    Ok(released)
+}
+
 pub fn object_by_id(conn: &Connection, id: &str) -> Result<Option<ObjectRow>, RepoError> {
     Ok(conn
         .query_row(

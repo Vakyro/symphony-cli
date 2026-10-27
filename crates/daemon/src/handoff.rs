@@ -17,6 +17,9 @@ use symphony_store::repo;
 
 /// Archivos nuevos más grandes que esto se nombran pero no se incluyen.
 const NEW_FILE_MAX_BYTES: u64 = 1024 * 1024;
+/// Tope agregado de bytes de archivos nuevos por handoff: pasado el tope se nombran sin
+/// contenido, aunque cada uno quepa por separado (P13.S5).
+const NEW_FILES_TOTAL_MAX: usize = 8 * 1024 * 1024;
 
 /// Prompt listo para lanzar un executor nuevo, con lo que va a `handoffs`.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,11 +47,26 @@ struct LiveGit {
     new_files: Vec<NewFile>,
 }
 
+/// Lee un archivo nuevo si cabe en el tope por archivo y en el presupuesto de la tanda. Pasado
+/// el tope total entra como «sin contenido»: no se lee ni se reserva (P13.S5).
+fn read_new_file(worktree: &Path, path: &str, budget: &mut usize) -> Option<String> {
+    let full = worktree.join(path);
+    let meta = std::fs::metadata(&full).ok()?;
+    let len = usize::try_from(meta.len()).ok()?;
+    if !meta.is_file() || meta.len() > NEW_FILE_MAX_BYTES || len > *budget {
+        return None;
+    }
+    let text = String::from_utf8(std::fs::read(&full).ok()?).ok()?;
+    *budget -= len;
+    Some(redact(&text).into_owned())
+}
+
 fn live_git(worktree: &Path, base: &str) -> Result<LiveGit, symphony_git::GitError> {
     let repo = Repo::at(worktree);
     let entries = repo.status()?;
     let mut status = String::new();
     let mut new_files = Vec::new();
+    let mut budget = NEW_FILES_TOTAL_MAX;
     for e in &entries {
         match e {
             FileStatus::Changed { xy, path, .. } | FileStatus::Unmerged { xy, path } => {
@@ -56,13 +74,7 @@ fn live_git(worktree: &Path, base: &str) -> Result<LiveGit, symphony_git::GitErr
             }
             FileStatus::Untracked { path } => {
                 status.push_str(&format!("?? {path}\n"));
-                let full = worktree.join(path);
-                let content = std::fs::metadata(&full)
-                    .ok()
-                    .filter(|m| m.len() <= NEW_FILE_MAX_BYTES)
-                    .and_then(|_| std::fs::read(&full).ok())
-                    .and_then(|b| String::from_utf8(b).ok())
-                    .map(|s| redact(&s).into_owned());
+                let content = read_new_file(worktree, path, &mut budget);
                 new_files.push(NewFile {
                     path: path.clone(),
                     content,
@@ -110,47 +122,113 @@ pub(crate) fn message_text(
     )
 }
 
+/// De dónde sale el texto de un mensaje.
+enum SourceText {
+    /// El mensaje corto ya trae su texto en la fila.
+    Inline(String),
+    /// El mensaje largo vive en el object store: se lee después, sin el cerrojo del lector.
+    Blob(String),
+}
+
+/// Un mensaje ya filtrado, pendiente de resolver su texto.
+struct MessageSource {
+    speaker: Speaker,
+    run: Option<String>,
+    text: SourceText,
+}
+
+/// Bajo el cerrojo del lector: solo filas y hashes, ninguna lectura del object store (P13.S5).
+fn message_sources(
+    conn: &rusqlite::Connection,
+    agent: AgentId,
+) -> Result<(Vec<MessageSource>, HashSet<String>), String> {
+    let handoff_runs: HashSet<String> = repo::handoff_run_ids(conn, agent)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|run| run.to_string())
+        .collect();
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.run_id, m.role, m.content, co.blob_hash
+             FROM messages m
+             LEFT JOIN context_objects co ON co.id = m.content_object_id
+             WHERE m.agent_id = ?1
+             ORDER BY m.created_at ASC, m.id ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([agent.to_string()], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (run, role, content, hash) in rows {
+        let speaker = match role.as_str() {
+            "USER" => Speaker::User,
+            "ASSISTANT" => Speaker::Assistant,
+            _ => continue,
+        };
+        let text = match (content, hash) {
+            (Some(content), _) => SourceText::Inline(content),
+            (None, Some(hash)) => SourceText::Blob(hash),
+            (None, None) => continue,
+        };
+        out.push(MessageSource { speaker, run, text });
+    }
+    Ok((out, handoff_runs))
+}
+
 /// Lo dicho hasta ahora: mensajes del usuario y del asistente, en orden. No entran las
 /// herramientas, los separadores de cambio de executor ni los prompts de handoff (el
 /// primer mensaje de un run que arrancó desde un checkpoint), que ya contienen esta misma
 /// conversación. Los fragmentos seguidos del asistente se juntan en un mensaje.
 fn conversation(
-    conn: &rusqlite::Connection,
+    sources: Vec<MessageSource>,
+    handoff_runs: HashSet<String>,
     objects: &ObjectStore,
-    agent: AgentId,
-) -> Result<Vec<ChatMessage>, String> {
-    let handoff_runs: HashSet<_> = repo::handoff_run_ids(conn, agent)
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .collect();
+) -> Vec<ChatMessage> {
     let mut seen_first_user = HashSet::new();
     let mut out: Vec<ChatMessage> = Vec::new();
-    for m in repo::agent_messages(conn, agent, None).map_err(|e| e.to_string())? {
-        let speaker = match m.role.as_str() {
-            "USER" => Speaker::User,
-            "ASSISTANT" => Speaker::Assistant,
-            _ => continue,
-        };
-        if speaker == Speaker::User
-            && let Some(run) = m.run_id
+    for source in sources {
+        if source.speaker == Speaker::User
+            && let Some(run) = source.run
             && handoff_runs.contains(&run)
             && seen_first_user.insert(run)
         {
             continue;
         }
-        let text = redact(&message_text(conn, objects, &m)).into_owned();
+        let raw = match source.text {
+            SourceText::Inline(text) => text,
+            SourceText::Blob(hash) => objects.get(&hash).map_or_else(
+                |_| "(objeto no disponible)".into(),
+                |b| String::from_utf8_lossy(&b).into_owned(),
+            ),
+        };
+        let text = redact(&raw).into_owned();
         if text.trim().is_empty() {
             continue;
         }
         match out.last_mut() {
-            Some(last) if speaker == Speaker::Assistant && last.speaker == Speaker::Assistant => {
+            Some(last)
+                if source.speaker == Speaker::Assistant && last.speaker == Speaker::Assistant =>
+            {
                 last.text.push_str("\n\n");
                 last.text.push_str(&text);
             }
-            _ => out.push(ChatMessage { speaker, text }),
+            _ => out.push(ChatMessage {
+                speaker: source.speaker,
+                text,
+            }),
         }
     }
-    Ok(out)
+    out
 }
 
 /// Descarta checkpoints ilegibles antes de usarlos; errores de E/S transitorios se propagan.
@@ -222,7 +300,7 @@ pub async fn prepare(
 ) -> Result<PreparedHandoff, String> {
     let started = Instant::now();
     let checkpoint = validated_checkpoint(reader, writer, objects, agent).await?;
-    let (a, wt, objective, conversation, facts, stale) = {
+    let (a, wt, objective, sources, handoff_runs, facts, stale) = {
         let conn = reader
             .lock()
             .map_err(|_| "lector de la base no disponible")?;
@@ -247,7 +325,7 @@ pub async fn prepare(
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let conversation = conversation(&conn, objects, agent)?;
+        let (sources, handoff_runs) = message_sources(&conn, agent)?;
         let facts = symphony_store::context::get_current_facts(&conn, &a.project_id.to_string())
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -257,8 +335,10 @@ pub async fn prepare(
                 kind: f.kind,
             })
             .collect();
-        (a, wt, objective, conversation, facts, stale)
+        (a, wt, objective, sources, handoff_runs, facts, stale)
     };
+    // Ya sin el cerrojo del lector: los blobs del object store y la redacción (P13.S5).
+    let conversation = conversation(sources, handoff_runs, objects);
     let (path, base) = (wt.path.clone(), wt.base_ref.clone());
     let git = tokio::task::spawn_blocking(move || live_git(Path::new(&path), &base))
         .await
@@ -335,4 +415,41 @@ pub async fn prepare(
             })
             .collect(),
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn untracked_files_share_one_total_budget() {
+        // Dos archivos que caben por separado pero no juntos: el segundo se nombra sin
+        // contenido, sin leerlo ni reservarlo (P13.S5).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("uno.txt"), "abcdef").unwrap();
+        std::fs::write(root.join("dos.txt"), "ghijkl").unwrap();
+        let mut budget = 8;
+        assert_eq!(
+            read_new_file(root, "uno.txt", &mut budget).as_deref(),
+            Some("abcdef")
+        );
+        assert_eq!(budget, 2);
+        assert_eq!(read_new_file(root, "dos.txt", &mut budget), None);
+        assert_eq!(budget, 2, "no se descuenta lo que no se leyó");
+        // Un archivo que no existe tampoco toca el presupuesto.
+        assert!(read_new_file(root, "no-existe.txt", &mut budget).is_none());
+        assert_eq!(budget, 2);
+    }
+
+    #[test]
+    fn a_huge_new_file_never_enters_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("grande.bin"), vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        let mut budget = NEW_FILES_TOTAL_MAX;
+        assert!(read_new_file(root, "grande.bin", &mut budget).is_none());
+        assert_eq!(budget, NEW_FILES_TOTAL_MAX);
+    }
 }

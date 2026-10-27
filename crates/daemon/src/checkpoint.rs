@@ -331,6 +331,10 @@ async fn take(
         summary_json: Some(summary.to_string()),
     };
     let (objects, project, diff) = (objects.clone(), base.project_id, git.diff);
+    // El troceado y la compresión del diff se calculan fuera del hilo del writer (P13.S5).
+    let prepared = stored
+        .is_some()
+        .then(|| crate::context_index::prepare(&diff, symphony_context::compress::Hint::Diff));
     writer
         .write(Box::new(move |t| {
             let sql = |e: symphony_object_store::ObjectError| {
@@ -347,12 +351,9 @@ async fn take(
                     repo::diff_object(t, project, agent, checkpoint.run_id, &blob.hash, now)?;
                 if created {
                     objects.add_ref(t, &blob.hash).map_err(sql)?;
-                    crate::context_index::index_text(
-                        t,
-                        id,
-                        &diff,
-                        symphony_context::compress::Hint::Diff,
-                    )?;
+                    if let Some(prepared) = prepared {
+                        crate::context_index::apply(t, id, prepared)?;
+                    }
                 }
                 checkpoint.diff_object_id = Some(id);
             }

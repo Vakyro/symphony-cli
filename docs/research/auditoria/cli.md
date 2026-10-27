@@ -24,17 +24,17 @@ Revisión estática de `crates/cli/src/*.rs`. Los escenarios describen entradas 
 | `crates/cli/src/harness.rs:338-350` | media | corregido | Salida del shell retenida en búfer compartido (`Captured`/`drain`/`grab`): al vencer la espera se devuelve lo ya leído en vez de descartarlo: harness.rs:466-533. Tests: `shell_keeps_output_when_a_descendant_holds_the_pipe_open` (harness.rs:764) y `a_huge_output_keeps_only_head_and_tail_in_memory` (harness.rs:690). |
 | `crates/cli/src/hook.rs:12-39` | baja | diferido | `emit()` trunca con `stdin().take(MAX_PAYLOAD)` (hook.rs:32-38) y descarta sin informar. Reportar el exceso tocaría el contrato "sin salida / nunca rompe al CLI" de `emit()` (hook.rs:7-8), así que no es un cambio seguro de 1-2 líneas; requiere revisar el contrato del hook antes de tocarlo. |
 
-## Seguimiento (P13.S5)
+### Lo que quedó fuera
 
-Cada hallazgo se verificó contra el código actual. Los tests citados viven en
+Cada hallazgo se verificó contra el código actual; los tests citados viven en
 `crates/cli/src/harness.rs` (`mod tests`).
 
-| Hallazgo (archivo:línea original) | Estado | Test o razón |
-|---|---|---|
-| `crates/cli/src/harness.rs:103-108,136-139` (alta) | corregido | `write` y `edit` pasan por `write_atomic`: temporal en la misma carpeta, `sync_all` y `rename` encima, con limpieza del temporal si algo falla. Regresión: `replacing_a_file_does_not_truncate_the_previous_version` (abre el archivo, lo reemplaza y comprueba que el descriptor antiguo sigue viendo la versión anterior). La detección de cambios concurrentes entre lectura y escritura queda **diferida**: `std` no ofrece compare-and-swap y la ventana es de microsegundos dentro de la misma llamada; el riesgo residual es «gana el último». |
-| `crates/cli/src/harness.rs:58-75` (media) | corregido | `read` deja de recorrer el archivo al completar la página y solo mira el búfer para saber si quedan líneas (`fill_buf`), sin decodificarlas. Regresiones: `read_does_not_parse_beyond_the_requested_page` (un byte inválido tras la página ya no da error) y `read_numbers_lines_and_pages` (mensaje «hay más líneas»). El tope de bytes por línea individual sigue **diferido**: exige un lector acotado y otra semántica de recorte. |
-| `crates/cli/src/harness.rs:198-205,209-219` (media) | corregido | `grep` recorre en flujo (ya no acumula todas las rutas) y corta al alcanzar el máximo, avisando «búsqueda parcial». Regresión: `grep_reports_a_partial_search_at_the_requested_limit`. Efecto lateral asumido: el orden deja de ser alfabético global. |
-| `crates/cli/src/harness.rs:167-183` (media) | corregido | `glob` corta el recorrido al llegar a 500 y avisa «búsqueda parcial» cuando hay más. Regresión: `glob_reports_a_partial_search_at_its_limit`. |
-| `crates/cli/src/harness.rs:245-252` (media) | corregido | `max_results` se acota a `GREP_MAX = 1000` y la descripción de la herramienta lo documenta. Regresión: `grep_caps_the_requested_number_of_results` (`usize::MAX` devuelve 1000 como mucho). |
-| `crates/cli/src/harness.rs:338-350` (media) | corregido | `drain` publica lo leído en un búfer compartido (`Captured` + `Arc<Mutex<_>>`); al vencer los 2 s se corta la lectura y se devuelve lo retenido en vez de descartarlo. Regresión: `shell_keeps_output_when_a_descendant_holds_the_pipe_open` (se salta si el shell de reserva es PowerShell, donde `&` no significa lo mismo). |
-| `crates/cli/src/hook.rs:12-39` (baja) | diferido | Detectar el exceso es trivial, pero informarlo obliga a añadir un evento al protocolo IPC y el módulo tiene por contrato salida silenciosa y exit 0; es una decisión de protocolo, no un arreglo local. |
+- **Cambios concurrentes en `edit`** (parte del hallazgo alto): diferido. `std` no ofrece
+  compare-and-swap y la ventana entre leer y renombrar es de microsegundos dentro de la misma
+  llamada; el riesgo residual es «gana la última escritura».
+- **Tope de bytes por línea en `read`** (parte del segundo hallazgo): diferido. Exige un lector
+  acotado y una semántica de recorte distinta de la de `cut_line`.
+- **Orden de `grep`/`glob`**: ya no es alfabético global; se asume para poder cortar el recorrido.
+- **`hook.rs:12-39`**: diferido. Detectar el exceso es trivial, pero informarlo obliga a añadir un
+  evento al protocolo IPC y el módulo tiene por contrato salida silenciosa y exit 0; es una
+  decisión de protocolo, no un arreglo local.

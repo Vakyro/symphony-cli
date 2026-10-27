@@ -225,7 +225,8 @@ fn render_diff(diff: &str, max: Option<usize>, uri: Option<&str>, reduce: bool) 
         }
     }
     if is_clipped(&text, max) {
-        f = f.min(fidelity::CLIPPED);
+        // El recorte deja menos fidelidad que el resumen: `min` lo tapaba (P13.S5).
+        f = fidelity::CLIPPED;
     }
     (clip(&text, max, uri), f)
 }
@@ -830,5 +831,17 @@ mod tests {
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("abcd"), 1);
         assert_eq!(estimate_tokens("ñandú"), 2);
+    }
+
+    #[test]
+    fn a_reduced_diff_that_still_does_not_fit_reports_clipped() {
+        // Muchos archivos: el resumen determinista tampoco cabe en el límite pedido. La
+        // fidelidad tiene que decir CLIPPED, no COMPRESSED (P13.S5).
+        let diff: String = (0..300)
+            .map(|i| format!("diff --git a/f{i}.rs b/f{i}.rs\n+{}\n", "x".repeat(400)))
+            .collect();
+        let (text, fidelity) = render_diff(&diff, Some(2_000), None, true);
+        assert!(text.contains("caracteres omitidos"), "{text:.200}");
+        assert_eq!(fidelity, fidelity::CLIPPED);
     }
 }

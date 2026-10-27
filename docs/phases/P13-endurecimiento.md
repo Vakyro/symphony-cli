@@ -70,6 +70,14 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
   - Todos los tests de unidad de `symphony-cli` pasan (17/17); clippy `-D warnings` y `fmt --check` limpios.
   - Seguimiento completo en `docs/research/auditoria/cli.md` § Seguimiento.
   - `hook.rs:12-39` (baja) queda **diferido**: `emit()` trunca con `stdin().take(MAX_PAYLOAD)` y descarta sin informar. Reportar el exceso tocaría el contrato "sin salida / nunca rompe al CLI" (hook.rs:7-8); requiere revisar el contrato del hook antes de tocarlo (candidato a ADR).
+- **Auditoría del motor de contexto (`crates/context`, `crates/daemon`, `crates/store`) — verificada y corregida:**
+  - `live_git` lee los archivos nuevos con un presupuesto agregado (`NEW_FILES_TOTAL_MAX` = 8 MB): pasado el tope el archivo se nombra sin contenido. Tests `untracked_files_share_one_total_budget`, `a_huge_new_file_never_enters_the_budget`.
+  - `context_index`: `prepare` (chunks + compresión) fuera del hilo único del writer y `apply` solo escribe dentro de la transacción; lo usan `recorder`, `checkpoint` y `watcher`. Test `prepare_no_toca_la_base_y_apply_escribe_chunks_y_compresion`.
+  - `watcher`: el callback filtra ocultos/gitignore (`wanted`), la cola es acotada (`WATCH_QUEUE`) con `rescan` al desbordarse, el debounce tiene tope (`MAX_BURST`) y un borrado de directorio limpia por prefijo de URI. Tests `the_callback_filter_drops_hidden_and_ignored_paths`, `deleting_a_directory_uri_removes_its_indexed_files`.
+  - `handoff`: `message_sources` deja bajo el cerrojo solo filas y hashes; los blobs se leen sin el lock del lector.
+  - `render_diff` reporta `CLIPPED` cuando además del resumen recorta. Test `a_reduced_diff_that_still_does_not_fit_reports_clipped`.
+  - Quedan fuera: estimar el RAW sin construirlo, caché de los `.gitignore` anidados, `HandoffError` tipado y `file_under` sin llamador. El `stale` por milisegundos toca el esquema del checkpoint: **requiere ADR**.
+  - Seguimiento completo en `docs/research/auditoria/context.md` § Seguimiento.
 
 ## S4 · Rendimiento y disco (adelantado por pedido de Leo: «Symphony debería ser super ligero»)
 - RAM: el daemon en reposo usa 26 MB.

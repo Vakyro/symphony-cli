@@ -37,3 +37,24 @@ no cumple.
 - `crates/context/src/compress/mod.rs:29-38` (`db_label`) colapsa `TestSummary`→`LOG_COLLAPSE` y
   `GitDiff`→`DEDUP` por el CHECK de la base: las estadísticas por compresor no pueden distinguirlos.
   Está documentado en el código; se anota aquí por si las métricas de P13 lo necesitan.
+
+## Seguimiento (P13.S5)
+
+No hubo hallazgos de severidad alta. Los cinco medios se verificaron contra el código actual; los
+bajos se arreglaron solo cuando eran triviales.
+
+| Hallazgo (archivo:línea original) y severidad | Estado | Test o razón |
+|---|---|---|
+| `crates/daemon/src/handoff.rs:57-69` (media) | corregido | `live_git` lee los archivos nuevos con un presupuesto agregado (`NEW_FILES_TOTAL_MAX`, 8 MB): pasado el tope el archivo entra como `NewFile { content: None }`. Regresiones: `untracked_files_share_one_total_budget` y `a_huge_new_file_never_enters_the_budget`, en el `mod tests` de `handoff.rs`. |
+| `crates/daemon/src/context_index.rs:15-36` (media) | corregido | Se separa `prepare` (trocear + comprimir, fuera del writer) de `apply` (solo escribe dentro de la transacción); `recorder`, `checkpoint` y `watcher` calculan antes de `writer.write`. No hay test que pueda observar en qué hilo corre el cálculo; la equivalencia funcional queda cubierta por los tests de handoff y de contexto que ya existían. |
+| `crates/daemon/src/watcher.rs:265-272,300-305` (media) | corregido | El callback filtra ocultos/gitignore antes de encolar (`wanted`) y usa un canal acotado (`WATCH_QUEUE = 4096`); si se llena se marca `overflow` y se re-escanea. El debounce ahora tiene tope (`MAX_BURST`, 2 s), así que un flujo continuo no lo deja sin aplicar. Regresión: `the_callback_filter_drops_hidden_and_ignored_paths`. |
+| `crates/daemon/src/watcher.rs:126-155` (y `294-297`) (media) | corregido | Un cambio con `text: None` borra también el prefijo `ctx://file/<ruta>/` con `context::delete_file_prefix`, así que un borrado de directorio arrastra a sus archivos. Regresión: `deleting_a_directory_uri_removes_its_indexed_files` en `crates/store/tests/context.rs`. |
+| `crates/daemon/src/handoff.rs:164-195` + `89-111` (media) | corregido | `message_sources` deja bajo el cerrojo solo filas y hashes (una consulta con `LEFT JOIN`); `conversation` lee los blobs del object store y redacta ya sin el cerrojo. No hay test directo del cerrojo; la equivalencia la cubren los tests de handoff de `crates/daemon/tests/runtime.rs`. |
+| `crates/daemon/src/watcher.rs:160-173` (baja) | corregido | Si `write_object` falla se registra `tracing::warn!` con la ruta y se conserva lo indexado, en vez de descartar el cambio en silencio. Sin test: haría falta provocar un fallo del object store. |
+| `crates/context/src/compress/log.rs:2-3,27,94-103` (baja) | corregido | El doc ahora dice que se conservan las **primeras 80** líneas de error y que el resto cae en el recorte genérico. Solo cambia la documentación: el comportamiento es intencionado. |
+| `crates/daemon/src/handoff.rs:244-245` (baja) | diferido | Estimar el RAW sin construir el prompt exige un estimador por secciones y arriesga desviarse de `tokens_sent`; es una optimización, no un defecto. |
+| `crates/daemon/src/handoff.rs:176-183` (baja) | requiere ADR | Comparar por `seq` en vez de por milisegundos obliga a guardar en el checkpoint el último evento cubierto: es un cambio de esquema de la base. Con `>=` el handoff saldría `stale` casi siempre, porque el checkpoint se crea después de un evento del mismo milisegundo. |
+| `crates/context/src/uri.rs:200-210` (baja) | diferido | `file_under` no tiene llamadores de producción; decidir entre borrarla o darle un resolvedor que canonicalice es una decisión de API. Hoy no hay riesgo porque nadie la usa. |
+| `crates/context/src/handoff.rs:227-229` (baja) | corregido | Si hay recorte, la fidelidad pasa a `CLIPPED` en vez de quedarse en `COMPRESSED`. Regresión: `a_reduced_diff_that_still_does_not_fit_reports_clipped`. |
+| `crates/daemon/src/watcher.rs:79-95` (baja) | diferido | Cachear los `Gitignore` anidados necesita su propia invalidación (el `.gitignore` que cambia ya llega como evento); sin una medida de CPU, el arreglo añade estado que no se puede verificar en este paso. |
+| `crates/daemon/src/handoff.rs:121-122,157-162` (baja) | diferido | Introducir `HandoffError` con `thiserror` cambia la firma de `prepare` y la frontera del IPC; es un refactor de errores que merece su propio paso, no un cambio mínimo. |

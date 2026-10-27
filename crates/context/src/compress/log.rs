@@ -1,6 +1,6 @@
 //! `LogCollapser`: logs largos → lo que importa. Quita secuencias ANSI y las líneas de progreso
-//! (`\r`), colapsa repeticiones y recorta lo aburrido, **sin tocar nunca las líneas de error**:
-//! toda línea que parezca un fallo aparece tal cual al menos una vez.
+//! (`\r`), colapsa repeticiones y recorta lo aburrido. Las primeras 80 líneas que parecen un
+//! fallo (y su contexto) se conservan tal cual; a partir de ahí caen en el recorte genérico.
 
 use std::sync::LazyLock;
 
