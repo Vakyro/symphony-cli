@@ -251,7 +251,12 @@ async fn soak_long_with_restarts() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(60);
-    let (restarts, batches, mem_start, mem_end) = soak(secs, Duration::from_secs(20), 0).await;
+    // `SOAK_RESTART_SECS` separa lo que crece por reinicio de lo que crece por tanda.
+    let every = std::env::var("SOAK_RESTART_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20);
+    let (restarts, batches, mem_start, mem_end) = soak(secs, Duration::from_secs(every), 0).await;
     println!(
         "soak: {secs} s, {batches} tandas, {restarts} reinicios, RSS {mem_start} -> {mem_end} MB"
     );

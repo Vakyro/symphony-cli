@@ -118,7 +118,8 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
   commitear del integrador. El broker resuelve rutas contra `SYMPHONY_WORKTREE` (bien), pero el
   `shell` del harness no impide un `cd` a otra carpeta. Además las 103 llamadas `shell` de ese
   agente quedaron en `tool_calls` **sin el comando**: no hay forma de auditar qué corrió.
-  El integrador deshizo el commit (no estaba pusheado). **Arreglado en parte:** el `write` y el
+  El integrador deshizo el commit (no estaba pusheado), pero una edición del agente en el
+  encabezado de STATUS se coló igual en el commit siguiente (se corrigió al revisar). **Arreglado en parte:** el `write` y el
   `edit` del harness rechazan rutas dentro del repo del proyecto que no estén en el worktree del
   agente, y cada `shell` queda registrado con su comando. **Pendiente:** registrar el comando de
   cada `shell` del harness, avisar o rechazar comandos que salgan del worktree y vigilar que

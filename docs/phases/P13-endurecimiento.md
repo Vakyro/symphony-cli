@@ -150,7 +150,8 @@ large logs (4 MB)              1   9582ms    569MB      59MB     94%     95%    
   entorno de los CLIs.
 - **Gate:** `cargo xtask check` verde con 717 tests (680 al empezar la noche); CI verde en los tres
   sistemas, `deny`, `docs` (bloqueante), cobertura, MSRV y release en dry run.
-- **Versión 0.9.0** y CHANGELOG con git-cliff; tag `v0.9.0` solo local (publicar es de Leo).
+- **Versión 0.9.0** y CHANGELOG con git-cliff.
+- **Soak de 4 h (S3):** 591 tandas, 441 reinicios en el mismo proceso, `integrity_check` ok y ningún run abierto de más, pero el RSS creció de 25 a 171 MB (tope del test: +100 MB). El primer intento cayó a las 2 h por disco lleno. **P13 no se cierra hasta aclararlo:** merge a `main` y tags pendientes.
 - **Queda para después:** guardia de aislamiento (agentes que escriben fuera de su worktree), tope
   absoluto del watchdog con CPU, arreglos de `server.md` (agente #39, sin integrar), hallazgos
   diferidos de las auditorías.
