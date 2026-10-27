@@ -390,13 +390,15 @@ impl ProviderAdapter for AntigravityAdapter {
             || lower.contains("not recognized as a known model")
         {
             (FailureType::ModelUnavailable, "invalid_model", false)
-        } else if lower.contains("resource_exhausted") || lower.contains("quota") {
+        } else if lower.contains("quota exceeded") || lower.contains("resource_exhausted") {
             (FailureType::DailyQuota, "quota", false)
         } else if lower.contains("rate limit")
             || has_token(&lower, "429")
             || lower.contains("too many requests")
         {
             (FailureType::TempRateLimit, "rate_limit", true)
+        } else if lower.contains("quota") {
+            (FailureType::DailyQuota, "quota", false)
         } else if has_token(&lower, "401")
             || lower.contains("unauthenticated")
             || lower.contains("unauthorized")
@@ -420,4 +422,19 @@ impl ProviderAdapter for AntigravityAdapter {
 
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/antigravity")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_with_quota_text_is_classified_as_transient() {
+        let adapter = AntigravityAdapter::default();
+        let err = adapter
+            .parse_error("rate limit: too many requests, quota per minute")
+            .expect("debe clasificar el error");
+        assert_eq!(err.failure_type, FailureType::TempRateLimit);
+        assert!(err.transient);
+    }
 }

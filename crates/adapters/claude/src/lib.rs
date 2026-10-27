@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 use symphony_adapter_common::hooks::{classify_error_category, parse_standard_hook};
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, HookCommand, ModelInfo, ProcessSpec,
-    ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest,
-    has_token, parse_retry_after_ms,
+    ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest, has_token,
+    parse_retry_after_ms,
 };
 use symphony_core::FailureType;
 
@@ -528,9 +528,12 @@ mod tests {
     #[test]
     fn numbers_containing_status_codes_are_not_false_positive_errors() {
         let adapter = ClaudeAdapter::default();
-        assert!(adapter.parse_error("Corregí 4010 líneas, el build falló").is_none());
+        assert!(
+            adapter
+                .parse_error("Corregí 4010 líneas, el build falló")
+                .is_none()
+        );
         assert!(adapter.parse_error("Procesadas 4290 peticiones").is_none());
         assert!(adapter.parse_error("Línea 5290 con warning").is_none());
     }
 }
-

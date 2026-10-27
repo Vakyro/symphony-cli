@@ -16,8 +16,8 @@ use serde_json::Value;
 use symphony_adapter_common::hooks::parse_standard_hook;
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, HookCommand, ModelInfo, ProcessSpec,
-    ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest,
-    has_token, parse_retry_after_ms,
+    ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest, has_token,
+    parse_retry_after_ms,
 };
 use symphony_core::FailureType;
 
@@ -462,8 +462,11 @@ mod tests {
     #[test]
     fn numbers_containing_status_codes_are_not_false_positive_errors() {
         let adapter = CodexAdapter::default();
-        assert!(adapter.parse_error("Revisé 4012 líneas de código").is_none());
+        assert!(
+            adapter
+                .parse_error("Revisé 4012 líneas de código")
+                .is_none()
+        );
         assert!(adapter.parse_error("Procesé 4290 peticiones").is_none());
     }
 }
-
