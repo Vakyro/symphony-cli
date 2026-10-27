@@ -16,7 +16,7 @@ use symphony_adapter_common::hooks::{classify_error_category, parse_standard_hoo
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, HookCommand, ModelInfo, ProcessSpec,
     ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest,
-    parse_retry_after_ms,
+    has_token, parse_retry_after_ms,
 };
 use symphony_core::FailureType;
 
@@ -454,17 +454,17 @@ impl ProviderAdapter for ClaudeAdapter {
                 )
             } else if lower.contains("rate_limit")
                 || lower.contains("rate limit")
-                || lower.contains("429")
+                || has_token(&lower, "429")
             {
                 (FailureType::TempRateLimit, "rate_limit")
             } else if lower.contains("authentication")
                 || lower.contains("/login")
                 || lower.contains("not logged in")
-                || lower.contains("401")
+                || has_token(&lower, "401")
             {
                 (FailureType::Auth, "authentication_failed")
             } else if lower.contains("overloaded")
-                || lower.contains("529")
+                || has_token(&lower, "529")
                 || lower.contains("server_error")
             {
                 (FailureType::ProviderError, "overloaded")
@@ -523,6 +523,14 @@ mod tests {
             }
             other => panic!("esperaba TurnFinished, obtuve {other:?}"),
         }
+    }
+
+    #[test]
+    fn numbers_containing_status_codes_are_not_false_positive_errors() {
+        let adapter = ClaudeAdapter::default();
+        assert!(adapter.parse_error("Corregí 4010 líneas, el build falló").is_none());
+        assert!(adapter.parse_error("Procesadas 4290 peticiones").is_none());
+        assert!(adapter.parse_error("Línea 5290 con warning").is_none());
     }
 }
 

@@ -17,7 +17,7 @@ use symphony_adapter_common::hooks::parse_standard_hook;
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, HookCommand, ModelInfo, ProcessSpec,
     ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest,
-    parse_retry_after_ms,
+    has_token, parse_retry_after_ms,
 };
 use symphony_core::FailureType;
 
@@ -376,11 +376,11 @@ impl ProviderAdapter for CodexAdapter {
         {
             (FailureType::DailyQuota, "usage_limit", false)
         } else if lower.contains("rate limit")
-            || lower.contains("429")
+            || has_token(&lower, "429")
             || lower.contains("too many requests")
         {
             (FailureType::TempRateLimit, "rate_limit", true)
-        } else if lower.contains("401")
+        } else if has_token(&lower, "401")
             || lower.contains("unauthorized")
             || lower.contains("codex login")
             || lower.contains("not logged in")
@@ -454,3 +454,16 @@ pub fn quota_from_rollout(rollout: &Path) -> Vec<QuotaSnapshot> {
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/codex")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbers_containing_status_codes_are_not_false_positive_errors() {
+        let adapter = CodexAdapter::default();
+        assert!(adapter.parse_error("Revisé 4012 líneas de código").is_none());
+        assert!(adapter.parse_error("Procesé 4290 peticiones").is_none());
+    }
+}
+
