@@ -1579,6 +1579,40 @@ pub fn interrupt_orphan_sessions(conn: &Connection, now: i64) -> Result<Vec<Stri
     Ok(orphans.into_iter().map(|(s, _, _)| s).collect())
 }
 
+/// Un lote de la retención (P13.S4, DB §8): borra hasta `batch` eventos de agentes en
+/// estado terminal (COMPLETED/FAILED/CANCELLED) o archivados con más de `cutoff_ms`.
+/// Devuelve cuántos borró. Se excluyen los referenciados por `checkpoints` o
+/// `project_facts` (FK a `events`) y los de agentes vivos o sin agente. Checkpoints y
+/// runs no se purgan nunca. El daemon lo llama en un ciclo de lotes al arrancar.
+pub fn purge_old_events(conn: &Connection, cutoff_ms: i64, batch: i64) -> Result<usize, RepoError> {
+    Ok(conn.execute(
+        "DELETE FROM events WHERE id IN (
+             SELECT e.id FROM events e JOIN agents a ON a.id = e.agent_id
+             WHERE e.occurred_at < ?1
+               AND (a.state IN ('COMPLETED','FAILED','CANCELLED') OR a.archived_at IS NOT NULL)
+               AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.trigger_event_id = e.id)
+               AND NOT EXISTS (SELECT 1 FROM project_facts f WHERE f.source_event_id = e.id)
+             LIMIT ?2
+         )",
+        params![cutoff_ms, batch],
+    )?)
+}
+
+/// Un lote de la retención (P13.S4, DB §8): borra hasta `batch` muestras de recursos
+/// agregadas antes de `cutoff_ms`. Devuelve cuántas borró.
+pub fn purge_old_resource_samples(
+    conn: &Connection,
+    cutoff_ms: i64,
+    batch: i64,
+) -> Result<usize, RepoError> {
+    Ok(conn.execute(
+        "DELETE FROM resource_samples WHERE id IN (
+             SELECT id FROM resource_samples WHERE sampled_at < ?1 LIMIT ?2
+         )",
+        params![cutoff_ms, batch],
+    )?)
+}
+
 /// Cantidad de problemas abiertos en el Recovery Center.
 pub fn open_recovery_count(conn: &Connection) -> Result<u64, RepoError> {
     let n: i64 = conn.query_row(

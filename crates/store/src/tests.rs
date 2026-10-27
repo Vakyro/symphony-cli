@@ -759,3 +759,140 @@ fn shared_sync_keeps_the_user_switch_and_only_prunes_when_the_scan_is_trusted() 
     sync_mcp(&conn, "p1", &[server("a")], true).unwrap();
     assert_eq!(list_mcp(&conn, "p1").unwrap().len(), 1);
 }
+
+// --- retención (P13.S4, DB §8) -------------------------------------------------
+
+fn insert_event(conn: &Connection, agent: Option<&str>, occurred_at: i64) -> i64 {
+    conn.query_row(
+        "INSERT INTO events (project_id, agent_id, run_id, type, source, payload_json, occurred_at)
+         VALUES ('p1', ?1, NULL, 'TurnStarted', 'PROCESS', NULL, ?2)
+         RETURNING id",
+        params![agent, occurred_at],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+fn count_where(conn: &Connection, table: &str, cond: &str) -> i64 {
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM {table} WHERE {cond}"),
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// Viejos de agentes terminales/archivados se borran; recientes, de agentes vivos y
+/// sin agente se quedan; runs intactos.
+#[test]
+fn retention_purges_old_events_of_terminal_agents() {
+    let conn = seeded();
+    insert_agent(&conn, "a1", "t1", 1, "COMPLETED").unwrap();
+    insert_agent(&conn, "a2", "t2", 2, "RUNNING").unwrap();
+    insert_agent(&conn, "a3", "t1", 3, "PAUSED").unwrap();
+    conn.execute("UPDATE agents SET archived_at = 1 WHERE id = 'a3'", [])
+        .unwrap();
+    insert_run(&conn, "r1", "a1", 1, Some(10)).unwrap();
+
+    let old = 0; // ocurrió antes del corte (corte = 1000)
+    let recent = 2000;
+    insert_event(&conn, Some("a1"), old); // terminal viejo: se borra
+    insert_event(&conn, Some("a1"), recent); // terminal reciente: se queda
+    insert_event(&conn, Some("a2"), old); // vivo viejo: se queda
+    insert_event(&conn, Some("a3"), old); // archivado viejo: se borra
+    insert_event(&conn, None, old); // sin agente: se queda
+
+    let purged = repo::purge_old_events(&conn, 1000, 5000).unwrap();
+    assert_eq!(purged, 2);
+    assert_eq!(count_where(&conn, "events", "occurred_at = 0"), 2); // a2 y el huérfano
+    assert_eq!(count_where(&conn, "events", "occurred_at = 2000"), 1);
+    // Runs y checkpoints no se tocan: el run del agente terminal sigue ahí.
+    assert_eq!(count_where(&conn, "agent_runs", "id = 'r1'"), 1);
+}
+
+/// Los eventos referenciados por `checkpoints` o `project_facts` (FK a `events`) no
+/// se pueden borrar: el purge los salta en vez de romper la integridad.
+#[test]
+fn retention_keeps_events_referenced_by_checkpoints_and_facts() {
+    let conn = seeded();
+    insert_agent(&conn, "a1", "t1", 1, "COMPLETED").unwrap();
+    insert_run(&conn, "r1", "a1", 1, Some(10)).unwrap();
+
+    let kept_checkpoint = insert_event(&conn, Some("a1"), 0);
+    let kept_fact = insert_event(&conn, Some("a1"), 0);
+    insert_event(&conn, Some("a1"), 0);
+    conn.execute(
+        "INSERT INTO checkpoints (id, agent_id, run_id, seq, trigger_event_id, objective, created_at)
+         VALUES ('c1', 'a1', 'r1', 1, ?1, 'seguir', 0)",
+        params![kept_checkpoint],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO project_facts (id, project_id, key, value, kind, status, source_event_id, created_at)
+         VALUES ('f1', 'p1', 'k', 'v', 'DECISION', 'CURRENT', ?1, 0)",
+        params![kept_fact],
+    )
+    .unwrap();
+
+    assert_eq!(repo::purge_old_events(&conn, 1000, 5000).unwrap(), 1);
+    let params = rusqlite::params![kept_checkpoint, kept_fact];
+    let kept: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE id = ?1 OR id = ?2",
+            params,
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, 2);
+    assert_eq!(count_where(&conn, "checkpoints", "id = 'c1'"), 1);
+    assert_eq!(count_where(&conn, "project_facts", "id = 'f1'"), 1);
+}
+
+#[test]
+fn retention_purges_old_resource_samples() {
+    let conn = seeded();
+    for i in 0..3 {
+        conn.execute(
+            "INSERT INTO resource_samples (session_id, cpu_pct, ram_pct, heavy_slots_used, heavy_slots_total, performance_profile, sampled_at)
+             VALUES ('s1', 1.0, 1.0, 0, 1, 'BALANCED', ?1)",
+            params![i],
+        )
+        .unwrap();
+    }
+    assert_eq!(repo::purge_old_resource_samples(&conn, 2, 5000).unwrap(), 2);
+    assert_eq!(count_where(&conn, "resource_samples", "sampled_at = 2"), 1);
+}
+
+/// Un lote grande termina: el daemon repite el purge de a 5 000 hasta que un lote
+/// no llena, así que 20 000+ eventos viejos acaban borrándose todos.
+#[test]
+fn retention_big_batch_purges_everything() {
+    let mut conn = seeded();
+    insert_agent(&conn, "a1", "t1", 1, "CANCELLED").unwrap();
+    {
+        let tx = conn.transaction().unwrap();
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO events (project_id, agent_id, run_id, type, source, payload_json, occurred_at)
+                 VALUES ('p1', 'a1', NULL, 'TurnStarted', 'PROCESS', NULL, 0)",
+            )
+            .unwrap();
+        for _ in 0..20_000 {
+            stmt.execute([]).unwrap();
+        }
+        drop(stmt);
+        tx.commit().unwrap();
+    }
+    assert_eq!(count_where(&conn, "events", "1=1"), 20_000);
+
+    let mut total = 0;
+    for _ in 0..10 {
+        let n = repo::purge_old_events(&conn, 1000, 5000).unwrap();
+        total += n;
+        if n < 5000 {
+            break;
+        }
+    }
+    assert_eq!(total, 20_000);
+    assert_eq!(count_where(&conn, "events", "1=1"), 0);
+}

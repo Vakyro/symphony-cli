@@ -59,6 +59,11 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
   con cambios sin commitear), `target/` de Cargo compartido entre agentes con tope de 15 GB,
   índice de contexto que suelta lo borrado o ignorado. Detalle en DOGFOOD.md.
 - Diagnóstico: la cola de stderr de un CLI caído queda con el agente.
+- Retención (DB §8): al arrancar el daemon se purgan en lotes de 5 000 (por el writer
+  único, sin hilos nuevos) los `events` de agentes terminales/archivados más viejos que
+  `[retention].events_days` (30) y las `resource_samples` más viejas que
+  `[retention].samples_days` (14). Checkpoints, runs y eventos referenciados por
+  checkpoints o `project_facts` no se tocan. Config nueva en `crates/core` y QUICKSTART §13.
 
 ## S6 · Documentación (delegado)
 - Libro mdBook en `docs/book/` (Antigravity), `cargo xtask er` con el ER (Kimi), QUICKSTART al

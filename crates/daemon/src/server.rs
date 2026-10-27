@@ -117,7 +117,7 @@ fn now_ms() -> i64 {
 
 /// Recuperación al arrancar (P03.S5): con el lock tomado, toda sesión `ACTIVE`
 /// quedó de un daemon que murió. Se marca `INTERRUPTED` y va al Recovery Center.
-async fn recover(writer: &Writer) -> Result<(), DaemonError> {
+async fn recover(writer: &Writer, home: &Path) -> Result<(), DaemonError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     writer
         .handle()
@@ -132,6 +132,62 @@ async fn recover(writer: &Writer) -> Result<(), DaemonError> {
         tracing::warn!(
             sesiones = recovered,
             "sesiones interrumpidas por un cierre inesperado; ver Recovery Center"
+        );
+    }
+    // Retención (P13.S4, DB §8): purga lo viejo al arrancar. Best effort: si la config
+    // no se puede leer o el purge falla, el daemon arranca igual y se reintenta la próxima vez.
+    match symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home)) {
+        Ok(config) => {
+            if let Err(e) = purge_retention(writer, &config).await {
+                tracing::warn!(error = %e, "retención: no se pudo purgar; se reintenta al próximo arranque");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "no se pudo leer la config; se salta la retención"),
+    }
+    Ok(())
+}
+
+/// Cada `write` del escritor es una transacción: `RETENTION_BATCH` filas como máximo por
+/// ciclo, para no frenar al escritor con una purga grande.
+const RETENTION_BATCH: i64 = 5000;
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Retención al arrancar (P13.S4, DB §8): purga en lotes eventos de agentes terminados
+/// o archivados más viejos que `[retention].events_days` y muestras de recursos más
+/// viejas que `[retention].samples_days`. Checkpoints y runs no se tocan. Sin hilos
+/// nuevos: los lotes van por el writer único.
+async fn purge_retention(
+    writer: &Writer,
+    config: &symphony_core::Config,
+) -> Result<(), DaemonError> {
+    let now = now_ms();
+    let events_cutoff = now - i64::from(config.retention.events_days) * DAY_MS;
+    let samples_cutoff = now - i64::from(config.retention.samples_days) * DAY_MS;
+    let mut total_events = 0u64;
+    let mut total_samples = 0u64;
+    loop {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        writer
+            .handle()
+            .write(Box::new(move |t| {
+                let events = repo::purge_old_events(t, events_cutoff, RETENTION_BATCH)?;
+                let samples = repo::purge_old_resource_samples(t, samples_cutoff, RETENTION_BATCH)?;
+                let _ = tx.send((events, samples));
+                Ok(())
+            }))
+            .await?;
+        let (events, samples) = rx.await.unwrap_or((0, 0));
+        total_events += events as u64;
+        total_samples += samples as u64;
+        if events < RETENTION_BATCH as usize && samples < RETENTION_BATCH as usize {
+            break;
+        }
+    }
+    if total_events > 0 || total_samples > 0 {
+        tracing::info!(
+            eventos = total_events,
+            muestras = total_samples,
+            "retención: datos viejos purgados"
         );
     }
     Ok(())
@@ -178,7 +234,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     ignore_state_in_git(home);
     let db_path = symphony_core::SymphonyHome::at(home).db_path();
     let writer = Writer::start(&db_path)?;
-    recover(&writer).await?;
+    recover(&writer, home).await?;
     if let Err(e) = refresh_providers(&writer.handle()).await {
         tracing::warn!(error = %e, "no se pudo registrar a los proveedores");
     }

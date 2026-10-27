@@ -482,6 +482,14 @@ Edita `~/.symphony/config.toml`:
 default_profile = "@code"
 failover = "ANY"
 
+[retention]
+# El job corre al arrancar el daemon: purga en lotes lo que ya no se necesita.
+# Eventos de agentes terminados o archivados más viejos que esto (los de agentes vivos,
+# los referenciados por checkpoints o project_facts, y checkpoints y runs no se tocan).
+events_days = 30
+# Muestras por minuto de recursos más viejas que esto.
+samples_days = 14
+
 [providers]
 # Fracción de cuota que los profiles automáticos no gastan (0.0–1.0)
 quota_reserve = 0.20
