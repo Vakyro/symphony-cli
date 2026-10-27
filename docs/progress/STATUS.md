@@ -39,7 +39,9 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · ✅ S4 harness de Symphony (ADR-0019; `[harness] mode`, 5 de 6 proveedores) · ✅ S5 más allá del código (ADR-0020; `symphony init --kind`, perfiles `@write/@media/@research`, migración 008) · ✅ S6 cierre (`p155-done`)
 
-**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): S1 seguridad · S2 fuzzing (◐ targets `fuzz/` + proptest hechos; falta correr 30 min nightly y corpus en CI) · S3 recuperación y 4 h · S4 rendimiento y retención · S5 calidad del repo · S6 mdBook (+ guía SSH) · S7 pipeline de release en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
+**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción, soak de 4 h · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos, ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
+
+**P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasar sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · 🟡 S4 `install-check.yml` · 🟡 S5 anexo de desviaciones
 
 **P16 · Validación final** (`phase/p16-validacion`): S1 checklist · S2 E2E (fake-agents) · S3 benchmark · S4 instalación limpia en CI · S5 docs as-built · S6 release ⛔ · S7 retrospectiva
 
@@ -58,6 +60,14 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
+- **2026-10-27 · Noche de dogfooding:** reporte completo en `docs/progress/REPORTE-2026-10-27.md`.
+- **ADR-0021** (check `files` para documentos y medios) quedó aceptado por delegación: revísalo.
+- **Publicar v0.9.0 / v1.0.0:** el pipeline de cargo-dist está listo en dry run; pushear un tag `v*` publica (y para Homebrew hace falta crear el repo `Vakyro/homebrew-symphony`).
+- **Aislamiento:** dos modelos escribieron en el repo principal (DOGFOOD § Hallazgos). Antes de delegar sin supervisión hace falta una guardia en Symphony; mientras tanto, no dejar cambios sin commitear en el repo principal con agentes corriendo.
+- **Agente #39 (arreglos de `server.md`)** dejó 1154 líneas sin commitear en su worktree; no se integró. Retomarlo con un modelo fuerte o rehacerlo por partes.
+- **Watchdog y CPU:** con el latido por CPU, un proceso colgado en un bucle activo nunca expira. ¿Tope absoluto sin salida (p. ej. 60 min)? Afecta builds largos legítimos.
+- **Disco:** `cargo clean` en el repo si vuelve a crecer (`target/` llegó a 104 GB); WSL creció por los clones del fuzzing (`wsl --shutdown` + compactar el vhdx si molesta).
+- **Basura en `~` de WSL:** clones `~/symphony-fuzz-*` y `~/symphony-linux-*` (se pueden borrar).
 - **2026-10-24 · Dogfooding:** la copia estable de Symphony con la que se delega está en `~/.symphony-stable/bin` (commit en `VERSION`); el estado de los agentes de este repo, en `<repo>/.symphony/`. Detalle y hallazgos en `docs/progress/DOGFOOD.md`.
 - **2026-10-24 · Disco:** tu `~/.symphony` vieja (97 MB de base y unos 60 worktrees con `node_modules`/`target/`) se limpia sola cuando corras `symphony migrate split` en cada proyecto y abras su daemon (los worktrees de agentes terminados se borran al arrancar). Lo que no se migre, bórralo a mano.
 - **Basura que dejé yo:** por un typo de ruta se creó el archivo `C:\LATITU~1\x` (y su carpeta `C:\LATITU~1`) en la raíz del disco. No pude borrarlo: la comprobación de seguridad bloqueó el `rmdir` de una carpeta en la raíz. Es seguro quitarlo con `rmdir /s /q C:\LATITU~1`.
