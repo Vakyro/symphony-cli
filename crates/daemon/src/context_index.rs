@@ -72,7 +72,7 @@ mod tests {
     use symphony_core::ContextObjectId;
 
     #[test]
-    fn prepare_no_toca_la_base_y_apply_escribe_chunks_y_compresion() {
+    fn prepare_no_toca_la_base_y_apply_escribe_chunks_y_compresión() {
         // `prepare` calcula chunks y compresión sin tocar la base; `apply` los escribe.
         let conn = symphony_store::open_in_memory().unwrap();
         let object = ContextObjectId::new();
