@@ -235,7 +235,17 @@ fn write_batch(conn: &mut Connection, batch: &[NewEvent], stats: &mut WriterStat
         });
         match one {
             Ok(()) => stats.events_written += 1,
-            Err(_) => stats.events_failed += 1,
+            // Sin rastro no se puede diagnosticar (auditoría del store, P13.S5): el evento se
+            // pierde, pero queda en el log con su tipo y el motivo.
+            Err(e) => {
+                stats.events_failed += 1;
+                tracing::warn!(
+                    tipo = %ev.event_type,
+                    agente = ?ev.agent_id,
+                    error = %e,
+                    "evento descartado: la base no lo aceptó"
+                );
+            }
         }
     }
 }

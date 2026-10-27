@@ -1788,13 +1788,18 @@ pub struct MessageRecord {
     pub created_at: i64,
 }
 
+/// Tope de mensajes que devuelve `agent_messages` cuando no se pide un límite.
+pub const MESSAGES_MAX: usize = 5_000;
+
 pub fn agent_messages(
     conn: &Connection,
     agent: AgentId,
     limit: Option<usize>,
 ) -> Result<Vec<MessageRecord>, RepoError> {
-    // Con límite: los últimos N, en orden cronológico.
-    let limit_clause = limit.map_or(String::new(), |l| format!("LIMIT {l}"));
+    // Los últimos N, en orden cronológico. Sin límite pedido, un tope igual: un chat de meses
+    // no se carga entero en memoria (auditoría del store, P13.S5).
+    // ponytail: tope fijo; paginar si algún día hace falta el historial completo.
+    let limit_clause = format!("LIMIT {}", limit.unwrap_or(MESSAGES_MAX));
     let sql = format!(
         "SELECT * FROM (
              SELECT id, agent_id, run_id, role, content, content_object_id, created_at

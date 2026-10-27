@@ -18,3 +18,15 @@ No hay hallazgos de severidad alta: el escritor único, las migraciones con `def
 Notas fuera de la tabla: las funciones de repo con varias sentencias (`set_fact`, `sync_processes`, `interrupt_orphan_sessions`, `compact_samples`) dependen de que el llamador las envuelva en `WriterHandle::write`; verifiqué que los llamadores del daemon lo hacen (`crates/daemon/src/server.rs:125`, `crates/daemon/src/resources.rs:86–96`), así que no hay transacciones partidas en producción, pero el tipo `&Connection` no lo impide: es un contrato de comentario, no de tipos. Las migraciones 002–006 reconstruyen tablas con `PRAGMA defer_foreign_keys` + `foreign_key_check()` por migración y no encontré desviaciones de `docs/spec/symphony_database.md` sin documentar (la unicidad por proyecto de `context_objects.uri` en 003 está anotada en la propia migración). `open_reader` no corre migraciones ni valida `user_version`: un lector contra una base con migraciones pendientes lee con el esquema viejo; en la práctica el escritor migra antes de que exista el lector, así que lo dejo como observación, no como hallazgo.
 
 Verificación: auditoría solo de lectura; no se tocaron archivos de código. `git diff --check` limpio sobre el único archivo nuevo.
+
+## Seguimiento (P13.S5)
+
+Revisado por el integrador (claude-code/opus-5.5).
+
+| Hallazgo | Estado | Test o razón |
+|---|---|---|
+| `writer.rs:226–240` (media) eventos descartados sin rastro | corregido | cada evento que la base rechaza queda en el log (`warn` con tipo, agente y error), además del contador `events_failed` |
+| `split.rs:60–86` (media) `blobs` y `ref_count` desfasados tras `migrate split` | diferido | solo cuesta disco (esos blobs nunca llegan a `ref_count = 0` y no se recolectan); no pierde datos y afecta una migración que se corre una vez. Arreglo: recalcular `ref_count` desde `context_objects` al final del split |
+| `repo.rs:1720–1733` (media) `agent_messages` sin tope | corregido | sin límite pedido devuelve los últimos `MESSAGES_MAX` (5000); la respuesta IPC grande es el hallazgo de `server.md` |
+| `repo.rs:935–946` (baja) `checkpoint_base` sin `is_valid` | corregido en `cf32289` | test `checkpoint_base_skips_invalid_checkpoints` |
+| `health.rs`, `processes.rs`, `merge.rs`/`context.rs` ids, `suggestions.rs` (bajas) | diferido | sin efecto observable hoy |
