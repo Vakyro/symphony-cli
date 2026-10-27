@@ -31,6 +31,12 @@ use crate::runtime::{Runtime, now_ms};
 const PROCESS_SAMPLE_EVERY: Duration = Duration::from_secs(5);
 /// CPU del árbol entre dos muestras que cuenta como latido (4 % de un núcleo en 5 s).
 const CPU_ALIVE_MS: u64 = 200;
+/// La CPU solo cuenta como latido si el CLI escribió algo en este tiempo: un proceso colgado en
+/// un bucle activo no vive para siempre. Dogfooding 2026-10-27: un agente de Antigravity siguió
+/// «vivo» casi 4 h sin escribir nada tras llenarse el disco.
+/// ponytail: tope fijo; Antigravity no escribe hasta terminar, así que una corrida suya de más
+/// de una hora cae aquí. Configurable si alguien lo necesita.
+const CPU_BEAT_MAX_SILENCE: Duration = Duration::from_secs(60 * 60);
 
 /// Límites del SO según `[performance]` del `config.toml` (se relee en cada lanzamiento).
 pub(crate) fn os_limits(home: &Path) -> symphony_process::Limits {
@@ -486,6 +492,7 @@ impl Runtime {
         let mut control_open = true;
         let mut tree_cpu_ms = 0u64;
         let mut suspended = false;
+        let mut last_line = std::time::Instant::now();
         // Más seguido que el watchdog: si no, un árbol ocupado parecería callado.
         // `interval` hace panic con 0: un `stale_after` de 0 no puede tumbar el pump.
         let mut monitor = tokio::time::interval(
@@ -505,7 +512,9 @@ impl Runtime {
                     // P13.S5, hallazgo 1).
                     // Un árbol pausado está congelado a propósito, no colgado: sin salida ni CPU
                     // el watchdog lo mataría (auditoría P13.S5, hallazgo 7).
-                    if suspended || cpu >= tree_cpu_ms + CPU_ALIVE_MS {
+                    let busy = cpu >= tree_cpu_ms + CPU_ALIVE_MS
+                        && last_line.elapsed() < CPU_BEAT_MAX_SILENCE;
+                    if suspended || busy {
                         self.beat(l.run_id);
                     }
                     tree_cpu_ms = cpu;
@@ -514,6 +523,7 @@ impl Runtime {
                     None => break None,
                     Some(OutputLine::Stdout(line)) => {
                         self.beat(l.run_id);
+                        last_line = std::time::Instant::now();
                         let mut end_turn = false;
                         if !self.handle_line(&l, &proc, &line, &mut fatal, &mut end_turn).await {
                             abort_unpublishable(&mut proc).await;
@@ -525,6 +535,7 @@ impl Runtime {
                     }
                     Some(OutputLine::Stderr(line)) => {
                         self.beat(l.run_id);
+                        last_line = std::time::Instant::now();
                         if !line.trim().is_empty() {
                             if err_tail.len() == ERR_TAIL_LINES {
                                 err_tail.pop_front();

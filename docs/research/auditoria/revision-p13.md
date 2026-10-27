@@ -35,5 +35,5 @@ Autor: subagente claude-code/sonnet, solo lectura, sobre `addda5a`.
 | `validated_checkpoint` aborta por E/S pasajera (media) | corregido: se avisa en el log y se usa el checkpoint |
 | `write_atomic` pierde permisos y symlinks (media) | corregido: escribe en el destino del symlink y copia los permisos; test Unix `editing_a_script_keeps_it_executable` |
 | `stop` borra el worktree en el acto (media) | diferido: con el arreglo anterior ya no se pierde trabajo (solo se borra un worktree sin cambios; la rama queda) |
-| watchdog con CPU no expira en un spin-loop (media) | diferido: tope absoluto sin salida a decidir con Leo (afecta builds largos legítimos) |
+| watchdog con CPU no expira en un spin-loop (media) | corregido: la CPU cuenta como latido solo si el CLI escribió algo en la última hora (`CPU_BEAT_MAX_SILENCE`). Lo confirmó la noche: un agente de Antigravity quedó «vivo» casi 4 h tras el disco lleno. Sin test propio (tope fijo de 60 min) |
 | bajas (read sin tope por línea, prune con ≥ 5000 archivos, `join_verify` sin paréntesis, orden de grep/glob, recover secuencial, costo de redact) | diferidas |

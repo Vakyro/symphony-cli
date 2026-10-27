@@ -65,7 +65,7 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - **Publicar v0.9.0 / v1.0.0:** el pipeline de cargo-dist está listo en dry run; pushear un tag `v*` publica (y para Homebrew hace falta crear el repo `Vakyro/homebrew-symphony`).
 - **Aislamiento:** dos modelos escribieron en el repo principal (DOGFOOD § Hallazgos). Antes de delegar sin supervisión hace falta una guardia en Symphony; mientras tanto, no dejar cambios sin commitear en el repo principal con agentes corriendo.
 - **Agente #39 (arreglos de `server.md`)** dejó 1154 líneas sin commitear en su worktree; no se integró. Retomarlo con un modelo fuerte o rehacerlo por partes.
-- **Watchdog y CPU:** con el latido por CPU, un proceso colgado en un bucle activo nunca expira. ¿Tope absoluto sin salida (p. ej. 60 min)? Afecta builds largos legítimos.
+- **Watchdog:** la CPU ya no mantiene vivo un run que lleva 60 min sin escribir nada (tope fijo). Una corrida de Antigravity de más de una hora sin salida caería: si te pasa, se hace configurable.
 - **Disco:** `cargo clean` en el repo si vuelve a crecer (`target/` llegó a 104 GB); WSL creció por los clones del fuzzing (`wsl --shutdown` + compactar el vhdx si molesta).
 - **Basura en `~` de WSL:** clones `~/symphony-fuzz-*` y `~/symphony-linux-*` (se pueden borrar).
 - **2026-10-24 · Dogfooding:** la copia estable de Symphony con la que se delega está en `~/.symphony-stable/bin` (commit en `VERSION`); el estado de los agentes de este repo, en `<repo>/.symphony/`. Detalle y hallazgos en `docs/progress/DOGFOOD.md`.
