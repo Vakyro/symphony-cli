@@ -35,9 +35,11 @@ static RULES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
             format!(r#"("{SECRET_NAME}"\s*:\s*)"(?:[^"\\]|\\.)*""#),
             "${1}\"[REDACTED]\"",
         ),
-        // Variables de entorno / argumentos `NOMBRE=valor` o `NOMBRE: valor`.
+        // Variables de entorno / argumentos `NOMBRE=valor` o `NOMBRE: valor`. Un valor ya
+        // redactado es un valor entero: si no, lo que lo sigue sin separador (`[REDACTED]}x`)
+        // se volvería a comer en otra pasada (idempotencia, caso de cargo-fuzz).
         (
-            format!(r#"\b({SECRET_NAME}\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s"',;]+)"#),
+            format!(r#"\b({SECRET_NAME}\s*[=:]\s*)(?:\[REDACTED\]|"[^"]*"|'[^']*'|[^\s"',;]+)"#),
             "${1}[REDACTED]",
         ),
         // Formatos conocidos de llaves, aunque aparezcan sueltas.
@@ -202,5 +204,20 @@ mod tests {
             assert_eq!(redact(s), s, "cambió texto normal");
         }
         assert!(matches!(redact("sin secretos"), Cow::Borrowed(_)));
+    }
+    /// Encontrado por cargo-fuzz (P13.S2, `fuzz/artifacts/redact/crash-55b3…`): redactar dos
+    /// veces tiene que dar lo mismo que una.
+    #[test]
+    fn fuzz_case_is_idempotent() {
+        let bytes: &[u8] = &[
+            65, 117, 116, 104, 110, 99, 105, 97, 108, 45, 102, 105, 99, 116, 105, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 110, 58, 1, 0, 123, 91, 121, 118, 164, 0, 32, 66, 101, 97, 114, 101, 105, 111,
+            10, 123, 34, 116, 111, 107, 101, 110, 58, 34, 118, 97, 108, 111, 114, 45, 156, 135, 73,
+            99, 105, 105, 99, 105, 111, 34, 125, 107, 101, 110, 34, 58, 34, 118, 97, 108, 111, 114,
+            45, 102, 105, 99, 116, 105, 111, 10, 111, 34, 126,
+        ];
+        let s = String::from_utf8_lossy(bytes);
+        let once = redact(&s).into_owned();
+        assert_eq!(redact(&once), once, "una vez: {once:?}");
     }
 }
