@@ -112,6 +112,15 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
   Symphony lo detectó; el integrador lo vio en `git status`. **Pendiente:** comparar el estado
   del repo principal antes y después de cada run y abrir un recovery `WORKSPACE_DAMAGED`; y
   avisar en la tarea (hecho en las reglas del integrador). Mismo riesgo que P11.5.S9 (`n1.txt`).
+- **2026-10-27 · Aislamiento (2): un agente commiteó en la rama del integrador.** OpenCode con
+  `nemotron-3.5-lightning-free` (con el harness de Symphony) hizo `git add -A` y `git commit` en
+  el **repo principal**, sobre `phase/p13-endurecimiento`, y se llevó de paso un cambio sin
+  commitear del integrador. El broker resuelve rutas contra `SYMPHONY_WORKTREE` (bien), pero el
+  `shell` del harness no impide un `cd` a otra carpeta. Además las 103 llamadas `shell` de ese
+  agente quedaron en `tool_calls` **sin el comando**: no hay forma de auditar qué corrió.
+  El integrador deshizo el commit (no estaba pusheado). **Pendiente:** registrar el comando de
+  cada `shell` del harness, avisar o rechazar comandos que salgan del worktree y vigilar que
+  el `HEAD` del repo principal no se mueva mientras corren agentes.
 - **2026-10-26 · Los agentes cambian de rama.** AGENTS.md dice «nunca en main, usa ramas
   `phase/`» y dos agentes crearon su propia rama dentro del worktree. Symphony no lo nota (el
   diff y la integración miran la rama asignada). Regla del integrador: no cambiar de rama.
