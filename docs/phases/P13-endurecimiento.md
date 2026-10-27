@@ -138,3 +138,19 @@ large logs (4 MB)              1   9582ms    569MB      59MB     94%     95%    
 - Los hallazgos 2, 3, 4, 6 y 8–12 quedan diferidos con justificación detallada en la tabla de
   `docs/research/auditoria/executor.md`.
 - Verificación: `cargo nextest run -p symphony-daemon`, `cargo clippy -p symphony-daemon --all-targets -- -D warnings` y `cargo fmt --all` en verde.
+
+## S8 · Cierre (2026-10-27, noche de dogfooding)
+- **Revisión de código** de la rama (subagente claude-code/sonnet, solo lectura,
+  `docs/research/auditoria/revision-p13.md`): 1 alta (el GC borraba worktrees con archivos nuevos
+  sin commitear) y 3 medias corregidas; el resto diferido con su razón.
+- **ponytail-audit** (`docs/research/auditoria/ponytail.md`): `now_ms` unificado en el daemon y una
+  función muerta fuera; una propuesta era falsa (`FrameDecoder` lo usa el fuzzing).
+- **Hallazgos del dogfooding arreglados en esta fase:** `build-dir` compartido, comando de las
+  llamadas `shell` del harness registrado, aviso de disco casi lleno, variables internas fuera del
+  entorno de los CLIs.
+- **Gate:** `cargo xtask check` verde con 717 tests (680 al empezar la noche); CI verde en los tres
+  sistemas, `deny`, `docs` (bloqueante), cobertura, MSRV y release en dry run.
+- **Versión 0.9.0** y CHANGELOG con git-cliff; tag `v0.9.0` solo local (publicar es de Leo).
+- **Queda para después:** guardia de aislamiento (agentes que escriben fuera de su worktree), tope
+  absoluto del watchdog con CPU, arreglos de `server.md` (agente #39, sin integrar), hallazgos
+  diferidos de las auditorías.
