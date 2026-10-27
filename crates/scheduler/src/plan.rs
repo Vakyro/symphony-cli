@@ -213,7 +213,7 @@ impl Plan {
             let cur = match carry.take() {
                 Some(mut c) => {
                     c.title = format!("{} + {}", c.title, p.title);
-                    c.verify = c.verify.or(p.verify);
+                    c.verify = join_verify(c.verify, p.verify);
                     c.tasks.extend(p.tasks);
                     c
                 }
@@ -229,6 +229,7 @@ impl Plan {
             match out.last_mut() {
                 Some(last) => {
                     last.title = format!("{} + {}", last.title, rest.title);
+                    last.verify = join_verify(last.verify.take(), rest.verify);
                     last.tasks.extend(rest.tasks);
                 }
                 None => out.push(rest),
@@ -326,6 +327,14 @@ fn is_id(s: &str) -> bool {
         && s.len() <= 24
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// Al juntar dos fases se conservan los dos comandos de verificación (auditoría P13.S5).
+fn join_verify(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
+        (Some(a), Some(b)) if a != b => Some(format!("{a} && {b}")),
+        (a, b) => a.or(b),
+    }
 }
 
 #[cfg(test)]
@@ -437,5 +446,35 @@ Verifica: cargo test -p auth
             let r = Plan::parse(&p.render());
             assert_eq!(r.render(), p.render(), "{text:?}");
         }
+    }
+
+    /// Auditoría P13.S5: juntar fases no pierde ningún `Verifica:`.
+    #[test]
+    fn merging_phases_keeps_every_verify_command() {
+        let plan = Plan::parse(
+            "## Fase 1: a
+Verifica: cargo test -p a
+- [ ] uno
+
+## Fase 2: b
+Verifica: cargo test -p b
+- [ ] dos
+- [ ] tres
+
+## Fase 3: c
+Verifica: cargo test -p c
+- [ ] cuatro
+",
+        )
+        .normalized(2);
+        let verifies: Vec<_> = plan.phases.iter().map(|p| p.verify.clone()).collect();
+        assert_eq!(
+            verifies,
+            [Some(
+                "cargo test -p a && cargo test -p b && cargo test -p c".to_string()
+            )],
+            "{:?}",
+            plan.phases
+        );
     }
 }

@@ -23,6 +23,6 @@ Revisado por el integrador (claude-code/opus-5.5) sobre `656bb7c`.
 | `scheduling.rs` (alta) sin guard RAII ante cancelación | ya mitigado, diferido | un slot pesado tiene arrendamiento de 30 min (`LEASE_MS`) y el latido lo libera al vencer; un waiter cancelado se libera al concedérsele el turno (el `send` falla, `scheduling.rs:42–45`). Un guard `Drop` lo haría inmediato: queda para v1.1 |
 | `scheduling.rs:181–188` (alta) `release_agent` con dos identidades | corregido | `run_scheduled` (validación y `[worktree] prepare`) ahora pasa el `AgentId` como identidad y «Agent #N» solo como etiqueta, igual que los hooks: la equidad y la liberación al terminar ven al mismo agente. Pendiente menor: `release_agent` no limpia `waiters` de lo que quita de la cola |
 | `router/src/lib.rs` (media) `model_health` ignorado en reserva y cuota | diferido | requiere decidir la semántica de reserva por modelo (ADR-0016) |
-| `scheduler/src/plan.rs:209–239` (media) `Verifica:` perdido al fusionar fases | diferido | para un agente con cuota mañana |
+| `scheduler/src/plan.rs:209–239` (media) `Verifica:` perdido al fusionar fases | corregido | al juntar fases se encadenan los comandos con `&&`; test `merging_phases_keeps_every_verify_command` |
 | `daemon/src/routing.rs` (media) `need_tools: true` fijo | diferido | hoy todos los modelos del catálogo tienen herramientas; aplica con los profiles de ADR-0020 |
 | `plan.rs:262–274`, `queue.rs:363,390` (bajas) | diferido | |
