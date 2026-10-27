@@ -2,10 +2,10 @@
 
 **Actualizado:** 2026-10-27 (noche de dogfooding) · por claude-code/opus-5.5
 **Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, bitácora `docs/phases/P13-endurecimiento.md`). P16.S0 adelantado en `phase/p16-validacion`.
-**Paso actual:** S1 ✅ · S2 ✅ (4 targets 30 min en WSL; 2 crashes reales de `redact` arreglados) · S3 🟡 (checkpoint corrupto ✅; soak de 4 h: memoria 25 → 171 MB, por aclarar) · S4 ✅ (retención, harness E2E de STACK §25.2) · S5 ✅ (auditorías de 10 áreas y sus arreglos, salvo `server.md`; ponytail-audit; typos/lychee/mdbook bloqueantes) · S6 ✅ · S7 ✅ (cargo-dist en dry run, CI verde en los 3 OS) · S8 🟡 (todo listo y en verde; merge pendiente del soak). Detalle de la noche: `docs/progress/REPORTE-2026-10-27.md`
+**Paso actual:** S1 ✅ · S2 ✅ (4 targets 30 min en WSL; 2 crashes reales de `redact` arreglados) · S3 🟡 (checkpoint corrupto ✅; fuga del soak = watchdog con `Runtime` fuerte, arreglada y medida en 200 s; falta repetir las 4 h) · S4 ✅ (retención, harness E2E de STACK §25.2) · S5 ✅ (auditorías de 10 áreas y sus arreglos, salvo `server.md`; ponytail-audit; typos/lychee/mdbook bloqueantes) · S6 ✅ · S7 ✅ (cargo-dist en dry run, CI verde en los 3 OS) · S8 🟡 (todo listo y en verde; merge pendiente del soak). Detalle de la noche: `docs/progress/REPORTE-2026-10-27.md`
 **Estado del paso:** en curso (sesión nocturna autorizada por Leo)
 **En curso por:** claude-code/opus-5.5 + agentes delegados con la copia estable
-**Siguiente:** aclarar el crecimiento de memoria del soak de 4 h (25 → 171 MB) y cerrar P13 (merge a `main`, `p13-done`); el resto de P13 está hecho y en verde
+**Siguiente:** repetir el soak de 4 h con el arreglo del watchdog y cerrar P13 (merge a `main`, `p13-done`); el resto de P13 está hecho y en verde
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 

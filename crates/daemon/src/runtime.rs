@@ -255,7 +255,7 @@ impl Runtime {
             }),
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(rt.clone().watchdog());
+            handle.spawn(Runtime::watchdog(Arc::downgrade(&rt.inner)));
         }
         rt
     }
@@ -392,25 +392,31 @@ impl Runtime {
 
     /// Persiste el latido de los runs vivos y cierra como `NO_HEARTBEAT` los
     /// que llevan más de `stale_after` sin emitir nada (FLOW §16, IDEA §5.10).
-    async fn watchdog(self) {
-        let mut tick = tokio::time::interval(self.heartbeat_every);
+    /// Débil: un clon fuerte mantendría vivo el runtime (y su base) para siempre.
+    async fn watchdog(weak: std::sync::Weak<Inner>) {
+        let Some(every) = weak.upgrade().map(|i| i.heartbeat_every) else {
+            return;
+        };
+        let mut tick = tokio::time::interval(every);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
-            let live: Vec<(AgentId, RunId)> = self
+            let Some(inner) = weak.upgrade() else { return };
+            let this = Runtime { inner };
+            let live: Vec<(AgentId, RunId)> = this
                 .live
                 .lock()
                 .map(|l| l.iter().map(|(a, r)| (*a, r.run_id)).collect())
                 .unwrap_or_default();
             for (agent, run) in live {
-                let silent = self
+                let silent = this
                     .activity
                     .lock()
                     .ok()
                     .and_then(|a| a.get(&run).copied())
-                    .is_none_or(|t| t.elapsed() > self.stale_after);
+                    .is_none_or(|t| t.elapsed() > this.stale_after);
                 let now = now_ms();
-                let _ = self
+                let _ = this
                     .writer
                     .write(Box::new(move |t| {
                         repo::heartbeat(t, run, now)?;
@@ -423,7 +429,7 @@ impl Runtime {
                         run = %run,
                         "executor sin latido: se cierra como NO_HEARTBEAT y se abre recuperación"
                     );
-                    let _ = self
+                    let _ = this
                         .control(agent, |done| Control::NoHeartbeat { done })
                         .await;
                 }
