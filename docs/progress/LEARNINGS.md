@@ -148,3 +148,13 @@ Una sola sesión cubrió P11.S2–S6, P10 completa y P09.S1–S10, con una compa
 - **`Path::starts_with` distingue mayúsculas también en Windows:** `Desktop` ≠ `desktop`. Para comparar rutas de usuario, normalizar.
 - **El silencio no es cuelgue:** un `cargo test` en frío puede pasar 15 min sin una línea. El watchdog tiene que mirar algo más que la salida.
 - **Los modelos baratos rinden en tareas acotadas con un plan escrito:** los dos modelos gratis de OpenCode entregaron docs y CI correctos al primer intento.
+
+## Noche de dogfooding (2026-10-26/27)
+- **Compartir `target/` entre worktrees pisa binarios:** lo que se comparte es el `build-dir` de Cargo (`CARGO_BUILD_BUILD_DIR`); los binarios finales, en el `target/` de cada worktree.
+- **El fuzzing encuentra lo que proptest no:** dos fallos reales de idempotencia en `redact` (uno a los 80 s, otro a los 40 min) que el proptest con 50 000 casos no había visto. Correr cada target los 30 min completos.
+- **Lo que no se ejecuta en Linux no está probado:** el watcher perdía archivos en carpetas nuevas solo con inotify; el CI de ubuntu llevaba dos días en rojo sin que nadie lo mirara. Mirar el CI después de cada push.
+- **Los agentes no respetan el aislamiento por sí solos:** dos modelos escribieron en el repo principal (rutas absolutas, `cd` + `git commit`). Sin una guardia de Symphony, el integrador tiene que mirar `git status` y `git log` del repo principal en cada integración, y no dejar cambios sin commitear mientras corren agentes.
+- **Verificar la evidencia que cita un agente:** un checklist con 37 referencias inventadas parecía impecable (143/145 ✅). Un script que comprueba que cada `archivo::función` existe lo destapó en segundos.
+- **El disco también es un recurso:** el `target/` del integrador llegó a 104 GB y tumbó todo a medianoche. `cargo clean` de vez en cuando; Symphony debería vigilar el disco como vigila CPU y RAM.
+- **Correr `typos` antes de cada push:** un repo en español mete palabras nuevas en cada commit de docs.
+- **`is_clean` sin untracked no sirve para decidir un borrado:** un archivo nuevo sin commitear también es trabajo (`Repo::has_no_work`).
