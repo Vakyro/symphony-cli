@@ -129,12 +129,14 @@ async fn recover(writer: &Writer, home: &Path) -> Result<(), DaemonError> {
         .await?;
     let recovered = rx.await.unwrap_or(0);
     let reader = Mutex::new(writer.reader()?);
-    let agents = {
-        let conn = reader
-            .lock()
-            .map_err(|_| io("recuperación")(std::io::Error::other("lector no disponible")))?;
-        repo::list_agents_rows(&conn, None, false)
-            .map_err(|e| io("recuperación")(std::io::Error::other(e.to_string())))?
+    // Best effort: una fila que no se puede leer no impide arrancar (la validación de
+    // checkpoints vuelve a correr en cada handoff).
+    let agents = match reader.lock() {
+        Ok(conn) => repo::list_agents_rows(&conn, None, false).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "no se pudieron listar los agentes para validar sus checkpoints");
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
     };
     let objects = symphony_object_store::ObjectStore::new(
         symphony_core::SymphonyHome::at(home).objects_dir(),
