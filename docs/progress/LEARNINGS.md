@@ -158,3 +158,8 @@ Una sola sesión cubrió P11.S2–S6, P10 completa y P09.S1–S10, con una compa
 - **El disco también es un recurso:** el `target/` del integrador llegó a 104 GB y tumbó todo a medianoche. `cargo clean` de vez en cuando; Symphony debería vigilar el disco como vigila CPU y RAM.
 - **Correr `typos` antes de cada push:** un repo en español mete palabras nuevas en cada commit de docs.
 - **`is_clean` sin untracked no sirve para decidir un borrado:** un archivo nuevo sin commitear también es trabajo (`Repo::has_no_work`).
+
+## Fuga del soak (2026-10-27)
+- **Una tarea de tokio con un clon fuerte del dueño lo mantiene vivo para siempre:** el watchdog de `Runtime` era un bucle infinito con `Runtime` clonado, y cada reabrir el runtime dejaba uno vivo (~0,25 MB). Las tareas de fondo de un objeto deben guardar `Weak` y salir cuando `upgrade()` falla.
+- **Separar variables antes de adivinar:** el soak ya tenía `SOAK_RESTART_SECS`; correrlo sin reinicios (plano, 25 → 27 MB) y con reinicios cada 5 s (crece) señaló la causa en 7 minutos, sin heap profiler.
+- **Revisar las tareas de fondo del daemon al buscar fugas:** `tokio::spawn` de bucles sin fin en `scheduling.rs`, `dependencies.rs` y `resources.rs` terminan con `CancellationToken`; el watchdog era la excepción.

@@ -1,11 +1,13 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-27 (noche de dogfooding) · por claude-code/opus-5.5
+**Actualizado:** 2026-10-27 (revisión posterior y arreglo de la fuga del soak) · por claude-code/sonnet-5.5
 **Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, bitácora `docs/phases/P13-endurecimiento.md`). P16.S0 adelantado en `phase/p16-validacion`.
 **Paso actual:** S1 ✅ · S2 ✅ (4 targets 30 min en WSL; 2 crashes reales de `redact` arreglados) · S3 🟡 (checkpoint corrupto ✅; fuga del soak = watchdog con `Runtime` fuerte, arreglada y medida en 200 s; falta repetir las 4 h) · S4 ✅ (retención, harness E2E de STACK §25.2) · S5 ✅ (auditorías de 10 áreas y sus arreglos, salvo `server.md`; ponytail-audit; typos/lychee/mdbook bloqueantes) · S6 ✅ · S7 ✅ (cargo-dist en dry run, CI verde en los 3 OS) · S8 🟡 (todo listo y en verde; merge pendiente del soak). Detalle de la noche: `docs/progress/REPORTE-2026-10-27.md`
-**Estado del paso:** en curso (sesión nocturna autorizada por Leo)
-**En curso por:** claude-code/opus-5.5 + agentes delegados con la copia estable
+**Estado del paso:** pausado
+**En curso por:** nadie (pausa; Leo retoma más tarde)
 **Siguiente:** repetir el soak de 4 h con el arreglo del watchdog y cerrar P13 (merge a `main`, `p13-done`); el resto de P13 está hecho y en verde
+
+**Lo que falta para v1.0 (2026-10-27):** (1) P13: soak de 4 h con `SOAK_SECS=14400 cargo test -p symphony-daemon --test soak soak_long -- --ignored --nocapture` (disco con espacio; el primer intento cayó por disco lleno), merge `--no-ff` a `main`, tag `p13-done`. (2) Rebasar `phase/p16-validacion` sobre `main`. (3) P16.S2 E2E con fake-agents, S3 benchmark, S4 `install-check.yml`, S5 docs as-built, S7 retrospectiva. (4) ⛔ S6 release v1.0.0 y v0.9.0 (tu OK para pushear tags `v*`). Sueltos: guardia de aislamiento, agente #39, watchdog configurable, revisión visual de la GUI (P15.S4).
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
