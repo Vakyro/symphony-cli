@@ -22,7 +22,7 @@ symphony-context = { path = "../context" }
 criterion.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "time"] }
 
 [[bench]]
 name = "store"

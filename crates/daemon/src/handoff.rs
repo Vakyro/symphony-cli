@@ -153,31 +153,97 @@ fn conversation(
     Ok(out)
 }
 
+/// Descarta checkpoints ilegibles antes de usarlos; errores de E/S transitorios se propagan.
+pub(crate) async fn validated_checkpoint(
+    reader: &Mutex<rusqlite::Connection>,
+    writer: &symphony_store::WriterHandle,
+    objects: &ObjectStore,
+    agent: AgentId,
+) -> Result<Option<repo::LatestCheckpoint>, String> {
+    loop {
+        let checkpoint = {
+            let conn = reader
+                .lock()
+                .map_err(|_| "lector de la base no disponible")?;
+            repo::latest_checkpoint(&conn, agent).map_err(|e| e.to_string())?
+        };
+        let Some(checkpoint) = checkpoint else {
+            return Ok(None);
+        };
+        let objects = objects.clone();
+        let candidate = checkpoint.clone();
+        let invalid = tokio::task::spawn_blocking(move || {
+            if let Some(summary) = &candidate.summary_json
+                && serde_json::from_str::<Value>(summary).is_err()
+            {
+                return Ok(Some("JSON de resumen ilegible".to_string()));
+            }
+            if candidate.diff_object_id.is_some() {
+                let Some(hash) = &candidate.diff_blob_hash else {
+                    return Ok(Some("referencia de diff sin blob".to_string()));
+                };
+                match objects.get(hash) {
+                    Ok(_) => {}
+                    Err(
+                        e @ (symphony_object_store::ObjectError::NotFound(_)
+                        | symphony_object_store::ObjectError::Corrupt { .. }
+                        | symphony_object_store::ObjectError::InvalidHash(_)),
+                    ) => {
+                        return Ok(Some(e.to_string()));
+                    }
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            Ok(None)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let Some(detail) = invalid else {
+            return Ok(Some(checkpoint));
+        };
+        let id = checkpoint.id;
+        let detail = format!("Checkpoint {id}: {detail}");
+        writer
+            .write(Box::new(move |tx| {
+                repo::invalidate_checkpoint(tx, id, &detail, crate::runtime::now_ms())
+            }))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+}
+
 /// Arma el handoff del agente. `reason`: por qué entra un executor nuevo, en una frase.
 pub async fn prepare(
     reader: &Mutex<rusqlite::Connection>,
     objects: &ObjectStore,
+    writer: &symphony_store::WriterHandle,
     agent: AgentId,
     reason: &str,
 ) -> Result<PreparedHandoff, String> {
     let started = Instant::now();
-    let (a, wt, checkpoint, conversation, facts, stale) = {
+    let checkpoint = validated_checkpoint(reader, writer, objects, agent).await?;
+    let (a, wt, objective, conversation, facts, stale) = {
         let conn = reader
             .lock()
             .map_err(|_| "lector de la base no disponible")?;
         let a = repo::get_agent(&conn, agent).map_err(|e| e.to_string())?;
         let wt_id = a.worktree_id.ok_or("el agente no tiene worktree")?;
         let wt = repo::get_worktree(&conn, wt_id).map_err(|e| e.to_string())?;
-        let checkpoint = repo::latest_checkpoint(&conn, agent)
-            .map_err(|e| e.to_string())?
-            .ok_or("el agente no tiene un checkpoint válido")?;
+        let task = repo::get_task(&conn, a.task_id).map_err(|e| e.to_string())?;
+        let objective = match task.description {
+            Some(d) if !d.trim().is_empty() => format!("{}\n\n{}", task.title, d.trim()),
+            _ => task.title,
+        };
         // Los eventos que piden checkpoint (ver `checkpoint::Progress::apply`): si hay uno más
         // nuevo que el checkpoint, el checkpoint no lo alcanzó.
         let stale: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM events WHERE agent_id = ?1 AND occurred_at > ?2
                    AND type IN ('TurnFinished','ToolFinished','CommandFinished','FileModified'))",
-                rusqlite::params![agent.to_string(), checkpoint.created_at],
+                rusqlite::params![
+                    agent.to_string(),
+                    checkpoint.as_ref().map_or(0, |c| c.created_at)
+                ],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -191,7 +257,7 @@ pub async fn prepare(
                 kind: f.kind,
             })
             .collect();
-        (a, wt, checkpoint, conversation, facts, stale)
+        (a, wt, objective, conversation, facts, stale)
     };
     let (path, base) = (wt.path.clone(), wt.base_ref.clone());
     let git = tokio::task::spawn_blocking(move || live_git(Path::new(&path), &base))
@@ -200,8 +266,8 @@ pub async fn prepare(
         .map_err(|e| format!("no se pudo leer el worktree: {e}"))?;
 
     let summary: Value = checkpoint
-        .summary_json
-        .as_deref()
+        .as_ref()
+        .and_then(|c| c.summary_json.as_deref())
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(Value::Null);
     let last_command = summary["last_command"]["command"]
@@ -223,20 +289,25 @@ pub async fn prepare(
         })
         .unwrap_or_default();
 
-    let (checkpoint_seq, checkpoint_created_at) = (checkpoint.seq, checkpoint.created_at);
+    let checkpoint_id = checkpoint.as_ref().map(|c| c.id);
+    let (checkpoint_seq, checkpoint_created_at) = checkpoint
+        .as_ref()
+        .map_or((0, 0), |c| (c.seq, c.created_at));
     let input = HandoffInput {
-        objective: checkpoint.objective,
+        objective: checkpoint
+            .as_ref()
+            .map_or(objective, |c| c.objective.clone()),
         reason: reason.to_string(),
-        plan_tail: checkpoint.plan_tail,
-        current_step: checkpoint.current_step,
-        next_step: checkpoint.next_step,
+        plan_tail: checkpoint.as_ref().and_then(|c| c.plan_tail.clone()),
+        current_step: checkpoint.as_ref().and_then(|c| c.current_step.clone()),
+        next_step: checkpoint.as_ref().and_then(|c| c.next_step.clone()),
         last_command,
         failures,
         files_touched: git.files,
         git_status: git.status,
         diff: git.diff,
         // ponytail: el diff vivo no se guarda aparte; si se recorta, se apunta al del checkpoint.
-        diff_uri: checkpoint.diff_uri,
+        diff_uri: checkpoint.as_ref().and_then(|c| c.diff_uri.clone()),
         new_files: git.new_files,
         conversation,
         facts,
@@ -245,7 +316,7 @@ pub async fn prepare(
     let raw = handoff::assemble(&input, ContextMode::Raw).tokens_sent;
     Ok(PreparedHandoff {
         prompt: built.prompt,
-        checkpoint_id: Some(checkpoint.id),
+        checkpoint_id,
         checkpoint_seq,
         checkpoint_created_at,
         stale,

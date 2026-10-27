@@ -456,7 +456,8 @@ impl Runtime {
         let objects = symphony_object_store::ObjectStore::new(
             symphony_core::SymphonyHome::at(&self.home).objects_dir(),
         );
-        let mut prepared = crate::handoff::prepare(&self.reader, &objects, agent, reason).await?;
+        let mut prepared =
+            crate::handoff::prepare(&self.reader, &objects, &self.writer, agent, reason).await?;
         // Context transformers de plugin (ADR-0015): un fallo nunca bloquea el handoff.
         prepared.prompt = self.transform_handoff(agent, prepared.prompt).await;
         Ok(prepared)

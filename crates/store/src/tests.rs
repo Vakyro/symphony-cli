@@ -896,3 +896,49 @@ fn retention_big_batch_purges_everything() {
     assert_eq!(total, 20_000);
     assert_eq!(count_where(&conn, "events", "1=1"), 0);
 }
+
+/// P13.S3: el checkpointer toma objetivo y paso siguiente del último checkpoint válido; si
+/// todos son inválidos, usa el título de la tarea y sigue tomando checkpoints.
+#[test]
+fn checkpoint_base_skips_invalid_checkpoints() {
+    let conn = seeded();
+    // Ids reales: `checkpoint_base` los parsea.
+    let (project, agent) = (
+        symphony_core::ProjectId::new(),
+        symphony_core::AgentId::new(),
+    );
+    conn.execute_batch(&format!(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('{project}','ulid','/u','main',0);
+         UPDATE sessions SET project_id = '{project}';
+         UPDATE tasks SET project_id = '{project}';
+         INSERT INTO worktrees (id, project_id, path, branch, base_ref, deps_strategy, status, created_at)
+             VALUES ('w1','{project}','/u/wt','b','main','NONE','READY',0);
+         INSERT INTO agents (id, project_id, session_id, task_id, worktree_id, number, state, execution_mode,
+                             requested_model_id, failover_policy, context_mode, created_at, updated_at)
+             VALUES ('{agent}','{project}','s1','t1','w1',1,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0);"
+    ))
+    .unwrap();
+    for (seq, objective, valid) in [(1, "viejo", 1), (2, "corrupto", 0)] {
+        conn.execute(
+            "INSERT INTO checkpoints (id, agent_id, seq, objective, next_step, is_valid, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0)",
+            params![
+                symphony_core::CheckpointId::new().to_string(),
+                agent.to_string(),
+                seq,
+                objective,
+                valid
+            ],
+        )
+        .unwrap();
+    }
+    let base = repo::checkpoint_base(&conn, agent).unwrap().unwrap();
+    assert_eq!(base.objective, "viejo");
+    assert_eq!(base.next_step.as_deref(), Some("viejo"));
+
+    conn.execute("UPDATE checkpoints SET is_valid = 0", [])
+        .unwrap();
+    let base = repo::checkpoint_base(&conn, agent).unwrap().unwrap();
+    assert_eq!(base.objective, "uno", "título de la tarea");
+    assert_eq!(base.next_step, None);
+}

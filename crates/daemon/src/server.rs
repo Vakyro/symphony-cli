@@ -128,6 +128,31 @@ async fn recover(writer: &Writer, home: &Path) -> Result<(), DaemonError> {
         }))
         .await?;
     let recovered = rx.await.unwrap_or(0);
+    let reader = Mutex::new(writer.reader()?);
+    let agents = {
+        let conn = reader
+            .lock()
+            .map_err(|_| io("recuperación")(std::io::Error::other("lector no disponible")))?;
+        repo::list_agents_rows(&conn, None, false)
+            .map_err(|e| io("recuperación")(std::io::Error::other(e.to_string())))?
+    };
+    let objects = symphony_object_store::ObjectStore::new(
+        symphony_core::SymphonyHome::at(home).objects_dir(),
+    );
+    // Checkpoints corruptos de agentes vivos (P13.S3): se marcan y van al Recovery Center.
+    // Best effort: un error de lectura pasajero no impide arrancar; el handoff vuelve a validar.
+    for agent in agents.into_iter().filter(|a| !a.state.is_terminal()) {
+        if let Err(e) = crate::handoff::validated_checkpoint(
+            &reader,
+            &writer.handle(),
+            &objects,
+            agent.agent_id,
+        )
+        .await
+        {
+            tracing::warn!(agente = %agent.agent_id, error = %e, "no se pudo validar el checkpoint al arrancar");
+        }
+    }
     if recovered > 0 {
         tracing::warn!(
             sesiones = recovered,

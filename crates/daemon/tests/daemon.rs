@@ -238,6 +238,67 @@ async fn startup_recovers_sessions_left_active_by_a_dead_daemon() {
     assert!(wait_exit(&mut again).success());
 }
 
+#[tokio::test]
+async fn startup_invalidates_corrupt_checkpoints_without_duplicate_recovery_items() {
+    use symphony_core::{AgentId, CheckpointId, ProjectId, SessionId, SymphonyHome, TaskId};
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    let db = SymphonyHome::at(&home).db_path();
+    let project = ProjectId::new();
+    let session = SessionId::new();
+    let task = TaskId::new();
+    let agent = AgentId::new();
+    let checkpoint = CheckpointId::new();
+    {
+        let conn = symphony_store::open(&db).unwrap();
+        // Simula JSON dañado en disco, sin relajar restricciones del daemon.
+        conn.execute_batch(&format!(
+            "INSERT INTO projects (id, name, root_path, default_branch, created_at)
+                 VALUES ('{project}', 'demo', '/repo', 'main', 1);
+             INSERT INTO sessions (id, project_id, status, started_at, ended_at)
+                 VALUES ('{session}', '{project}', 'CLOSED', 1, 2);
+             INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at)
+                 VALUES ('{task}', '{project}', 'T1', 'WORK', 'Continuar', 'READY', 1, 1);
+             INSERT INTO agents (id, project_id, session_id, task_id, number, state,
+                 execution_mode, failover_policy, context_mode, created_at, updated_at)
+                 VALUES ('{agent}', '{project}', '{session}', '{task}', 1, 'PAUSED',
+                         'DECIDE_LATER', 'ANY', 'BALANCED', 1, 1);
+             PRAGMA ignore_check_constraints = ON;
+             INSERT INTO checkpoints (id, agent_id, seq, objective, summary_json, created_at)
+                 VALUES ('{checkpoint}', '{agent}', 1, 'Continuar', '{{incompleto', 1);
+             PRAGMA ignore_check_constraints = OFF;"
+        ))
+        .unwrap();
+    }
+
+    for _ in 0..2 {
+        let mut daemon = KillOnDrop(spawn_daemon(&home));
+        wait_ready(&home, &mut daemon.0).await;
+        let Outcome::Ok(status) = call(&home, "status", json!({})).await else {
+            panic!("status falló")
+        };
+        assert_eq!(status["recovery_open"], json!(1));
+        let conn = symphony_store::open_reader(&db).unwrap();
+        let valid: bool = conn
+            .query_row("SELECT is_valid FROM checkpoints", [], |r| r.get(0))
+            .unwrap();
+        assert!(!valid);
+        let items: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM recovery_items WHERE agent_id = ?1
+                 AND kind = 'CHECKPOINT_INVALID' AND checkpoint_valid = 0 AND status = 'OPEN'",
+                [agent.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(items, 1);
+        drop(conn);
+        call(&home, "shutdown", json!({})).await;
+        assert!(wait_exit(&mut daemon.0).success());
+    }
+}
+
 /// Métodos de lectura y acciones de la TUI (P07): Recovery Center, proveedores y proyecto.
 #[tokio::test]
 async fn recovery_center_and_tui_views_over_ipc() {

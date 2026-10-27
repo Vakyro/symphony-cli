@@ -1284,6 +1284,142 @@ proptest::proptest! {
     }
 }
 
+// --- P13.S3: recuperación de checkpoints ------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_skips_missing_checkpoint_blobs_and_records_recovery_once() {
+    let e = env(
+        "[[step]]\nkind = \"edit\"\npath = \"README.md\"\ncontent = \"demo\\narreglado\\n\"\n",
+        None,
+    )
+    .await;
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        "[project]\nname = \"demo\"\ndefault_branch = \"main\"\n\n[merge]\ncommit_on_complete = false\n",
+    )
+    .unwrap();
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Recuperar auth",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let hash: String = one(
+        &e,
+        "SELECT o.blob_hash FROM checkpoints c JOIN context_objects o ON o.id = c.diff_object_id
+         ORDER BY c.seq DESC LIMIT 1",
+    );
+    let previous: String = one(
+        &e,
+        &format!(
+            "SELECT c.id FROM checkpoints c LEFT JOIN context_objects o ON o.id = c.diff_object_id
+             WHERE o.blob_hash IS NULL OR o.blob_hash != '{hash}' ORDER BY c.seq DESC LIMIT 1"
+        ),
+    );
+    let broken: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM checkpoints c JOIN context_objects o ON o.id = c.diff_object_id
+             WHERE o.blob_hash = '{hash}'"
+        ),
+    );
+    assert!(broken > 0);
+    std::fs::remove_file(e.home.join("objects").join(&hash[..2]).join(&hash)).unwrap();
+
+    for _ in 0..2 {
+        let h = e
+            .runtime
+            .prepare_handoff(created.agent_id, "Recuperación")
+            .await
+            .unwrap();
+        assert_eq!(
+            h.checkpoint_id.map(|id| id.to_string()),
+            Some(previous.clone())
+        );
+        assert!(h.prompt.contains("+arreglado"), "{}", h.prompt);
+        let invalid: i64 = one(&e, "SELECT COUNT(*) FROM checkpoints WHERE is_valid = 0");
+        assert_eq!(invalid, broken);
+        let items: i64 = one(
+            &e,
+            "SELECT COUNT(*) FROM recovery_items WHERE kind = 'CHECKPOINT_INVALID'
+             AND checkpoint_valid = 0 AND status = 'OPEN'",
+        );
+        assert_eq!(
+            items, broken,
+            "la segunda preparación no duplica incidencias"
+        );
+    }
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_uses_live_worktree_and_task_when_every_checkpoint_has_invalid_json() {
+    let e = env(
+        "[[step]]\nkind = \"say\"\ntext = \"Trabajo conservado\"\n",
+        None,
+    )
+    .await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Objetivo conservado",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let checkpoints = count(&e, "checkpoints");
+    assert!(checkpoints > 0);
+    // Simula corrupción persistida: el escritor normal rechaza JSON ilegible.
+    symphony_store::open(&e.db)
+        .unwrap()
+        .execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE checkpoints SET summary_json = '{incompleto';
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+        .unwrap();
+    std::fs::write(
+        created.worktree.join("rescatado.txt"),
+        "Trabajo sin checkpoint\n",
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let h = e
+            .runtime
+            .prepare_handoff(created.agent_id, "Recuperación")
+            .await
+            .unwrap();
+        assert_eq!(h.checkpoint_id, None);
+        assert!(
+            h.prompt.contains("## Objetivo\nObjetivo conservado"),
+            "{}",
+            h.prompt
+        );
+        assert!(h.prompt.contains("Trabajo sin checkpoint"), "{}", h.prompt);
+        assert!(h.prompt.contains("Trabajo conservado"), "{}", h.prompt);
+        let invalid: i64 = one(&e, "SELECT COUNT(*) FROM checkpoints WHERE is_valid = 0");
+        assert_eq!(invalid, checkpoints);
+        let items: i64 = one(
+            &e,
+            "SELECT COUNT(*) FROM recovery_items WHERE kind = 'CHECKPOINT_INVALID'
+             AND checkpoint_valid = 0 AND status = 'OPEN'",
+        );
+        assert_eq!(items, checkpoints);
+    }
+    e.writer.shutdown();
+}
+
 // --- P06.S4: handoff v1 ------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]

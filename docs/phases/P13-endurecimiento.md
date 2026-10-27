@@ -44,6 +44,14 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
   CI (corto), o documentar ⛔ si no hay nightly disponible.
 
 ## S3 · Recuperación (parte 1, delegado)
+- Checkpoint corrupto (FLOW §16, `openai/gpt-6-astra` + integrador): antes de un handoff y al
+  arrancar (agentes vivos, best effort) se valida el último checkpoint (resumen JSON legible y
+  blob del diff presente y sano). Uno corrupto se marca `is_valid = 0`, abre un recovery item
+  `CHECKPOINT_INVALID` (uno solo por checkpoint) y se usa el anterior; si no queda ninguno, el
+  handoff sale del objetivo de la tarea y del estado vivo del worktree. El checkpointer tampoco
+  arrastra objetivo ni paso siguiente de uno inválido. Tests: blob roto, JSON roto al arrancar,
+  sin checkpoints válidos y `writer_crash` (matar el proceso a media transacción: integridad ok,
+  ni run ni checkpoint a medias).
 - `crates/daemon/tests/soak.rs` (Antigravity con Claude Sonnet 5.5): tandas de fake-agents,
   paradas a media tarea y reinicios del runtime; comprueba runs abiertos, `integrity_check` y
   RSS. 60 s: 22 tandas, 2 reinicios, RSS 25 → 25 MB. Falta la corrida de 4 h (Journey E) y el
