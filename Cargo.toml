@@ -33,6 +33,8 @@ edition = "2024"
 rust-version = "1.95"
 license = "MIT"
 publish = false
+repository = "https://github.com/Vakyro/symphony-cli"
+homepage = "https://github.com/Vakyro/symphony-cli"
 
 # Se llena al usar cada crate (STACK §58, versiones de ADR-0001). Fuera de §58 → justificar en la bitácora.
 [workspace.dependencies]
@@ -86,3 +88,7 @@ undocumented_unsafe_blocks = "deny"
 opt-level = 3
 lto = "thin"
 # Nunca panic = "abort" (STACK §38): el cleanup y el diagnóstico dependen del unwinding.
+
+# P13.S7: perfil de los binarios que publica cargo-dist (mismo que release).
+[profile.dist]
+inherits = "release"

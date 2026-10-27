@@ -1,0 +1,25 @@
+# P13.S7 · Pipeline de release con cargo-dist (STACK §59). Se prueba con `dist plan` y
+# `dist build` locales y con el job `release-dry-run` de CI, que no publica. Publicar
+# (pushear un tag `v*`) lo decide Leo.
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.32.0"
+ci = "github"
+# symphony y symphonyd van como dos apps; los instaladores las dejan en la misma carpeta
+# (`symphony` busca `symphonyd` junto a su ejecutable).
+installers = ["shell", "powershell", "homebrew"]
+# Fórmula de Homebrew como artefacto: publicarla en un tap es aparte (⛔ Leo).
+tap = "Vakyro/homebrew-symphony"
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+install-path = "CARGO_HOME"
+install-updater = false
+checksum = "sha256"
+github-attestations = true
+pr-run-mode = "plan"

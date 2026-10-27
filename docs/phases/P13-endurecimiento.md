@@ -77,3 +77,19 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
 - Libro mdBook en `docs/book/` (Antigravity), `cargo xtask er` con el ER (Kimi), QUICKSTART al
   día (OpenCode, modelo gratis). Revisados e integrados.
 - Capítulos completos en `docs/book/src/` (`adapters.md`, `plugins.md`, `configuracion.md`, `comandos.md`, `troubleshooting.md`, `remoto-ssh.md`) e índice `SUMMARY.md` actualizado (`mdbook` no está instalado en el entorno local).
+
+## S7 · Pipeline de release (dry run)
+- cargo-dist 0.32 (`dist-workspace.toml`): `symphony` y `symphonyd` como dos apps (los
+  instaladores las dejan en la misma carpeta), zip/tar.xz para Linux x64, macOS arm64/x64 y
+  Windows x64, instaladores shell y PowerShell, fórmula de Homebrew como artefacto (sin tap:
+  publicarla es aparte), sha256 y attestations de GitHub. `release.yml` generado por
+  `dist generate`: solo publica al pushear un tag `v*` (⛔ Leo).
+- Dry run: job `release-dry-run` en CI (push a `phase/**` o a mano) con `dist build` local por
+  OS y global en Linux, artefactos del workflow, sin release. Local: `dist plan` y
+  `dist build` en Windows (zip de 3,4 MB y 7,1 MB, sha256 verificado, `symphony --version` del
+  zip). Ojo: `dist` falla si se corre desde `desktop` en minúsculas (compara rutas con
+  mayúsculas); usar la ruta real `Desktop`.
+- Bundles de la GUI: `gui-release.yml` los adjunta a un release ya publicado; en fase siguen
+  saliendo como artefactos del job `gui bundle`.
+- CHANGELOG con git-cliff 2.14 (`cliff.toml` existente): se genera al etiquetar en S8.
+- El libro se compila en CI (`mdbook build` en el job `docs`); verificado en WSL.

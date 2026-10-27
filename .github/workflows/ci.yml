@@ -53,6 +53,40 @@ jobs:
           path: fuzz/artifacts/${{ matrix.target }}/
           if-no-files-found: ignore
 
+  # P13.S7: release en seco. Construye con cargo-dist lo mismo que `release.yml` (archivos,
+  # instaladores, sha256) y lo deja como artefactos del workflow; no crea releases ni tags.
+  # P16.S4 instala desde estos artefactos en runners limpios.
+  release-dry-run:
+    name: release dry run (${{ matrix.target }})
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/phase/'))
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar dist (Unix)
+        if: runner.os != 'Windows'
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+      - name: Instalar dist (Windows)
+        if: runner.os == 'Windows'
+        run: powershell -ExecutionPolicy Bypass -c "irm https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.ps1 | iex"
+      - uses: Swatinem/rust-cache@v2
+      - name: dist build (local)
+        run: dist build --artifacts=local --target ${{ matrix.target }}
+      - name: dist build (global)
+        if: runner.os == 'Linux'
+        run: dist build --artifacts=global
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: target/distrib/
+          if-no-files-found: error
+
   msrv:
     name: msrv (1.95)
     runs-on: ubuntu-latest
@@ -135,7 +169,7 @@ jobs:
   # P13.S5: typos (ortografía) y lychee (links rotos en .md). La configuración
   # vive en `_typos.toml` y `lychee.toml` en la raíz.
   docs:
-    name: docs (typos + lychee)
+    name: docs (typos + lychee + mdbook)
     runs-on: ubuntu-latest
     # Hasta revisar la primera corrida: el repo es casi todo español y typos trae diccionario inglés.
     continue-on-error: true
@@ -147,6 +181,11 @@ jobs:
         uses: lycheeverse/lychee-action@v2.9.0
         with:
           args: --offline --no-progress '**/*.md'
+      - uses: taiki-e/install-action@v2.87.30
+        with:
+          tool: mdbook
+      - name: mdbook
+        run: mdbook build docs/book -d "$RUNNER_TEMP/book"
 
   # P13.S5: cobertura con cargo-llvm-cov en CI.
   coverage:

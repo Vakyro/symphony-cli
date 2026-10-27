@@ -6,9 +6,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [lints]
 workspace = true
+
+# P13.S7: lo único que se distribuye (el resto del workspace tiene `publish = false`).
+[package.metadata.dist]
+dist = true
 
 [[bin]]
 name = "symphony"
