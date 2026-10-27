@@ -110,7 +110,7 @@ pub fn hook_command_line(hook: &HookCommand) -> String {
 pub fn hook_overrides(hook: &HookCommand) -> Vec<String> {
     let cmd = hook_command_line(hook);
     // Cadena TOML básica: escapar `\` y `"`.
-    let toml_str = format!("\"{}\"", cmd.replace('\\', "\\\\").replace('"', "\\\""));
+    let toml_str = toml_quote(&cmd);
     HOOK_EVENTS
         .iter()
         .map(|e| format!("hooks.{e}=[{{hooks=[{{type=\"command\",command={toml_str},timeout={HOOK_TIMEOUT_SECS}}}]}}]"))
@@ -174,7 +174,7 @@ pub fn extra_mcp_overrides(m: &symphony_adapter_common::ExtraMcp) -> Vec<String>
 const CODEX_NATIVE_TOOLS: [&str; 3] = ["shell_tool", "unified_exec", "view_image"];
 
 fn s(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).map(str::to_string)
+    symphony_adapter_common::json_str(v, key)
 }
 
 impl CodexAdapter {
@@ -218,7 +218,9 @@ impl CodexAdapter {
             }
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         spec
     }

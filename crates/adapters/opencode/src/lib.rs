@@ -230,7 +230,9 @@ impl OpenCodeAdapter {
             spec = spec.args(["-m", &req.model]);
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         spec = spec.env("OPENCODE_CONFIG_CONTENT", run_config(req).to_string());
         Ok(spec)

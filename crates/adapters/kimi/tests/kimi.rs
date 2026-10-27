@@ -289,3 +289,15 @@ fn a_model_outside_the_plan_is_unavailable() {
         "{ev:?}"
     );
 }
+
+#[test]
+fn internal_env_vars_are_not_passed_to_spec() {
+    let mut req = request("default", None);
+    req.env.push(("SYMPHONY_AGENT_ID".into(), "agent-1".into()));
+    req.env.push(("SYMPHONY_MCP_EXTRA".into(), "{}".into()));
+    req.env.push(("SYMPHONY_PLUGIN_DIR".into(), "/tmp".into()));
+    let spec = adapter().spawn_spec(&req).unwrap();
+    assert!(!spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"));
+    assert!(!spec.env.iter().any(|(k, _)| k == "SYMPHONY_PLUGIN_DIR"));
+    assert!(spec.env.iter().any(|(k, _)| k == "SYMPHONY_AGENT_ID"));
+}

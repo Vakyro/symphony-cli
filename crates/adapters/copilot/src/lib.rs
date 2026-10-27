@@ -162,7 +162,9 @@ impl CopilotAdapter {
                 .args(["--available-tools", name]);
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         Ok(spec)
     }

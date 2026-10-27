@@ -339,3 +339,15 @@ fn lists_only_google_models() {
         assert!(of_vendor.iter().all(|m| m.display_name.ends_with(vendor)));
     }
 }
+
+#[test]
+fn internal_env_vars_are_not_passed_to_spec() {
+    let mut req = request("gemini-x");
+    req.env.push(("SYMPHONY_AGENT_ID".into(), "agent-1".into()));
+    req.env.push(("SYMPHONY_MCP_EXTRA".into(), "{}".into()));
+    req.env.push(("SYMPHONY_PLUGIN_DIR".into(), "/tmp".into()));
+    let spec = adapter().spawn_spec(&req).unwrap();
+    assert!(!spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"));
+    assert!(!spec.env.iter().any(|(k, _)| k == "SYMPHONY_PLUGIN_DIR"));
+    assert!(spec.env.iter().any(|(k, _)| k == "SYMPHONY_AGENT_ID"));
+}

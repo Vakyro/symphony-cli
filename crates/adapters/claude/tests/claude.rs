@@ -371,9 +371,8 @@ fn shared_skills_plugin_and_extra_mcp_servers_are_registered_per_invocation() {
             ),
         ],
     };
-    let args: Vec<String> = adapter()
-        .spawn_spec(&req)
-        .unwrap()
+    let spec = adapter().spawn_spec(&req).unwrap();
+    let args: Vec<String> = spec
         .args
         .iter()
         .map(|s| s.to_string_lossy().into_owned())
@@ -391,6 +390,14 @@ fn shared_skills_plugin_and_extra_mcp_servers_are_registered_per_invocation() {
     assert_eq!(servers["fs"]["env"]["RAIZ"], ".");
     assert_eq!(servers["remoto"]["type"], "http");
     assert_eq!(at("--allowedTools"), "mcp__fs,mcp__remoto");
+    assert!(
+        !spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"),
+        "las variables internas no deben propagarse al entorno del proceso CLI"
+    );
+    assert!(
+        !spec.env.iter().any(|(k, _)| k == "SYMPHONY_PLUGIN_DIR"),
+        "las variables internas no deben propagarse al entorno del proceso CLI"
+    );
 }
 
 /// P11.5.S2: el modo de permisos sale de la config; el valor por defecto sigue siendo `acceptEdits`.

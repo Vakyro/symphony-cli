@@ -413,6 +413,10 @@ fn mcp_servers_travel_in_the_config_env_per_invocation() {
     assert_eq!(parsed, cfg);
 
     assert_eq!(parsed["mcp"], mcp_config(&req).unwrap()["mcp"]);
+    assert!(
+        !spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"),
+        "las variables internas no deben propagarse al entorno del proceso CLI"
+    );
 
     // Sin hook ni servidores del usuario solo viaja el permiso del worktree, sin `mcp`.
     let plain = run_config(&request("default"));

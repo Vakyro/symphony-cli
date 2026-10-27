@@ -291,9 +291,8 @@ fn extra_mcp_servers_become_c_overrides() {
             .to_string(),
         )],
     };
-    let args: Vec<String> = adapter()
-        .spawn_spec(&req)
-        .unwrap()
+    let spec = adapter().spawn_spec(&req).unwrap();
+    let args: Vec<String> = spec
         .args
         .iter()
         .map(|s| s.to_string_lossy().into_owned())
@@ -306,6 +305,10 @@ fn extra_mcp_servers_become_c_overrides() {
     ] {
         assert!(args.iter().any(|a| a == want), "falta {want}: {args:?}");
     }
+    assert!(
+        !spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"),
+        "las variables internas no deben propagarse al entorno del proceso CLI"
+    );
 }
 
 #[test]

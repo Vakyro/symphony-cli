@@ -105,7 +105,7 @@ fn user_message(text: &str) -> Vec<u8> {
 }
 
 fn s(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).map(str::to_string)
+    symphony_adapter_common::json_str(v, key)
 }
 
 impl ClaudeAdapter {
@@ -194,7 +194,9 @@ impl ClaudeAdapter {
             spec = spec.arg("--plugin-dir").arg(dir);
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         Ok(spec)
     }
