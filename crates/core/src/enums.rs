@@ -162,6 +162,7 @@ db_enum!(
         Build => "build",
         Security => "security",
         Plugin => "plugin",
+        Files => "files",
     }
 );
 

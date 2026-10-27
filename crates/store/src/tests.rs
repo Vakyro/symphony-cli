@@ -152,7 +152,7 @@ fn file_db_has_the_schema_and_pragmas() {
         })
         .unwrap()
     };
-    assert_eq!(pragma("user_version"), "8");
+    assert_eq!(pragma("user_version"), "9");
     assert_eq!(pragma("journal_mode"), "wal");
     assert_eq!(pragma("foreign_keys"), "1");
     assert_eq!(pragma("synchronous"), "1"); // NORMAL
@@ -170,7 +170,7 @@ fn file_db_has_the_schema_and_pragmas() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
 }
 
@@ -941,4 +941,47 @@ fn checkpoint_base_skips_invalid_checkpoints() {
     let base = repo::checkpoint_base(&conn, agent).unwrap().unwrap();
     assert_eq!(base.objective, "uno", "título de la tarea");
     assert_eq!(base.next_step, None);
+}
+
+/// P16.S0 (ADR-0021): la migración 009 conserva los checks y acepta el nombre `files`.
+#[test]
+fn migration_009_keeps_checks_and_accepts_files() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    MIGRATIONS.to_version(&mut conn, 8).unwrap();
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, root_path, default_branch, created_at) VALUES ('p1','demo','/repo','main',0);
+         INSERT INTO sessions (id, project_id, status, started_at) VALUES ('s1','p1','ACTIVE',0);
+         INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at)
+             VALUES ('t1','p1','T-1','WORK','uno','RUNNING',0,0);
+         INSERT INTO providers (id, display_name, cli_name, adapter_mode, setup_state) VALUES ('anthropic','Claude','claude','CLI','READY');
+         INSERT INTO models (id, provider_id, cli_model_id, display_name, discovered_at) VALUES ('claude/sonnet','anthropic','sonnet','Sonnet',0);
+         INSERT INTO agents (id, project_id, session_id, task_id, number, state, execution_mode, requested_model_id, failover_policy, context_mode, created_at, updated_at)
+             VALUES ('a1','p1','s1','t1',1,'RUNNING','EXACT','claude/sonnet','ANY','BALANCED',0,0);
+         INSERT INTO validation_runs (id, agent_id, tier, trigger, status) VALUES ('v1','a1',1,'AUTO','PASS');
+         INSERT INTO validation_checks (id, validation_run_id, name, status, summary) VALUES ('c1','v1','plugin','PASS','ok');",
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO validation_checks (id, validation_run_id, name, status) VALUES ('c2','v1','files','PASS')",
+            [],
+        )
+        .is_err(),
+        "antes de 009 `files` no existe"
+    );
+    MIGRATIONS.to_latest(&mut conn).unwrap();
+    let kept: String = conn
+        .query_row(
+            "SELECT summary FROM validation_checks WHERE id = 'c1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, "ok");
+    conn.execute(
+        "INSERT INTO validation_checks (id, validation_run_id, name, status) VALUES ('c2','v1','files','PASS')",
+        [],
+    )
+    .unwrap();
 }

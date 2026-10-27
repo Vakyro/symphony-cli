@@ -665,7 +665,7 @@ Memoria consolidada: qué sigue siendo verdad en el proyecto (decisiones, stack,
 |---|---|---|
 | id | TEXT PK | |
 | validation_run_id | TEXT NOT NULL FK → validation_runs | |
-| name | TEXT NOT NULL | `syntax` · `format` · `lint` · `typecheck` · `targeted_tests` · `full_tests` · `build` · `security` · `plugin` |
+| name | TEXT NOT NULL | `syntax` · `format` · `lint` · `typecheck` · `targeted_tests` · `full_tests` · `build` · `security` · `plugin` · `files` (ADR-0021) |
 | status | TEXT NOT NULL | `PASS` · `FAIL` · `WARN` · `SKIPPED` |
 | passed_count | INTEGER | |
 | failed_count | INTEGER | |

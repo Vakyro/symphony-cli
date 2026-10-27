@@ -309,6 +309,11 @@ impl Runtime {
         let mut result = Validation::default();
         // Los validators de plugin corren en el tier 2 (ADR-0015).
         let validators = self.active_plugins(&root).validators;
+        // Documentos y medios: los archivos cambiados se abren (tier 1, ADR-0021).
+        let checks_files = symphony_core::load_project(Path::new(&root))
+            .ok()
+            .flatten()
+            .is_some_and(|p| p.project.kind.checks_files());
         for tier in 1..=up_to {
             let commands = cfg.tier(tier);
             let plugin_validators = if tier == 2 {
@@ -316,7 +321,8 @@ impl Runtime {
             } else {
                 Vec::new()
             };
-            if commands.is_empty() && plugin_validators.is_empty() {
+            let files_here = tier == 1 && checks_files;
+            if commands.is_empty() && plugin_validators.is_empty() && !files_here {
                 continue;
             }
             let vrun = ulid_string();
@@ -350,6 +356,12 @@ impl Runtime {
                     )
                     .await?;
                 checks.push(check);
+            }
+            if files_here {
+                checks.push(
+                    self.run_files_check(&vrun, Path::new(&worktree), &base_ref)
+                        .await?,
+                );
             }
             if !plugin_validators.is_empty() {
                 let more = self
@@ -386,6 +398,69 @@ impl Runtime {
             }
         }
         Ok(result)
+    }
+
+    /// Check `files` (ADR-0021): los archivos cambiados existen y su formato se abre.
+    async fn run_files_check(
+        &self,
+        vrun: &str,
+        worktree: &Path,
+        base_ref: &str,
+    ) -> Result<CheckResult, String> {
+        let started = Instant::now();
+        let (wt, base) = (worktree.to_path_buf(), base_ref.to_string());
+        let (failures, judged) = tokio::task::spawn_blocking(move || {
+            let files = crate::files_check::changed_files(&wt, &base);
+            crate::files_check::check(&wt, &files)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let failed = u32::try_from(failures.len()).unwrap_or(u32::MAX);
+        let (status, summary) = if failures.is_empty() {
+            (
+                CheckStatus::Pass,
+                if judged == 0 {
+                    "sin archivos de un formato que se revise".to_string()
+                } else {
+                    format!("{judged} archivo(s) se abren bien")
+                },
+            )
+        } else {
+            (
+                CheckStatus::Fail,
+                failures.join(
+                    "
+",
+                ),
+            )
+        };
+        let new = NewCheck {
+            id: ulid_string(),
+            validation_run_id: vrun.to_string(),
+            name: CheckName::Files,
+            status,
+            passed: Some(judged.saturating_sub(failed)),
+            failed: Some(failed),
+            summary: Some(summary.clone()),
+            output_object_id: None,
+        };
+        self.writer
+            .write(Box::new(move |t| {
+                store::insert_check(t, &new)?;
+                Ok(())
+            }))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(CheckResult {
+            command: "files".into(),
+            name: CheckName::Files,
+            status,
+            passed: Some(judged.saturating_sub(failed)),
+            failed: Some(failed),
+            summary,
+            exit_code: None,
+            duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

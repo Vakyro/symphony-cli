@@ -607,7 +607,8 @@ pub struct PluginsConfig {
 
 impl ProjectConfig {
     /// La validación efectiva: la del proyecto o, si solo activa validators de plugin, una
-    /// por defecto (gate en el tier 2). `None` si no hay nada que validar.
+    /// por defecto (gate en el tier 2); un proyecto `document` o `media` sin nada más tiene el
+    /// check `files` (gate en el tier 1, ADR-0021). `None` si no hay nada que validar.
     pub fn effective_validation(&self) -> Option<ValidationConfig> {
         let own = self.validation.clone().filter(|v| !v.is_empty());
         let has_plugins = self
@@ -617,6 +618,10 @@ impl ProjectConfig {
         match (own, has_plugins) {
             (Some(v), _) => Some(v),
             (None, true) => Some(self.validation.clone().unwrap_or_default()),
+            (None, false) if self.project.kind.checks_files() => Some(ValidationConfig {
+                gate: 1,
+                ..self.validation.clone().unwrap_or_default()
+            }),
             (None, false) => None,
         }
     }
@@ -744,6 +749,11 @@ impl ProjectKind {
             Self::Media => "@media",
             Self::General => "@research",
         }
+    }
+
+    /// Si el gate comprueba que los archivos cambiados se abren (check `files`, ADR-0021).
+    pub fn checks_files(self) -> bool {
+        matches!(self, Self::Document | Self::Media)
     }
 }
 

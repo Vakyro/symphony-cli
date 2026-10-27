@@ -6378,3 +6378,85 @@ async fn no_suggestion_when_the_task_does_not_change_type_or_the_model_is_alread
     assert_eq!(count(&e, "model_suggestions"), 0);
     e.writer.shutdown();
 }
+
+fn pdf_script(content: &str) -> String {
+    format!(
+        "[[step]]\nkind = \"say\"\ntext = \"Escribo el informe\"\n\n[[step]]\nkind = \"edit\"\npath = \"informe.pdf\"\ncontent = \"{content}\"\n"
+    )
+}
+
+fn files_checks(e: &Env, agent: &str) -> Vec<(String, String)> {
+    let conn =
+        rusqlite::Connection::open_with_flags(&e.db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.status, COALESCE(c.summary, '') FROM validation_checks c
+             JOIN validation_runs r ON r.id = c.validation_run_id
+             WHERE r.agent_id = ?1 AND c.name = 'files' ORDER BY r.started_at, r.rowid",
+        )
+        .unwrap();
+    stmt.query_map([agent], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+fn document_project(e: &Env) {
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        PROJECT_HEAD.replace(
+            "default_branch = \"main\"\n",
+            "default_branch = \"main\"\nkind = \"document\"\n",
+        ),
+    )
+    .unwrap();
+}
+
+/// P16.S0 (ADR-0021): en un proyecto de documentos sin `[validation]`, el gate comprueba que
+/// lo que cambió el agente se abre: un PDF completo pasa.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_project_gates_on_files_that_open() {
+    let e = env(&pdf_script("%PDF-1.4 1 0 obj %%EOF"), None).await;
+    document_project(&e);
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Informe", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "COMPLETED").await;
+    let checks = files_checks(&e, &agent);
+    assert_eq!(checks.len(), 1, "{checks:?}");
+    assert_eq!(checks[0].0, "PASS", "{checks:?}");
+    e.writer.shutdown();
+}
+
+/// P16.S0: un PDF truncado no pasa el gate; el agente recibe el motivo y, sin arreglarlo,
+/// la tarea se bloquea como con cualquier validación.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_truncated_pdf_fails_the_files_check() {
+    let e = env(&pdf_script("%PDF-1.4 sin final"), None).await;
+    document_project(&e);
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Informe roto",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "BLOCKED").await;
+    let checks = files_checks(&e, &agent);
+    assert!(!checks.is_empty());
+    assert!(
+        checks
+            .iter()
+            .all(|(s, why)| s == "FAIL" && why.contains("informe.pdf") && why.contains("truncado")),
+        "{checks:?}"
+    );
+    e.writer.shutdown();
+}
