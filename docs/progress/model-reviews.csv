@@ -12,3 +12,20 @@ agente,fecha,proveedor,modelo,tipo_tarea,dificultad,veredicto,calidad_1a5,retrab
 15,2026-10-24,google,anthropic/claude-opus-5-5-high,auditoria,alta,no_evaluable,,ninguno,cuota individual de Antigravity agotada a los 5 min; el failover pasó a claude/fable que pide créditos y quedó esperando (clasificado mal como 429 transitorio)
 9,2026-10-24,google,google/gemini-3.8-flash-high,docs,media,aceptado,3,2 filas corregidas,tabla IPC completa (todos los métodos) pero con parámetros inventados en algunas filas (performance.set con limits); 12 min
 14,2026-10-24,openai,openai/gpt-6-astra,auditoria,alta,aceptado,5,commit hecho por el integrador,11 hallazgos con línea y escenario (3 altos: limpieza que borra trabajo previo, permisos amplios ante config inválida, timeout IPC que anula el veto del hook); sus cargo vencieron a los 300 s del transporte MCP; 14 min
+10,2026-10-24,moonshot,moonshot/k3.1-pro,codigo_parser_live,media,aceptado,4,commit y verificación hechos por el integrador,capturó fixture real de agy y emitió los text_delta; su clippy venció esperando el candado de Cargo
+16,2026-10-24,moonshot,moonshot/k3,auditoria,alta,aceptado,4,ninguno,12 hallazgos concretos (handoff sin tope de archivos nuevos, borrado recursivo que deja índice); 11 min
+17,2026-10-24,openai,openai/gpt-6.1-sol,codigo_tooling,media,aceptado,4,ninguno,cargo xtask metrics con test sobre migraciones reales; reintento tras corregir el plan
+18,2026-10-24,google,google/gemini-4-argon-medium,auditoria,alta,aceptado,4,ninguno,13 hallazgos (1 alto: contador inflight de la TUI); 6 min
+19,2026-10-24,openai,openai/gpt-6-sol,auditoria,alta,aceptado,3,commit hecho por el integrador,7 hallazgos; corrió cargo en una tarea de solo docs y venció a los 300 s
+20,2026-10-24,anthropic,claude/haiku,auditoria,alta,aceptado,4,ninguno,hallazgos entre adapters (has_token vs subcadena, Antigravity ignora el harness); 21 min
+21,2026-10-24,moonshot,moonshot/kimi-for-coding-highspeed,auditoria,alta,no_evaluable,,ninguno,el plan de Kimi no incluye este modelo (403); Symphony lo vio como caída
+22,2026-10-24,openai,openai/gpt-5.6-sol,ci_release,alta,bloqueado_correcto,,ninguno,cargo install cargo-dist venció dos veces a los 300 s; paró sin inventar
+23,2026-10-24,google,google/gemini-3.8-flash-medium,ci_config,baja,aceptado,4,ninguno,job de cobertura con versión de acción existente y continue-on-error; 18 min
+24,2026-10-24,google,anthropic/claude-sonnet-5-5-high,ci_config,media,no_evaluable,,ninguno,cuota de Antigravity para Anthropic agotada; failover a Codex sin créditos
+25,2026-10-24,openai,openai/gpt-5.6-terra,codigo_feature,alta,no_evaluable,,ninguno,Codex sin créditos
+26,2026-10-24,github,github/auto,docs,baja,rechazado,1,ninguno,segunda vez: con el harness escribe las llamadas a herramientas como texto («to=terminal.exec») y no las ejecuta
+27,2026-10-24,google,anthropic/claude-opus-5-5-medium,docs,media,no_evaluable,,ninguno,cuota de Antigravity para Anthropic agotada
+28,2026-10-24,opencode,opencode/nemotron-3-ultra-free,auditoria,alta,no_evaluable,,ninguno,uso gratuito de OpenCode agotado
+29,2026-10-24,opencode,opencode/mimo-v2.6-flash-free,auditoria,alta,no_evaluable,,ninguno,uso gratuito de OpenCode agotado
+30,2026-10-24,google,anthropic/claude-sonnet-5-5-low,auditoria,alta,no_evaluable,,ninguno,cuota de Antigravity para Anthropic agotada
+31,2026-10-24,openai,openai/gpt-6-luna,docs,media,no_evaluable,,ninguno,Codex sin créditos
