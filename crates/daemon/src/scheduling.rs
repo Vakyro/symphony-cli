@@ -27,9 +27,38 @@ struct Inner {
     waiters: HashMap<String, oneshot::Sender<Grant>>,
     /// Cuándo caduca el slot de cada operación que corre.
     leases: HashMap<String, i64>,
+    /// `max_wait_ms` del perfil: se restaura al liberarse el disco.
+    max_wait_ms: i64,
+    /// Última lectura de `(cpu_pct, ram_pct)` de la máquina.
+    pressure: (f64, f64),
+    /// El disco del proyecto tiene menos de [`crate::resources::DISK_LOW`] libres.
+    disk_low: bool,
 }
 
 impl Inner {
+    /// Aplica la presión vigente al scheduler. Con el disco casi lleno se fuerza el 100 %
+    /// de presión y `max_wait_ms = i64::MAX` para que las operaciones pesadas (clases 3–4)
+    /// esperen hasta que se libere espacio.
+    fn apply_pressure(&mut self, now: i64) {
+        let hold = self.disk_low || (self.pressure.0 >= 100.0 && self.pressure.1 >= 100.0);
+        let mut limits = self.core.limits().clone();
+        limits.max_wait_ms = if hold { i64::MAX } else { self.max_wait_ms };
+        let mut grants = if hold {
+            let mut g = self.core.set_limits(limits, 0);
+            g.extend(self.core.set_pressure(100.0, 100.0, 0));
+            g
+        } else {
+            let (cpu, ram) = self.pressure;
+            let mut g = self.core.set_pressure(cpu, ram, now);
+            g.extend(self.core.set_limits(limits, now));
+            g
+        };
+        if hold {
+            grants.clear();
+        }
+        self.deliver(grants, now);
+    }
+
     /// Despierta a los que ya corren. Un grant sin nadie esperando (el hook se fue) se
     /// libera enseguida, y lo que eso libere se reparte en la misma pasada.
     fn deliver(&mut self, mut grants: Vec<Grant>, now: i64) {
@@ -84,11 +113,15 @@ pub struct Scheduling {
 
 impl Scheduling {
     pub fn new(limits: Limits) -> Self {
+        let max_wait_ms = limits.max_wait_ms;
         Self {
             inner: Mutex::new(Inner {
                 core: Scheduler::new(limits),
                 waiters: HashMap::new(),
                 leases: HashMap::new(),
+                max_wait_ms,
+                pressure: (0.0, 0.0),
+                disk_low: false,
             }),
             hold_cap_secs: std::sync::atomic::AtomicU64::new(0),
         }
@@ -189,14 +222,29 @@ impl Scheduling {
     pub fn set_pressure(&self, cpu_pct: f64, ram_pct: f64) {
         let now = now_ms();
         if let Ok(mut inner) = self.inner.lock() {
-            let grants = inner.core.set_pressure(cpu_pct, ram_pct, now);
-            inner.deliver(grants, now);
+            inner.pressure = (cpu_pct, ram_pct);
+            inner.apply_pressure(now);
         }
     }
 
-    pub fn set_limits(&self, limits: Limits) {
+    /// El disco del proyecto bajó de [`crate::resources::DISK_LOW`] (`true`) o volvió a tener
+    /// espacio (`false`). Reutiliza la presión del scheduler para retener las operaciones
+    /// pesadas (clases 3–4) mientras dure el aviso y reanudarlas al liberarse el disco.
+    pub fn set_disk_low(&self, low: bool) {
         let now = now_ms();
         if let Ok(mut inner) = self.inner.lock() {
+            inner.disk_low = low;
+            inner.apply_pressure(now);
+        }
+    }
+
+    pub fn set_limits(&self, mut limits: Limits) {
+        let now = now_ms();
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.max_wait_ms = limits.max_wait_ms;
+            if inner.disk_low || (inner.pressure.0 >= 100.0 && inner.pressure.1 >= 100.0) {
+                limits.max_wait_ms = i64::MAX;
+            }
             let grants = inner.core.set_limits(limits, now);
             inner.deliver(grants, now);
         }

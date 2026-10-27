@@ -6,7 +6,8 @@
 //!
 //! Disco (dogfooding 2026-10-27): una vez por minuto se mira el espacio libre del disco del
 //! proyecto; por debajo de [`DISK_LOW`] queda un aviso `MACHINE_PRESSURE` en el Recovery Center
-//! (uno solo mientras siga abierto). Con el disco lleno los agentes se cuelgan sin error.
+//! (uno solo mientras siga abierto) y el scheduler frena las operaciones pesadas (clases 3–4)
+//! hasta que vuelva a haber espacio. Con el disco lleno los agentes se cuelgan sin error.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -104,13 +105,13 @@ pub fn spawn(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tick.tick().await;
         let mut n: u32 = 0;
+        let mut low_disk = false;
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
                 _ = tick.tick() => {}
             }
             let (cpu_pct, ram_pct) = read(&mut sys);
-            on_sample(cpu_pct, ram_pct);
             let sample = NewSample {
                 cpu_pct,
                 ram_pct,
@@ -127,10 +128,16 @@ pub fn spawn(
                     .await
                     .ok()
                     .flatten();
-                if let Some(free) = free.filter(|f| *f < DISK_LOW) {
-                    warn_low_disk(&writer, free).await;
+                if let Some(free) = free {
+                    low_disk = update_disk(&writer, free, low_disk).await;
                 }
             }
+            let (p_cpu, p_ram) = if low_disk {
+                (100.0, 100.0)
+            } else {
+                (cpu_pct, ram_pct)
+            };
+            on_sample(p_cpu, p_ram);
             let compact = n.is_multiple_of(COMPACT_EVERY);
             let res = writer
                 .write(Box::new(move |t| {
@@ -147,6 +154,20 @@ pub fn spawn(
             }
         }
     })
+}
+
+/// Abre o cierra el aviso `MACHINE_PRESSURE` según el espacio libre y devuelve `true`
+/// mientras quede menos de [`DISK_LOW`].
+pub async fn update_disk(writer: &WriterHandle, free: u64, was_low: bool) -> bool {
+    if free < DISK_LOW {
+        warn_low_disk(writer, free).await;
+        true
+    } else {
+        if was_low {
+            clear_low_disk(writer).await;
+        }
+        false
+    }
 }
 
 /// Abre el aviso de disco casi lleno si no hay uno abierto.
@@ -191,6 +212,26 @@ async fn warn_low_disk(writer: &WriterHandle, free: u64) {
     }
 }
 
+/// Cierra el aviso de disco casi lleno cuando vuelve a haber espacio.
+async fn clear_low_disk(writer: &WriterHandle) {
+    let res = writer
+        .write(Box::new(move |t| {
+            let closed = t.execute(
+                "UPDATE recovery_items SET status = 'RESOLVED', resolved_at = ?1
+                 WHERE kind = 'MACHINE_PRESSURE' AND status = 'OPEN'",
+                [now_ms()],
+            )?;
+            if closed > 0 {
+                tracing::info!("espacio en disco recuperado: se cierra el aviso MACHINE_PRESSURE");
+            }
+            Ok(())
+        }))
+        .await;
+    if let Err(e) = res {
+        tracing::warn!(error = %e, "no se pudo cerrar el aviso de disco");
+    }
+}
+
 fn into_sqlite(e: symphony_store::repo::RepoError) -> rusqlite::Error {
     rusqlite::Error::ToSqlConversionFailure(Box::new(e))
 }
@@ -198,6 +239,8 @@ fn into_sqlite(e: symphony_store::repo::RepoError) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduling::{Scheduling, Submitted, Waited};
+    use symphony_scheduler::{Limits, OpClass, Request, WaitReason};
 
     #[test]
     fn the_free_space_of_a_real_directory_is_found() {
@@ -221,5 +264,91 @@ mod tests {
             Some(&mounts[if cfg!(windows) { 0 } else { 1 }])
         );
         assert_eq!(mount_for(Path::new("Z:/x"), &mounts[1..]), None);
+    }
+
+    #[tokio::test]
+    async fn low_disk_holds_heavy_work_and_resumes_when_freed() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = symphony_store::Writer::start(&dir.path().join("symphony.db")).unwrap();
+        let handle = writer.handle();
+        handle
+            .write(Box::new(|t| {
+                symphony_store::repo::insert_project(
+                    t,
+                    &symphony_store::repo::Project {
+                        id: symphony_core::ProjectId::new(),
+                        name: "demo".into(),
+                        root_path: "/tmp/demo".into(),
+                        default_branch: "main".into(),
+                        created_at: 1,
+                    },
+                )
+                .map_err(into_sqlite)?;
+                Ok(())
+            }))
+            .await
+            .unwrap();
+        let reader = writer.reader().unwrap();
+        let open_warnings = || -> i64 {
+            reader
+                .query_row(
+                    "SELECT COUNT(*) FROM recovery_items WHERE kind = 'MACHINE_PRESSURE' AND status = 'OPEN'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+
+        let sched = Scheduling::new(Limits {
+            max_heavy: 2,
+            cpu_ceiling_pct: 70.0,
+            ram_ceiling_pct: 70.0,
+            max_wait_ms: 10,
+        });
+        let req = |id: &str, class: OpClass, now_ms: i64| Request {
+            id: id.into(),
+            tag: format!("tc-{id}"),
+            agent: "a1".into(),
+            agent_label: "Agent #1".into(),
+            class,
+            priority: 0,
+            command: Some("cargo test".into()),
+            now_ms,
+        };
+
+        // Disco casi lleno (< 5 GB): abre MACHINE_PRESSURE y frena clases 3–4.
+        assert!(update_disk(&handle, DISK_LOW - 1, false).await);
+        assert_eq!(open_warnings(), 1);
+        sched.set_disk_low(true);
+        // Una muestra normal de CPU/RAM no levanta el freno mientras falte disco.
+        sched.set_pressure(20.0, 30.0);
+
+        assert!(matches!(
+            sched.submit(req("light", OpClass::Cheap, 100)),
+            Submitted::Run { held: false }
+        ));
+        let Submitted::Queued(q3) = sched.submit(req("heavy3", OpClass::Heavy, 100)) else {
+            panic!("clase 3 debía esperar con el disco casi lleno");
+        };
+        assert!(matches!(q3.reason, WaitReason::Pressure { .. }));
+        let Submitted::Queued(q4) = sched.submit(req("heavy4", OpClass::VeryHeavy, 200)) else {
+            panic!("clase 4 debía esperar con el disco casi lleno");
+        };
+        assert!(matches!(q4.reason, WaitReason::Pressure { .. }));
+
+        // Al liberarse el disco: se resuelve el aviso y se reanudan las pesadas en cola.
+        assert!(!update_disk(&handle, DISK_LOW + 1, true).await);
+        assert_eq!(open_warnings(), 0);
+        sched.set_disk_low(false);
+
+        assert!(matches!(
+            sched.wait(q3, Duration::from_secs(1)).await,
+            Waited::Granted { .. }
+        ));
+        assert!(matches!(
+            sched.wait(q4, Duration::from_secs(1)).await,
+            Waited::Granted { .. }
+        ));
+        writer.shutdown();
     }
 }
