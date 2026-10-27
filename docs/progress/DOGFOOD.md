@@ -124,9 +124,10 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
 - **2026-10-26 · Los agentes cambian de rama.** AGENTS.md dice «nunca en main, usa ramas
   `phase/`» y dos agentes crearon su propia rama dentro del worktree. Symphony no lo nota (el
   diff y la integración miran la rama asignada). Regla del integrador: no cambiar de rama.
-- **2026-10-26 · Ventanas de cuota sin hora de reinicio.** Kimi corta a las 5 h («You've
-  reached your 5-hour usage limit») y Antigravity dice «Resets in 108h54m13s», pero
-  `provider_failures.reset_at` queda vacío: el router no sabe cuándo vuelve el proveedor.
+- **2026-10-26 · Ventana de 5 h de Kimi sin hora de reinicio.** Kimi corta con «You've reached
+  your 5-hour usage limit» sin decir cuándo vuelve, así que el router no lo sabe. (Antigravity sí
+  lo dice, «Resets in 108h54m13s», y Symphony ya lo guarda en `retry_after_at`.) Idea: para Kimi,
+  suponer como máximo 5 h desde el primer uso de la ventana.
 - **2026-10-26 · Disco lleno.** El `target/` del integrador llegó a 104 GB y dejó el disco en
   0: los agentes se colgaron y Symphony solo lo notó 15 min después, por `NO_HEARTBEAT`. El
   Resource Manager mira CPU y RAM, no el disco. Arreglo inmediato: `cargo clean`.
