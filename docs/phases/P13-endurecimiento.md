@@ -72,6 +72,20 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
   `[retention].events_days` (30) y las `resource_samples` más viejas que
   `[retention].samples_days` (14). Checkpoints, runs y eventos referenciados por
   checkpoints o `project_facts` no se tocan. Config nueva en `crates/core` y QUICKSTART §13.
+- Harness E2E completo (STACK §25.2, `crates/daemon/tests/benchmark.rs` — `cargo nextest run -p symphony-daemon --test benchmark --no-capture`).
+  Nota: medición tomada con la máquina cargada con otros agentes compilando y corriendo en paralelo (incluido el soak de 4 h). En los escenarios `10k/100k events`, `cola p*` mide la latencia de lectura de vistas (`list_agents_rows` + `home_rows` + `views::tasks` + `views::activity`) y `evt p*` la latencia de persistencia por evento amortizada en lotes:
+
+```text
+escenario                  agent   tiempo    RAM Δ  RAM proc CPU avg CPU p50 CPU p95 hijos  startup cola p50 cola p95  evt p50  evt p95  evt p99 ckpt p95  handoff failover
+1 agente                       1   2162ms      0MB      30MB      0%      0%      0%     0    745ms       —        —       1ms     18ms     18ms    382ms       —        — 
+3 agentes / 3 worktrees        3   4543ms    154MB      32MB    100%    100%    100%     4   2276ms       —        —       1ms     10ms     18ms   1768ms       —        — 
+3 agentes + prueba pesada      3  28828ms    166MB      34MB     85%     86%     99%     4   2772ms  10133ms  20776ms      0ms     10ms     32ms   1024ms       —        — 
+forced failover                1   2113ms     13MB      34MB     91%     88%    100%     2    664ms       —        —       1ms      2ms     15ms    861ms    176ms    432ms
+daemon restart                 2   4311ms     14MB      35MB     87%     88%     98%     1     25ms       —        —       1ms      2ms     51ms   1101ms    190ms       — 
+large logs (4 MB)              1   9582ms    569MB      59MB     94%     95%    100%     2    568ms       —        —     304ms    432ms    451ms   1342ms   2140ms       — 
+10k events (write/views)       1   1261ms     73MB      41MB     92%     92%     95%     0       —       2ms     30ms   0.11ms   0.21ms   0.21ms       —        —        — 
+100k events (write/views)      1  10079ms      3MB      55MB     78%     80%     96%     0       —       1ms     16ms   0.09ms   0.17ms   0.18ms       —        —        — 
+```
 
 ## S6 · Documentación (delegado)
 - Libro mdBook en `docs/book/` (Antigravity), `cargo xtask er` con el ER (Kimi), QUICKSTART al
