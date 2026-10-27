@@ -135,8 +135,27 @@ fn changes(root: &Path, ignore: &Gitignore, paths: BTreeSet<PathBuf>) -> Vec<Cha
         {
             continue;
         }
+        if path.is_dir() {
+            // Una carpeta nueva o movida llega como un solo evento, y en Linux (inotify) lo que se
+            // escribe en ella antes de que el watcher la vigile no avisa: se recorre entera.
+            out.extend(
+                scan(&path)
+                    .into_iter()
+                    .map(|c| Change {
+                        rel: rel.join(&c.rel).to_string_lossy().into_owned(),
+                        text: c.text,
+                    })
+                    .filter(|c| {
+                        !ignore
+                            .matched_path_or_any_parents(Path::new(&c.rel), false)
+                            .is_ignore()
+                            && !ignored_by_nested(root, &root.join(&c.rel))
+                    }),
+            );
+            continue;
+        }
         let rel_s = rel.to_string_lossy().into_owned();
-        if path.is_dir() || ignored_by_nested(root, &path) {
+        if ignored_by_nested(root, &path) {
             continue;
         }
         let text = read_text(&path);
