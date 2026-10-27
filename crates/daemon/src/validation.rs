@@ -207,11 +207,15 @@ impl Runtime {
             .map(|p| p.root_path)
     }
 
-    /// Corre un comando pasando por el scheduler si es pesado. `label` nombra al agente en
-    /// las esperas; `key` identifica la operación. `Err` si no hubo turno.
+    /// Corre un comando pasando por el scheduler si es pesado. `agent` es la identidad del
+    /// agente en el scheduler (la misma que usan los hooks, para la equidad y para liberar sus
+    /// slots al terminar); `label` lo nombra en las esperas; `key` identifica la operación.
+    /// `Err` si no hubo turno.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_scheduled(
         &self,
         key: String,
+        agent: AgentId,
         label: String,
         command: &str,
         cwd: &Path,
@@ -224,7 +228,7 @@ impl Runtime {
                 let req = Request {
                     id: key.clone(),
                     tag: tag.to_string(),
-                    agent: label.clone(),
+                    agent: agent.to_string(),
                     agent_label: label,
                     class,
                     priority: 0,
@@ -424,6 +428,7 @@ impl Runtime {
         let outcome = self
             .run_scheduled(
                 format!("val:{vrun}:{index}"),
+                agent.id,
                 label.to_string(),
                 command,
                 cwd,

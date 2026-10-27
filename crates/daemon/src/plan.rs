@@ -28,10 +28,25 @@ pub fn plan_file(worktree: &Path, task: TaskId) -> PathBuf {
 
 /// Lee y valida el plan del worktree. `None` si no existe (el agente no lo escribió).
 pub fn read_plan(worktree: &Path, task: TaskId, min_tasks: usize) -> Option<Plan> {
-    let text = std::fs::read_to_string(plan_file(worktree, task)).ok()?;
+    let path = plan_file(worktree, task);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "no se pudo leer el plan: se sigue sin él");
+            return None;
+        }
+    };
     let plan = Plan::parse(&text).normalized(min_tasks);
-    // Un plan sin fases o con dependencias imposibles no guía nada: se trata como ausente.
-    plan.validate().ok().map(|()| plan)
+    // Un plan sin fases o con dependencias imposibles no guía nada: se trata como ausente,
+    // pero queda dicho en el log (auditoría P13.S5).
+    match plan.validate() {
+        Ok(()) => Some(plan),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = ?e, "plan inválido: se sigue sin él");
+            None
+        }
+    }
 }
 
 /// Lo que separa la tarea de las reglas del plan en el primer prompt.

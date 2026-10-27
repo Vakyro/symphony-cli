@@ -13,3 +13,15 @@ Hay cuatro hallazgos accionables: dos rutas convierten errores o referencias inv
 | `crates/daemon/src/plan.rs:246–249` | baja | La eliminación del archivo y de sus directorios padre ignora todos los errores. El estado se archiva como terminado aunque el plan temporal siga en el worktree. | El archivo está abierto, `.symphony/plan` no está vacío o el proceso no tiene permisos para borrarlo. `archive_plan` ya registró el resumen y continúa sin avisar que la limpieza falló. | Comprobar el resultado; si queda el archivo, registrar una advertencia explícita con la ruta y no afirmar limpieza completa. |
 
 No encontré `unwrap`/`expect`/`panic` en rutas de runtime dentro de estos cinco archivos: el `unwrap` de `parse_review` en `merge.rs:829` está bajo `#[cfg(test)]`. Tampoco encontré evidencia suficiente de recursos de proceso no liberados en `validation.rs`: al vencer el timeout se llama `terminate_tree()` y luego se espera el proceso. No se añaden hallazgos de complejidad o abstracciones innecesarias sin un impacto concreto en comportamiento.
+
+## Seguimiento (P13.S5)
+
+Revisado y corregido por el integrador (claude-code/opus-5.5) sobre `656bb7c`.
+
+| Hallazgo | Estado | Test o razón |
+|---|---|---|
+| `merge.rs:104–110` (alta) aprobación por defecto con config ilegible | corregido | `require_approval` devuelve `true` si `project.toml` no se lee; la comprobación de validación también falla en vez de saltarse. Test `an_unreadable_project_toml_blocks_the_merge_instead_of_skipping_checks` |
+| `merge.rs:166–171` (media) dependencias «cumplidas» si la consulta falla | corregido | check `dependencies` en `FAIL` con «no se pudieron comprobar: …» |
+| `batch.rs:261–267` (alta) `needs` inexistente se descarta | falso | `batch.rs:216–223` ya rechaza cualquier `needs` que no esté en el plan antes de crear agentes; el `filter_map` posterior solo resuelve códigos de tareas ya creadas en orden topológico |
+| `plan.rs:30–35` (media) plan ilegible = ausente | corregido en parte | se distingue «no existe» de «no se pudo leer» y un plan inválido queda en el log (`warn`); tratarlo como ausente sigue siendo la decisión de diseño (comentario en el código) |
+| `plan.rs:246–249` (baja) limpieza que ignora errores | diferido | sin efecto en el estado; el archivo queda en el worktree y se borra con él |

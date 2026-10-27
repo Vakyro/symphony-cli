@@ -271,6 +271,7 @@ impl Runtime {
         &self,
         project_root: &str,
         wt_path: &Path,
+        agent: AgentId,
         number: i64,
     ) -> Result<(), String> {
         let Some(cfg) = symphony_core::load_project(Path::new(project_root))
@@ -287,6 +288,7 @@ impl Runtime {
             let (exec, _, _) = self
                 .run_scheduled(
                     key,
+                    agent,
                     format!("Agent #{number}"),
                     command,
                     wt_path,
@@ -739,7 +741,7 @@ impl Runtime {
 
         // 4b. Preparación del worktree (`[worktree] prepare`): si falla, no se creó el agente.
         if let Err(detail) = self
-            .prepare_worktree_commands(&root_text, &wt_path, number)
+            .prepare_worktree_commands(&root_text, &wt_path, agent_id, number)
             .await
         {
             self.undo_worktree(&repo_root, &wt_path, &branch).await;

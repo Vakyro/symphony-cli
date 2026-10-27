@@ -4620,6 +4620,29 @@ async fn complete(
     (created, agent)
 }
 
+/// P13.S5 (auditoría de merge): un `project.toml` ilegible no abre la puerta: el preflight
+/// pide aprobación y no queda listo, en vez de usar la política por defecto.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_project_toml_blocks_the_merge_instead_of_skipping_checks() {
+    let e = env_with(&[("alpha", &writes("a.txt", "desde A"))], None).await;
+    make_chat(&e).await;
+    let (a, _) = complete(&e, "Agregar a.txt", "alpha/fast").await;
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(e.repo.join(".symphony/project.toml"), "esto [[[ no es toml").unwrap();
+
+    let pre = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
+    assert!(pre.requires_approval, "sin config legible se pide aprobación");
+    assert!(!pre.ready(), "{:?}", pre.checks);
+    assert!(
+        pre.checks
+            .iter()
+            .any(|c| c.name == "validation" && c.status == "FAIL"),
+        "{:?}",
+        pre.checks
+    );
+    e.writer.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_finished_agent_integrates_into_the_chat_branch_only_with_approval_and_never_into_main() {
     let e = env_with(&[("alpha", &writes("a.txt", "desde A"))], None).await;

@@ -102,12 +102,18 @@ impl Runtime {
     }
 
     fn require_approval(&self, root: &str) -> bool {
-        symphony_core::load_project(Path::new(root))
-            .ok()
-            .flatten()
-            .and_then(|p| p.merge)
-            .unwrap_or_default()
-            .require_approval
+        match symphony_core::load_project(Path::new(root)) {
+            Ok(p) => {
+                p.and_then(|p| p.merge)
+                    .unwrap_or_default()
+                    .require_approval
+            }
+            // Un `project.toml` ilegible no puede saltarse la aprobación (P13.S5).
+            Err(e) => {
+                tracing::warn!(root, error = %e, "project.toml ilegible: el merge pide aprobación");
+                true
+            }
+        }
     }
 
     /// Preflight de integración (FLOW §14.2). Deja la solicitud en `READY` o `BLOCKED` con el
@@ -162,30 +168,49 @@ impl Runtime {
             },
         });
 
-        // Dependencias.
+        // Dependencias. Una consulta que falla no es «todas cumplidas» (P13.S5).
         let unmet = self
             .reader
             .lock()
-            .ok()
-            .and_then(|c| symphony_store::deps::unmet_dependencies(&c, ctx.task.id).ok())
-            .unwrap_or_default();
-        checks.push(Check {
-            name: "dependencies",
-            status: if unmet.is_empty() { "PASS" } else { "FAIL" },
-            detail: if unmet.is_empty() {
-                "todas cumplidas".into()
-            } else {
-                symphony_store::deps::waiting_phrase(&unmet)
+            .map_err(|_| "lector de la base no disponible".to_string())
+            .and_then(|c| {
+                symphony_store::deps::unmet_dependencies(&c, ctx.task.id)
+                    .map_err(|e| e.to_string())
+            });
+        checks.push(match unmet {
+            Ok(unmet) if unmet.is_empty() => Check {
+                name: "dependencies",
+                status: "PASS",
+                detail: "todas cumplidas".into(),
+            },
+            Ok(unmet) => Check {
+                name: "dependencies",
+                status: "FAIL",
+                detail: symphony_store::deps::waiting_phrase(&unmet),
+            },
+            Err(e) => Check {
+                name: "dependencies",
+                status: "FAIL",
+                detail: format!("no se pudieron comprobar: {e}"),
             },
         });
 
         // Validación requerida (hasta el tier 3: el merge es el gate de los tiers pesados).
-        let has_validation = symphony_core::load_project(Path::new(&root))
+        let project = symphony_core::load_project(Path::new(&root));
+        let has_validation = project
+            .as_ref()
             .ok()
-            .flatten()
+            .and_then(|p| p.as_ref())
             .and_then(|p| p.effective_validation())
             .is_some();
-        if !has_validation {
+        if let Err(e) = &project {
+            // Sin poder leer la config no se sabe si había validación: no se da por buena.
+            checks.push(Check {
+                name: "validation",
+                status: "FAIL",
+                detail: format!("project.toml ilegible: {e}"),
+            });
+        } else if !has_validation {
             checks.push(Check {
                 name: "validation",
                 status: "PASS",
