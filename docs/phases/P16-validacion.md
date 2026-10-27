@@ -29,6 +29,11 @@
 - **Pendiente / notas:** sin archivos que revisar el check es PASS (no SKIPPED, que el merge
   muestra como «un check no pudo correr»); el ADR lo dice así.
 
+### P16.S1 · Checklist de aceptación — ✅ (revisar los 🟡)
+- **Agente:** `google/gemini-3.8-flash-medium` y, tras la revisión, `google/gemini-4-argon-medium` · **Fecha:** 2026-10-27
+- **Qué se hizo:** `docs/phases/P16-acceptance.md`: 145 elementos (36 vistas, 5 journeys, 10 reglas UX, 11 principios, 44 tablas, 10 consultas, 29 comandos) con su evidencia. 143 ✅, 2 🟡 (vista 31 Settings en la TUI; subcomando `symphony plan`), 1 ⛔ (journeys live).
+- **Cómo se verificó:** la primera versión citaba 37 funciones que no existían; se devolvió con la lista. En la segunda, un script comprobó que las 188 referencias `archivo::función` existen (la única que no, `route_explain`, era el método IPC `route.explain` y se corrigió a mano) y que los snapshots citados están en `crates/tui/tests/snapshots/`.
+
 ### P16.S4 · Instalación limpia — 🟡 (falta su primera corrida en CI)
 - **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-10-27
 - **Qué se hizo:** `.github/workflows/install-check.yml`: tras cada CI verde (o a mano con el
