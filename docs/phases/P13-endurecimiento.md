@@ -60,6 +60,16 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
 ## S5 · Calidad (parte 1, delegado)
 - `_typos.toml`, `lychee.toml` y job `docs` en CI (OpenCode con GLM 5.3 Flash gratis), con
   `continue-on-error` hasta revisar la primera corrida.
+- **Auditoría del CLI (`crates/cli/src/harness.rs`, `hook.rs`) — verificada y corregida:**
+  - `write`/`edit` ahora usan `write_atomic` (temporal en misma carpeta, `sync_all`, `rename`): fallo a mitad deja la versión previa intacta. Test `replacing_a_file_does_not_truncate_the_previous_version`.
+  - `read` lee línea a línea y se detiene al completar la página (`fill_buf` para saber si hay más sin recorrer el resto). Test `read_does_not_parse_beyond_the_requested_page`.
+  - `grep` recorre archivos en flujo, se detiene al alcanzar el máximo y marca búsqueda parcial. Tests `grep_reports_a_partial_search_at_the_requested_limit`, `grep_caps_the_requested_number_of_results`.
+  - `glob` corta el recorrido en `GLOB_RESULTS` y marca `partial`. Test `glob_reports_a_partial_search_at_its_limit`.
+  - `GREP_MAX = 1000` como tope duro de `max_results` (`clamp`). Test `grep_caps_the_requested_number_of_results`.
+  - `shell` retiene salida en búfer compartido (`Captured`/`drain`/`grab`); al vencer la espera devuelve lo leído en vez de descartarlo. Tests `shell_keeps_output_when_a_descendant_holds_the_pipe_open`, `a_huge_output_keeps_only_head_and_tail_in_memory`.
+  - Todos los tests de unidad de `symphony-cli` pasan (17/17); clippy `-D warnings` y `fmt --check` limpios.
+  - Seguimiento completo en `docs/research/auditoria/cli.md` § Seguimiento.
+  - `hook.rs:12-39` (baja) queda **diferido**: `emit()` trunca con `stdin().take(MAX_PAYLOAD)` y descarta sin informar. Reportar el exceso tocaría el contrato "sin salida / nunca rompe al CLI" (hook.rs:7-8); requiere revisar el contrato del hook antes de tocarlo (candidato a ADR).
 
 ## S4 · Rendimiento y disco (adelantado por pedido de Leo: «Symphony debería ser super ligero»)
 - RAM: el daemon en reposo usa 26 MB.
