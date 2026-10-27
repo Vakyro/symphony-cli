@@ -1,11 +1,14 @@
 # Targets de cargo-fuzz para los parsers críticos de Symphony (STACK §24.5,
 # PLAN P13.S2). Proyecto aparte a propósito: la suite de libFuzzer requiere
-# nightly y no debe entrar en el workspace ni en `cargo nextest`/CI.
+# nightly y no debe entrar en el workspace ni en `cargo nextest`.
 [package]
 name = "symphony-fuzz"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+[package.metadata]
+cargo-fuzz = true
 
 [workspace]
 

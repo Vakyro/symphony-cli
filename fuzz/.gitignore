@@ -1,4 +1,2 @@
 /target/
 /artifacts/
-# El corpus se genera localmente; lo que valga la pena se guarda en CI.
-/corpus/

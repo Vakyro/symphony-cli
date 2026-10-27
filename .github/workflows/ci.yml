@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, "phase/**"]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,6 +25,33 @@ jobs:
         with:
           tool: cargo-nextest
       - run: cargo xtask check
+
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [frame_decoder, ctx_uri, redact, claude_stream]
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-10-01
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: nightly-2026-10-01
+      - name: Instalar cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Ejecutar el target durante 60 segundos
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60
+      - name: Guardar entradas que provocaron fallos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
 
   msrv:
     name: msrv (1.95)
