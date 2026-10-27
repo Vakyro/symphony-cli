@@ -52,6 +52,13 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
 | 2026-10-24 | Kimi · `moonshot/kimi-for-coding` (ya con UTF-8) | P13.S2 targets de cargo-fuzz + propiedades proptest | ✅ 30 min, un commit; documentó su parte en la bitácora; ningún panic real | No pudo compilar `fuzz/` (sin nightly) y lo dijo |
 | 2026-10-24 | OpenCode · `opencode/glm-5.3-flash-free` (gratis) | P13.S5 typos y lychee en CI | ✅ 4 min, un commit; versiones de las acciones existen | El job se dejó `continue-on-error` hasta ver su primera corrida (repo en español) |
 | 2026-10-24 | Antigravity · `anthropic/claude-sonnet-5-5-medium` | P13.S3 prueba de larga duración con reinicios | 🟡 escribió `soak.rs` (funciona: 60 s, 22 tandas, RSS 25 → 25 MB) pero no commiteó: el watchdog lo cortó a los 23 min (`NO_HEARTBEAT`) | Ver hallazgo del watchdog |
+| 2026-10-26 | Codex · `openai/gpt-6-astra` | P13.S3 checkpoint corrupto | 🟡 implementación buena (499 líneas, test de matar el writer a media transacción) pero paró en `wip`: corrió el gate completo al empezar y chocó con otros agentes. Lo terminó el integrador; dejó una regresión (arranque fatal con una fila rara) que vio la cobertura de CI | AGENTS.md vs. delegados |
+| 2026-10-26 | Kimi · `moonshot/kimi-for-coding` | P13.S4 retención de `events` y `resource_samples` | ✅ a la primera: lotes por el writer, respeta las FK, tests con 20 000 eventos | Kimi agotó su ventana de 5 h a las 23:18 |
+| 2026-10-26 | Antigravity · `openai/gpt-oss-120b-medium` | P13.S6 capítulos del libro | ❌ **escribió en el repo principal** (rutas absolutas armadas desde la ruta de la caché de Cargo), 166 líneas flojas. Detenido | Aislamiento |
+| 2026-10-26 | Kimi · `moonshot/k3-256k` · Antigravity · `google/gemini-4-argon-low` · Codex · `openai/gpt-5.6-luna` | P13.S5 auditorías de store, router/scheduler y merge/validación | ✅ las tres concretas y verificables (una alta de las cinco era falsa) | — |
+| 2026-10-26 | Antigravity · `google/gemini-4-argon-high` | P13.S6 adapters, comandos y plugins | ✅ comandos verificados contra `--help`; ❌ reemplazó el capítulo de problemas existente por uno más corto (la tarea no decía que existía) | Tareas: revisar lo que ya hay |
+| 2026-10-26 | Codex `gpt-6.1-sol` → Antigravity `claude-sonnet-5-5-high` → `gemini-4-argon-medium` | P13.S5 arreglos del executor | ✅ 4 hallazgos corregidos con test y 8 diferidos con buenas razones; pasó por tres modelos con `switch` (Codex sin créditos, Antigravity-Anthropic sin cuota por 4,5 días) | Agent ≠ Model en vivo |
+| 2026-10-26 | OpenCode · `opencode/flint-40b-free` | P13.S5 auditoría de process/git/protocol | ⚠️ no evaluable: 503 del endpoint gratis | — |
 
 ## Hallazgos (lo que se arregla)
 
@@ -99,6 +106,21 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
   Arreglado: se comparte solo el `build-dir` (lo intermedio, con hash por ruta del paquete) y
   cada worktree guarda sus binarios. Verificado con un crate mínimo: `CARGO_BIN_EXE_*` apunta al
   `target/` del worktree.
+- **2026-10-26 · Aislamiento: Antigravity no confina rutas.** Sin el harness de Symphony
+  (Antigravity no lo admite) y con `--dangerously-skip-permissions`, `gpt-oss-120b` escribió
+  capítulos del libro directo en el repo principal usando rutas absolutas. Ninguna guardia de
+  Symphony lo detectó; el integrador lo vio en `git status`. **Pendiente:** comparar el estado
+  del repo principal antes y después de cada run y abrir un recovery `WORKSPACE_DAMAGED`; y
+  avisar en la tarea (hecho en las reglas del integrador). Mismo riesgo que P11.5.S9 (`n1.txt`).
+- **2026-10-26 · Los agentes cambian de rama.** AGENTS.md dice «nunca en main, usa ramas
+  `phase/`» y dos agentes crearon su propia rama dentro del worktree. Symphony no lo nota (el
+  diff y la integración miran la rama asignada). Regla del integrador: no cambiar de rama.
+- **2026-10-26 · Ventanas de cuota sin hora de reinicio.** Kimi corta a las 5 h («You've
+  reached your 5-hour usage limit») y Antigravity dice «Resets in 108h54m13s», pero
+  `provider_failures.reset_at` queda vacío: el router no sabe cuándo vuelve el proveedor.
+- **2026-10-26 · Disco lleno.** El `target/` del integrador llegó a 104 GB y dejó el disco en
+  0: los agentes se colgaron y Symphony solo lo notó 15 min después, por `NO_HEARTBEAT`. El
+  Resource Manager mira CPU y RAM, no el disco. Arreglo inmediato: `cargo clean`.
 - **2026-10-26 · AGENTS.md pide el gate completo al empezar.** Con varios agentes compilando a
   la vez se vence o choca. Para delegados, quien integra corre el gate; el agente verifica solo
   su crate (reglas de delegación).

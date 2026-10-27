@@ -29,3 +29,12 @@ agente,fecha,proveedor,modelo,tipo_tarea,dificultad,veredicto,calidad_1a5,retrab
 29,2026-10-24,opencode,opencode/mimo-v2.6-flash-free,auditoria,alta,no_evaluable,,ninguno,uso gratuito de OpenCode agotado
 30,2026-10-24,google,anthropic/claude-sonnet-5-5-low,auditoria,alta,no_evaluable,,ninguno,cuota de Antigravity para Anthropic agotada
 31,2026-10-24,openai,openai/gpt-6-luna,docs,media,no_evaluable,,ninguno,Codex sin créditos
+32,2026-10-26,openai,openai/gpt-6-astra,codigo_feature,alta,parcial,4,alto (terminar el wip y arreglar una regresión de arranque),corrió el gate completo al empezar (AGENTS.md) y paró tras dos fallos por compilar a la vez que otros agentes; implementación y tests buenos
+33,2026-10-26,moonshot,moonshot/kimi-for-coding,codigo_feature,media,aceptado,5,ninguno,retención en lotes por el writer; respeta las FK; test de 20 000 eventos
+34,2026-10-26,google,openai/gpt-oss-120b-medium,docs,media,rechazado,1,total (descartado),escribió en el repo principal con rutas absolutas (fuera del worktree); capítulos flojos
+35,2026-10-26,moonshot,moonshot/k3-256k,auditoria,alta,aceptado,5,ninguno,store: sin altas inventadas; encontró checkpoint_base sin is_valid
+36,2026-10-26,google,google/gemini-4-argon-low,auditoria,alta,aceptado,4,mínimo,router/scheduler: dos altas reales (una ya mitigada por leases)
+37,2026-10-26,openai,openai/gpt-5.6-luna,auditoria,alta,aceptado,4,mínimo,merge/validación: una alta era falsa (batch ya valida needs)
+38,2026-10-26,opencode,opencode/flint-40b-free,auditoria,media,no_evaluable,,ninguno,503 del endpoint gratuito
+40,2026-10-26,openai+google,openai/gpt-6.1-sol > anthropic/claude-sonnet-5-5-high > google/gemini-4-argon-medium,codigo_fix,alta,aceptado,5,bajo (conflicto de bitácora),4 hallazgos con test y 8 diferidos bien razonados; pasó por tres modelos con switch por cuota; creó una rama propia
+43,2026-10-26,google,google/gemini-4-argon-high,docs,media,aceptado,4,medio (restaurar el capítulo de problemas existente),comandos verificados contra --help; reemplazó un capítulo existente por uno más corto
