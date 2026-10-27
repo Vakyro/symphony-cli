@@ -74,8 +74,9 @@ pub fn parse_models(text: &str) -> Vec<String> {
 }
 
 fn tool_kind(name: &str) -> ToolKind {
-    match name {
-        "bash" => ToolKind::Command,
+    // `shell` es la del harness de Symphony: sin esto su comando no quedaba registrado.
+    match symphony_adapter_common::hooks::harness_tool_name(name) {
+        "bash" | "shell" => ToolKind::Command,
         "write" | "edit" | "multiedit" | "patch" | "apply_patch" => ToolKind::Edit,
         _ => ToolKind::Other,
     }
@@ -568,6 +569,22 @@ pub fn fixtures_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// Dogfooding 2026-10-27: las llamadas `shell` del harness se guardaban sin el comando.
+    #[test]
+    fn the_harness_shell_keeps_its_command() {
+        for tool in ["shell", "symphony-context_shell"] {
+            let part = serde_json::json!({
+                "tool": tool, "callID": "c1",
+                "state": {"status": "completed", "input": {"command": "git status"}}
+            });
+            let ev = tool_events(&part);
+            assert!(
+                matches!(&ev[0], AgentEvent::ToolRequested { command: Some(c), kind: ToolKind::Command, .. } if c == "git status"),
+                "{tool}: {ev:?}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

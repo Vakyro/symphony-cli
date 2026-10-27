@@ -44,10 +44,20 @@ impl HoldTimes {
     }
 }
 
+/// El nombre de una herramienta sin el prefijo del broker del harness (ADR-0019): Claude la ve
+/// como `mcp__symphony-context__shell` y OpenCode como `symphony-context_shell`.
+pub fn harness_tool_name(tool: &str) -> &str {
+    tool.strip_prefix("mcp__symphony-context__")
+        .or_else(|| tool.strip_prefix("symphony-context_"))
+        .unwrap_or(tool)
+}
+
 pub fn tool_kind(tool: &str) -> ToolKind {
-    match tool {
+    match harness_tool_name(tool) {
         "Bash" | "exec_command" | "shell" => ToolKind::Command,
-        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "apply_patch" => ToolKind::Edit,
+        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "apply_patch" | "write" | "edit" => {
+            ToolKind::Edit
+        }
         _ => ToolKind::Other,
     }
 }
