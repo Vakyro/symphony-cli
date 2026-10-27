@@ -4631,7 +4631,10 @@ async fn an_unreadable_project_toml_blocks_the_merge_instead_of_skipping_checks(
     std::fs::write(e.repo.join(".symphony/project.toml"), "esto [[[ no es toml").unwrap();
 
     let pre = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
-    assert!(pre.requires_approval, "sin config legible se pide aprobación");
+    assert!(
+        pre.requires_approval,
+        "sin config legible se pide aprobación"
+    );
     assert!(!pre.ready(), "{:?}", pre.checks);
     assert!(
         pre.checks

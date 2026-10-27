@@ -103,11 +103,7 @@ impl Runtime {
 
     fn require_approval(&self, root: &str) -> bool {
         match symphony_core::load_project(Path::new(root)) {
-            Ok(p) => {
-                p.and_then(|p| p.merge)
-                    .unwrap_or_default()
-                    .require_approval
-            }
+            Ok(p) => p.and_then(|p| p.merge).unwrap_or_default().require_approval,
             // Un `project.toml` ilegible no puede saltarse la aprobación (P13.S5).
             Err(e) => {
                 tracing::warn!(root, error = %e, "project.toml ilegible: el merge pide aprobación");
@@ -174,8 +170,7 @@ impl Runtime {
             .lock()
             .map_err(|_| "lector de la base no disponible".to_string())
             .and_then(|c| {
-                symphony_store::deps::unmet_dependencies(&c, ctx.task.id)
-                    .map_err(|e| e.to_string())
+                symphony_store::deps::unmet_dependencies(&c, ctx.task.id).map_err(|e| e.to_string())
             });
         checks.push(match unmet {
             Ok(unmet) if unmet.is_empty() => Check {
