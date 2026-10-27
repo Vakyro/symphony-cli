@@ -76,7 +76,7 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
 ## S6 · Documentación (delegado)
 - Libro mdBook en `docs/book/` (Antigravity), `cargo xtask er` con el ER (Kimi), QUICKSTART al
   día (OpenCode, modelo gratis). Revisados e integrados.
-- Capítulos completos en `docs/book/src/` (`adapters.md`, `plugins.md`, `configuracion.md`, `comandos.md`, `troubleshooting.md`, `remoto-ssh.md`) e índice `SUMMARY.md` actualizado (`mdbook` no está instalado en el entorno local).
+- Capítulos nuevos: adapters, referencia de comandos (verificada contra `--help`) y cómo escribir un plugin (gemini-4-argon-high); solución de problemas suma 5 hallazgos del dogfooding y la guía SSH ya existía (`uso-remoto-ssh.md`). El libro compila con mdbook (WSL y CI).
 
 ## S7 · Pipeline de release (dry run)
 - cargo-dist 0.32 (`dist-workspace.toml`): `symphony` y `symphonyd` como dos apps (los
@@ -93,3 +93,16 @@ Revisado: IPC, `hook emit`, `ctx://`, plugins, redacción, permisos del socket y
   saliendo como artefactos del job `gui bundle`.
 - CHANGELOG con git-cliff 2.14 (`cliff.toml` existente): se genera al etiquetar en S8.
 - El libro se compila en CI (`mdbook build` en el job `docs`); verificado en WSL.
+
+### S5 · Auditoría del executor (gpt-6.1-sol → claude-sonnet-5-5 → gemini-4-argon-medium)
+- Corregidos los hallazgos 5 (el pump mata el árbol y drena la salida con `abort_unpublishable`
+  cuando el bus/base deja de aceptar escrituras), 7 (el pump recuerda `suspended` y sigue
+  latiendo mientras el agente está pausado para que el watchdog no lo mate), 13 (`tracing::warn!`
+  cuando `config.toml` es ilegible al leer `os_limits` y `harness`) y 15 (comentario de `kill`
+  aclarado como alias de `stop`).
+- Tests de regresión añadidos en `crates/daemon/tests/runtime.rs`:
+  `a_paused_executor_is_not_killed_by_the_watchdog` y
+  `a_pump_that_cannot_publish_kills_the_cli_instead_of_hanging`.
+- Los hallazgos 2, 3, 4, 6 y 8–12 quedan diferidos con justificación detallada en la tabla de
+  `docs/research/auditoria/executor.md`.
+- Verificación: `cargo nextest run -p symphony-daemon`, `cargo clippy -p symphony-daemon --all-targets -- -D warnings` y `cargo fmt --all` en verde.

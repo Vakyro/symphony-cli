@@ -36,12 +36,25 @@ const CPU_ALIVE_MS: u64 = 200;
 pub(crate) fn os_limits(home: &Path) -> symphony_process::Limits {
     let limits = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home))
         .map(|c| symphony_scheduler::OsLimits::from_config(&c.performance))
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            // Auditoría P13.S5, hallazgo 13: un `config.toml` roto no puede quitar los límites
+            // en silencio.
+            tracing::warn!(error = %e, "config.toml ilegible: el agente arranca sin límites del SO");
+            Default::default()
+        });
     symphony_process::Limits {
         max_memory_bytes: limits.max_memory_bytes,
         cpu_cores: limits.cpu_cores,
         max_processes: limits.max_processes,
     }
+}
+
+/// El pump ya no puede publicar (la base dejó de aceptar escrituras): mata el árbol y drena la
+/// salida pendiente. Sin esto el reenviador de `symphony_process` se bloquea con la cola llena y
+/// `wait` espera para siempre a un CLI que sigue vivo (auditoría P13.S5, hallazgo 5).
+async fn abort_unpublishable(proc: &mut Supervised) {
+    let _ = proc.terminate_tree();
+    while proc.next_output().await.is_some() {}
 }
 
 /// De dónde sale el agente y qué pide el reemplazo (`Runtime::pick_replacement`).
@@ -310,7 +323,10 @@ impl Runtime {
         let harness =
             symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&self.home))
                 .map(|c| c.harness.mode)
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "config.toml ilegible: harness por defecto");
+                    Default::default()
+                });
         if harness == symphony_core::HarnessMode::Symphony {
             env.push((symphony_adapter_common::ENV_HARNESS.into(), "1".into()));
         }
@@ -469,6 +485,7 @@ impl Runtime {
         let mut err_tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
         let mut control_open = true;
         let mut tree_cpu_ms = 0u64;
+        let mut suspended = false;
         // Más seguido que el watchdog: si no, un árbol ocupado parecería callado.
         // `interval` hace panic con 0: un `stale_after` de 0 no puede tumbar el pump.
         let mut monitor = tokio::time::interval(
@@ -486,7 +503,9 @@ impl Runtime {
                     // Contra la muestra anterior, no contra el máximo: la suma baja cuando un hijo
                     // termina, y el siguiente comando no tiene que superar al anterior (auditoría
                     // P13.S5, hallazgo 1).
-                    if cpu >= tree_cpu_ms + CPU_ALIVE_MS {
+                    // Un árbol pausado está congelado a propósito, no colgado: sin salida ni CPU
+                    // el watchdog lo mataría (auditoría P13.S5, hallazgo 7).
+                    if suspended || cpu >= tree_cpu_ms + CPU_ALIVE_MS {
                         self.beat(l.run_id);
                     }
                     tree_cpu_ms = cpu;
@@ -497,6 +516,7 @@ impl Runtime {
                         self.beat(l.run_id);
                         let mut end_turn = false;
                         if !self.handle_line(&l, &proc, &line, &mut fatal, &mut end_turn).await {
+                            abort_unpublishable(&mut proc).await;
                             break None;
                         }
                         if end_turn {
@@ -514,6 +534,7 @@ impl Runtime {
                         let mut end_turn = false;
                         let events = l.adapter.parse_stderr_line(&line);
                         if !self.apply_events(&l, &proc, events, &mut fatal, &mut end_turn).await {
+                            abort_unpublishable(&mut proc).await;
                             break None;
                         }
                         if end_turn {
@@ -540,10 +561,14 @@ impl Runtime {
                         let _ = done.send(proc.write_stdin(&bytes).await.map_err(|e| e.to_string()));
                     }
                     Some(Control::Suspend(done)) => {
-                        let _ = done.send(proc.suspend().map_err(|e| e.to_string()));
+                        let r = proc.suspend().map_err(|e| e.to_string());
+                        suspended = suspended || r.is_ok();
+                        let _ = done.send(r);
                     }
                     Some(Control::Resume(done)) => {
-                        let _ = done.send(proc.resume().map_err(|e| e.to_string()));
+                        let r = proc.resume().map_err(|e| e.to_string());
+                        suspended = suspended && r.is_err();
+                        let _ = done.send(r);
                     }
                 },
             }
@@ -2088,7 +2113,7 @@ impl Runtime {
         Ok(())
     }
 
-    /// Termina forzosamente el executor y el agente (FLOW §7).
+    /// Alias de `stop`: no hay una parada más fuerte (`stop` ya mata el árbol completo) (FLOW §7).
     pub async fn kill(&self, agent_id: AgentId) -> Result<(), AgentOpError> {
         self.stop(agent_id).await
     }

@@ -2010,6 +2010,53 @@ async fn cpu_keeps_beating_after_a_busy_child_ends() {
     e.writer.shutdown();
 }
 
+/// Auditoría P13.S5, hallazgo 7: un agente pausado (árbol congelado, sin salida ni CPU) no es un
+/// cuelgue: el watchdog no lo mata aunque pase más de `stale_after`, y `resume` sigue valiendo.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_executor_is_not_killed_by_the_watchdog() {
+    let script = "[[step]]\nkind = \"say\"\ntext = \"arranca\"\n\n[[step]]\nkind = \"hang\"\n";
+    let e = env_with_watchdog(
+        &[("fake", script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1000),
+    )
+    .await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "pausar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.writer.handle().flush().await.unwrap();
+    e.runtime.pause(created.agent_id).await.unwrap();
+    // Tres veces `stale_after` congelado: sin el arreglo, el watchdog ya lo habría cerrado.
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    assert!(
+        e.runtime.is_live(created.agent_id),
+        "el watchdog mató a un agente pausado"
+    );
+    e.runtime.resume(created.agent_id).await.unwrap();
+    e.runtime.stop(created.agent_id).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.shutdown();
+}
+
+/// Auditoría P13.S5, hallazgo 5: si la base deja de aceptar escrituras, el pump mata el árbol y
+/// termina en vez de esperar para siempre a un CLI que sigue vivo.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pump_that_cannot_publish_kills_the_cli_instead_of_hanging() {
+    let script = "[[step]]\nkind = \"sleep\"\nms = 800\n\n[[step]]\nkind = \"say\"\ntext = \"tarde\"\n\n[[step]]\nkind = \"hang\"\n";
+    let e = env(script, None).await;
+    e.runtime
+        .create_agent(req(&e, "sin base", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.writer.shutdown();
+    tokio::time::timeout(Duration::from_secs(20), e.runtime.wait_executors())
+        .await
+        .expect("el pump quedó colgado esperando al CLI");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_executor_that_burns_cpu_is_not_taken_for_hung() {
     let script = "[[step]]
