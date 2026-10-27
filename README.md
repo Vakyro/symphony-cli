@@ -3,11 +3,11 @@
 > Un solo terminal para dirigir a todos tus agentes de código.
 
 [![CI](https://github.com/Vakyro/symphony-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/Vakyro/symphony-cli/actions/workflows/ci.yml)
-![Estado: v0.1.0 (usable)](https://img.shields.io/badge/estado-v0.1.0%20usable-brightgreen)
+![Estado: v0.9.0](https://img.shields.io/badge/estado-v0.9.0-brightgreen)
 ![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-blue)
 ![Licencia MIT](https://img.shields.io/badge/licencia-MIT-green)
 
-**Hoy en `main`: hasta P15.5** (multiagente, failover, context engine, plugins, sugerencias, GUI y daemon por proyecto); P13 · endurecimiento está en curso. Abres `symphony` en cualquier carpeta, conversas con Claude Code, Codex, Kimi Code, Antigravity, Copilot u OpenCode y puedes pasar de uno a otro a mitad de conversación sin repetir nada. Con el harness de Symphony (por defecto) todos los modelos trabajan con las mismas herramientas.
+**Hoy en `main`: v0.9.0** (multiagente, failover, context engine, plugins, sugerencias, GUI, daemon por proyecto y el endurecimiento de P13); sigue P16 · validación final hacia v1.0. Abres `symphony` en cualquier carpeta, conversas con Claude Code, Codex, Kimi Code, Antigravity, Copilot u OpenCode y puedes pasar de uno a otro a mitad de conversación sin repetir nada. Con el harness de Symphony (por defecto) todos los modelos trabajan con las mismas herramientas.
 
 Symphony es un runtime local, escrito en Rust, que coordina los CLIs oficiales de IA para código desde una sola terminal. Hoy funcionan **Claude Code, Codex, Kimi Code, Antigravity (`agy`), Copilot y OpenCode**. Los últimos cuatro llegaron en P11: el cambio de proveedor con handoff está probado con CLIs reales, pero sus skills nativas aún no funcionan en el chat y cada uno tiene sus límites de permisos (ver el [QUICKSTART](QUICKSTART.md#proveedores-y-permisos)).
 
@@ -23,7 +23,7 @@ MODELO  = quien lo ejecuta ahora mismo            → se puede cambiar
 Si Claude se queda sin cuota a media tarea, Symphony le pasa el mismo agente a Codex con un checkpoint que se fue construyendo mientras trabajaba. Codex continúa desde ahí sin que le vuelvas a explicar nada.
 
 > [!NOTE]
-> **Usable hoy, camino a v0.9.** Compila o instala, abre `symphony` y conversa. El roadmap está en [`docs/progress/STATUS.md`](docs/progress/STATUS.md) y el detalle completo en [`PLAN.md`](PLAN.md).
+> **v0.9: endurecido, camino a v1.0.** Compila o instala, abre `symphony` y conversa. El roadmap está en [`docs/progress/STATUS.md`](docs/progress/STATUS.md) y el detalle completo en [`PLAN.md`](PLAN.md).
 
 ---
 
@@ -101,8 +101,8 @@ En la misma investigación revisamos las herramientas que ya existen (Claude Squ
 | P14 · Sugerencias | Sugerencias de cambio de modelo (nunca se aplican solas), aprendizaje determinista | ✅ p14-done |
 | P15 · GUI | App de escritorio (Tauri) sobre el mismo daemon | ✅ p15-done |
 | P15.5 · Cambios de rumbo | Daemon y estado **por proyecto**, acceso local total, modelos al día, **harness de Symphony** (mismas herramientas para todos los modelos), proyectos que no son código | ✅ p155-done |
-| P13 · Endurecimiento → **v0.9** | Seguridad, fuzzing, recuperación, rendimiento y disco, docs (mdBook), release | 🟡 en curso |
-| P16 · Validación final → **v1.0** | Checklist de aceptación, E2E, benchmark, validación por tipo de proyecto | ⏳ |
+| P13 · Endurecimiento → **v0.9** | Seguridad, fuzzing, recuperación, rendimiento y disco, docs (mdBook), release en dry run | ✅ **v0.9.0** |
+| P16 · Validación final → **v1.0** | Checklist de aceptación, E2E, benchmark, validación por tipo de proyecto | 🟡 en curso |
 
 El detalle, paso por paso, está en [`PLAN.md`](PLAN.md).
 
