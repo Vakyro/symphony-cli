@@ -1,11 +1,11 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-24 · por claude-code/opus-5.5
-**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, bitácora `docs/phases/P13-endurecimiento.md`)
-**Paso actual:** S1 ✅ · S2 🟡 (targets y proptest; falta correr con nightly) · S3 🟡 (soak corto; falta el de 4 h) · S4 disco 🟡 · S5 🟡 (typos/lychee en CI) · S6 🟡 (libro, ER, QUICKSTART) · S7 ⏳ · S8 ⏳. Delegado con Symphony: `docs/progress/DOGFOOD.md`
-**Estado del paso:** pausado al cierre de la jornada (2026-10-24); rama pusheada
-**En curso por:** nadie
-**Siguiente:** watchdog que cuente la CPU del árbol como latido (DOGFOOD), luego S2 con nightly (WSL o CI), S3 de 4 h, S7 release en dry run
+**Actualizado:** 2026-10-27 (noche de dogfooding) · por claude-code/opus-5.5
+**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, bitácora `docs/phases/P13-endurecimiento.md`). P16.S0 adelantado en `phase/p16-validacion`.
+**Paso actual:** S1 ✅ · S2 ✅ (4 targets 30 min en WSL; 2 crashes reales de `redact` arreglados) · S3 🟡 (checkpoint corrupto ✅; soak de 4 h en curso) · S4 ✅ (retención, harness E2E de STACK §25.2) · S5 ✅ (auditorías completadas; ponytail-audit agregado a docs/research/auditoria/ponytail.md) · S6 ✅ · S7 ✅ (cargo-dist en dry run, CI verde en los 3 OS) · S8 ⏳. Detalle de la noche: `docs/progress/REPORTE-2026-10-27.md`
+**Estado del paso:** en curso (sesión nocturna autorizada por Leo)
+**En curso por:** claude-code/opus-5.5 + agentes delegados con la copia estable
+**Siguiente:** cerrar S5, soak de 4 h, CI verde y cierre de P13 (S8)
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
