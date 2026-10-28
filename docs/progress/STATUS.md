@@ -1,13 +1,15 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-27 (revisión posterior y arreglo de la fuga del soak) · por claude-code/sonnet-5.5
-**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, bitácora `docs/phases/P13-endurecimiento.md`). P16.S0 adelantado en `phase/p16-validacion`.
-**Paso actual:** S1 ✅ · S2 ✅ (4 targets 30 min en WSL; 2 crashes reales de `redact` arreglados) · S3 🟡 (checkpoint corrupto ✅; fuga del soak = watchdog con `Runtime` fuerte, arreglada y medida en 200 s; falta repetir las 4 h) · S4 ✅ (retención, harness E2E de STACK §25.2) · S5 ✅ (auditorías de 10 áreas y sus arreglos, salvo `server.md`; ponytail-audit; typos/lychee/mdbook bloqueantes) · S6 ✅ · S7 ✅ (cargo-dist en dry run, CI verde en los 3 OS) · S8 🟡 (todo listo y en verde; merge pendiente del soak). Detalle de la noche: `docs/progress/REPORTE-2026-10-27.md`
-**Estado del paso:** pausado
-**En curso por:** nadie (pausa; Leo retoma más tarde)
-**Siguiente:** repetir el soak de 4 h con el arreglo del watchdog y cerrar P13 (merge a `main`, `p13-done`); el resto de P13 está hecho y en verde
+**Actualizado:** 2026-10-27 (cierre de la jornada) · por claude-code/haiku-5.5 (orquestación: claude-code/sonnet-5.5)
+**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, local, **sin pushear**). P16.S0 adelantado en `phase/p16-validacion`.
+**Paso actual:** S3 ✅ (soak de 4 h aprobado: 963 tandas, 470 reinicios, RSS 25 → 27 MB) · S5 🟡 (`server.md`: parte A integrada; #51 y #52 en curso) · S8 🟡 (falta gate completo, merge a `main`, tag `p13-done`).
+**Estado del paso:** en curso (2 agentes en Kimi) · pausado al cierre de la jornada.
+**En curso por:** agentes #51 (`k3.1-pro`) y #52 (`k3-256k`); sin revisar.
+**Siguiente:** revisar e integrar #51 y #52 → `cargo xtask check` completo → `cargo deny check` → merge `--no-ff` a `main` y tag `p13-done` (permiso vigente) → rebasar `phase/p16-validacion` → P16.S2–S7.
 
-**Lo que falta para v1.0 (2026-10-27):** (1) P13: soak de 4 h con `SOAK_SECS=14400 cargo test -p symphony-daemon --test soak soak_long -- --ignored --nocapture` (disco con espacio; el primer intento cayó por disco lleno), merge `--no-ff` a `main`, tag `p13-done`. (2) Rebasar `phase/p16-validacion` sobre `main`. (3) P16.S2 E2E con fake-agents, S3 benchmark, S4 `install-check.yml`, S5 docs as-built, S7 retrospectiva. (4) ⛔ S6 release v1.0.0 y v0.9.0 (tu OK para pushear tags `v*`). Sueltos: guardia de aislamiento, agente #39, watchdog configurable, revisión visual de la GUI (P15.S4).
+**Cierre de la jornada (detalle en `docs/progress/CIERRE-2026-10-27.md`):** qué salió bien, qué falló, qué se arregló y qué falta. Resumen: integrados #48 (guardia de aislamiento), #49 (freno por disco), #50 (permisos, `depends_on`, `usage.get`). Falta: test inestable `project_files_stay_searchable_as_they_change`, gate completo, disco al 97 %.
+
+**Lo que falta para v1.0 (2026-10-27):** (1) P13: integrar #51 y #52, gate completo, merge a `main`, tag `p13-done`. (2) Rebasar `phase/p16-validacion` sobre `main`. (3) P16.S2 E2E con fake-agents, S3 benchmark, S4 `install-check.yml`, S5 docs as-built, S7 retrospectiva. (4) ⛔ S6 release v1.0.0 y v0.9.0 (tu OK para pushear tags `v*`). Después de P16 autónomo: P17–P20 (ver abajo).
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
@@ -96,6 +98,12 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 - P11.5.S9.2 · Handoff entre modelos a media tarea en los cuatro modos de contexto con proveedores reales (Claude/Codex): con OpenCode gratuito dio 429 en 3 corridas. Comando: `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_handoff` (ya existe para otros pares).
 
 ## Handoff para el siguiente agente
+- **Antes de tocar nada:** `git status` y `git log --oneline 441dfd6..HEAD` en `phase/p13-endurecimiento`. Hay 8 commits locales sin pushear desde la noche anterior.
+- **Agentes vivos:** #51 y #52 corren en Kimi y escriben en sus worktrees (`.symphony/worktrees/…/agent-05N`). No integrar a ciegas: revisar `git log` y el diff de cada uno.
+- **Integrar con cherry-pick** (no con merge del worktree): el worktree de #51 salió de una base anterior a #50.
+- **Gate:** `unset SYMPHONY_LIVE` y luego `cargo xtask check`. Con varios cargo en paralelo usar `CARGO_TARGET_DIR` aparte (si no, `LNK1104` al enlazar `soak.exe`).
+- **Disco:** C: al 97 %. `target/` ~66 GB. `cargo clean` cuando no haya agentes compilando.
+- **Test inestable:** `project_files_stay_searchable_as_they_change` (daemon). Pasa solo, falla en corridas completas.
 - Empieza por PLAN § P11.5 y ADR-0014. Corre `cargo xtask check` en `main` antes de crear la rama.
 - La TUI está en `crates/tui`: `app.rs` estado y lógica pura, `ui.rs` render, `io.rs` IPC, `lib.rs` loop. Snapshots: `INSTA_UPDATE=always cargo nextest run -p symphony-tui` y revisar el diff.
 - Si un test deja un `symphonyd.exe` huérfano, el build falla con «Acceso denegado»: mátalo antes.

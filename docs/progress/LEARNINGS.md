@@ -163,3 +163,10 @@ Una sola sesión cubrió P11.S2–S6, P10 completa y P09.S1–S10, con una compa
 - **Una tarea de tokio con un clon fuerte del dueño lo mantiene vivo para siempre:** el watchdog de `Runtime` era un bucle infinito con `Runtime` clonado, y cada reabrir el runtime dejaba uno vivo (~0,25 MB). Las tareas de fondo de un objeto deben guardar `Weak` y salir cuando `upgrade()` falla.
 - **Separar variables antes de adivinar:** el soak ya tenía `SOAK_RESTART_SECS`; correrlo sin reinicios (plano, 25 → 27 MB) y con reinicios cada 5 s (crece) señaló la causa en 7 minutos, sin heap profiler.
 - **Revisar las tareas de fondo del daemon al buscar fugas:** `tokio::spawn` de bucles sin fin en `scheduling.rs`, `dependencies.rs` y `resources.rs` terminan con `CancellationToken`; el watchdog era la excepción.
+
+## Jornada de orquestación (2026-10-27)
+- **Dos `cargo` sobre el mismo `target/` se bloquean:** el soak tenía `soak.exe` abierto y el build de tests falló con `LNK1104`. Cada corrida larga en su propio `CARGO_TARGET_DIR`.
+- **Un guard por palabras sueltas da falsos positivos:** `https://…` se tomaba por ruta absoluta. Probar la guardia con URLs y rutas legítimas antes de integrar.
+- **Un agente que cae por cuota no pierde el trabajo:** `symphony switch` lo pasó de Antigravity a Kimi. Usarlo antes de rehacer.
+- **Un benchmark que necesita disco libre debe decirlo:** falló con 1,8 GB sin mensaje útil; pasó con 16 GB.
+- **Un run marcado `FAILED` puede traer código bueno:** #48 quedó `FAILED` con su commit sin hacer. Revisar el worktree antes de descartar.
