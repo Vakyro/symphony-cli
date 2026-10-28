@@ -31,6 +31,8 @@ pub enum DaemonError {
     AlreadyRunning { home: PathBuf, pid: Option<u32> },
     #[error("base de datos: {0}")]
     Store(#[from] symphony_store::StoreError),
+    #[error("configuración inválida o ilegible: {0}")]
+    Config(Box<symphony_core::ConfigError>),
     #[error("{context}: {source}")]
     Io {
         context: String,
@@ -302,12 +304,12 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         }
     });
     // La config se lee antes que el runtime: los permisos de los proveedores (`[providers.
-    // permissions]`) se fijan al crear los adapters. Una config inválida deja los predeterminados.
-    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home));
-    let permissions = config
-        .as_ref()
-        .map(|c| c.providers.permissions.clone())
-        .unwrap_or_default();
+    // permissions]`) se fijan al crear los adapters. Una config ilegible o inválida detiene
+    // el arranque: caer a `ProviderPermissions::default()` dejaría a los CLIs con más acceso
+    // del que el usuario eligió (auditoría P13.S5).
+    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home))
+        .map_err(|e| DaemonError::Config(Box::new(e)))?;
+    let permissions = config.providers.permissions.clone();
     let runtime = crate::runtime::Runtime::new(
         home,
         writer.handle(),
@@ -328,37 +330,28 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     runtime.set_scheduling(scheduling.clone());
     scheduling.spawn(writer.handle(), shutdown.clone());
 
-    match config {
-        Ok(config) => {
-            bus.set_health_config(crate::health::HealthConfig::from_config(&config));
-            scheduling.set_limits(symphony_scheduler::Limits::from_config(&config.performance));
-            scheduling.set_hold_cap(config.performance.hold_max_secs);
-            let pressure = scheduling.clone();
-            crate::resources::spawn(
-                writer.handle(),
-                home.to_path_buf(),
-                config.performance.profile,
-                crate::resources::SAMPLE_EVERY,
-                shutdown.clone(),
-                move |cpu, ram| pressure.set_pressure(cpu, ram),
-            );
-            // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
-            if config.routing.default_profile.starts_with('@') {
-                // Un proyecto de documentos o multimedia (ADR-0020) parte de su propio profile,
-                // salvo que el usuario haya elegido otro por defecto.
-                let by_kind = project_kind_profile(home)
-                    .filter(|_| config.routing.default_profile == "@code");
-                runtime.set_default_profile(by_kind.unwrap_or(&config.routing.default_profile));
-            }
-            runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
+    {
+        bus.set_health_config(crate::health::HealthConfig::from_config(&config));
+        scheduling.set_limits(symphony_scheduler::Limits::from_config(&config.performance));
+        scheduling.set_hold_cap(config.performance.hold_max_secs);
+        let pressure = scheduling.clone();
+        crate::resources::spawn(
+            writer.handle(),
+            home.to_path_buf(),
+            config.performance.profile,
+            crate::resources::SAMPLE_EVERY,
+            shutdown.clone(),
+            move |cpu, ram| pressure.set_pressure(cpu, ram),
+        );
+        // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
+        if config.routing.default_profile.starts_with('@') {
+            // Un proyecto de documentos o multimedia (ADR-0020) parte de su propio profile,
+            // salvo que el usuario haya elegido otro por defecto.
+            let by_kind = project_kind_profile(home)
+                .filter(|_| config.routing.default_profile == "@code");
+            runtime.set_default_profile(by_kind.unwrap_or(&config.routing.default_profile));
         }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "config.toml no se pudo leer: permisos de proveedores predeterminados y el chat \
-                 no cambia por umbral"
-            )
-        }
+        runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
     }
 
     let state = Arc::new(State {

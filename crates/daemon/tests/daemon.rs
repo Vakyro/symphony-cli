@@ -448,6 +448,41 @@ async fn client_refuses_a_socket_served_by_another_process() {
     assert!(wait_exit(&mut daemon).success());
 }
 
+/// P13.S5 (auditoría de server.rs): con una `config.toml` inválida, `serve` rechaza el
+/// arranque en vez de crear los adapters con los permisos predeterminados (más permisivos
+/// que los que el usuario eligió).
+#[tokio::test]
+#[allow(unsafe_code)]
+async fn invalid_config_refuses_to_start_instead_of_falling_back_to_default_permissions() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "permisos = [sin cerrar").unwrap();
+
+    // La config se busca en el home del usuario (`SYMPHONY_USER_HOME` si existe): se apunta
+    // al temporal para no leer la del usuario real y se restaura al terminar.
+    let prev_user_home = std::env::var_os("SYMPHONY_USER_HOME");
+    // SAFETY: una sola variable de proceso; nextest aísla cada test en su proceso y en este
+    // binario de test ningún otro test lee `SYMPHONY_USER_HOME` en-proceso.
+    unsafe {
+        std::env::set_var("SYMPHONY_USER_HOME", &home);
+    }
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let result = symphony_daemon::server::serve(&home, shutdown).await;
+    // SAFETY: restaurar el valor previo; mismo alcance que el `set_var` de arriba.
+    unsafe {
+        match prev_user_home {
+            Some(v) => std::env::set_var("SYMPHONY_USER_HOME", v),
+            None => std::env::remove_var("SYMPHONY_USER_HOME"),
+        }
+    }
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, symphony_daemon::server::DaemonError::Config(_)),
+        "{err}"
+    );
+}
+
 struct KillOnDrop(Child);
 
 impl Drop for KillOnDrop {
