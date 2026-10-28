@@ -1538,12 +1538,27 @@ impl Runtime {
         agent: AgentId,
         make: impl FnOnce(oneshot::Sender<T>) -> Control,
     ) -> Option<T> {
+        self.control_if(agent, None, make).await
+    }
+
+    /// Manda una orden al executor vivo del agente solo si sigue siendo `expected_run` (cuando se
+    /// indica), comprobándolo bajo el lock de `live`, y espera la respuesta.
+    pub(crate) async fn control_if<T>(
+        &self,
+        agent: AgentId,
+        expected_run: Option<RunId>,
+        make: impl FnOnce(oneshot::Sender<T>) -> Control,
+    ) -> Option<T> {
         let (tx, rx) = oneshot::channel();
         let sent = self
             .live
             .lock()
             .ok()
-            .and_then(|live| live.get(&agent).map(|r| r.control.send(make(tx)).is_ok()))
+            .and_then(|live| {
+                live.get(&agent)
+                    .filter(|r| expected_run.is_none_or(|run| r.run_id == run))
+                    .map(|r| r.control.send(make(tx)).is_ok())
+            })
             .unwrap_or(false);
         if !sent {
             return None;
