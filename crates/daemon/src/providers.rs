@@ -246,10 +246,9 @@ pub fn list(
 pub fn usage(conn: &rusqlite::Connection, days: i64, now: i64) -> Result<Value, rusqlite::Error> {
     // Aritmética comprobada (auditoría P13.S5): IPC ya limita `days`, pero un desbordamiento
     // aquí provocaría un panic en debug con el guard del lector tomado.
-    let span = days
-        .max(1)
-        .checked_mul(24 * 3600 * 1000)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName(format!("days fuera de rango: {days}")))?;
+    let span = days.max(1).checked_mul(24 * 3600 * 1000).ok_or_else(|| {
+        rusqlite::Error::InvalidParameterName(format!("days fuera de rango: {days}"))
+    })?;
     let since = now.saturating_sub(span);
     let rows = symphony_store::health::usage_since(conn, since).map_err(rusqlite::Error::from)?;
     Ok(Value::Array(

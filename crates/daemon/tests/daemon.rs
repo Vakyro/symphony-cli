@@ -538,7 +538,13 @@ async fn usage_get_validates_days() {
     let mut daemon = KillOnDrop(spawn_daemon(&home));
     wait_ready(&home, &mut daemon.0).await;
 
-    for days in [json!(i64::MAX), json!(0), json!(-3), json!(3651), json!("siete")] {
+    for days in [
+        json!(i64::MAX),
+        json!(0),
+        json!(-3),
+        json!(3651),
+        json!("siete"),
+    ] {
         let Outcome::Error(e) = call(&home, "usage.get", json!({ "days": days })).await else {
             panic!("days {days} tenía que fallar")
         };

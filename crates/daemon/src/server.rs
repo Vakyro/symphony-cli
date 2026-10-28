@@ -347,8 +347,8 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         if config.routing.default_profile.starts_with('@') {
             // Un proyecto de documentos o multimedia (ADR-0020) parte de su propio profile,
             // salvo que el usuario haya elegido otro por defecto.
-            let by_kind = project_kind_profile(home)
-                .filter(|_| config.routing.default_profile == "@code");
+            let by_kind =
+                project_kind_profile(home).filter(|_| config.routing.default_profile == "@code");
             runtime.set_default_profile(by_kind.unwrap_or(&config.routing.default_profile));
         }
         runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
