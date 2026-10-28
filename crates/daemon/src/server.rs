@@ -666,16 +666,34 @@ async fn agent_create(req: Request, state: &State) -> Response {
         Err(e) => return Response::error(req.id, "invalid_params", e),
     };
     let priority = p.get("priority").and_then(Value::as_i64).unwrap_or(0);
-    let depends_on: Vec<String> = p
-        .get("depends_on")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    // `depends_on` se valida entero: un elemento inválido no se descarta en silencio, porque
+    // eso quitaría una restricción de ejecución que el cliente pidió (auditoría P13.S5).
+    let depends_on: Vec<String> = match p.get("depends_on") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut deps = Vec::with_capacity(items.len());
+            for item in items {
+                match item.as_str() {
+                    Some(s) if !s.trim().is_empty() => deps.push(s.to_string()),
+                    _ => {
+                        return Response::error(
+                            req.id,
+                            "invalid_params",
+                            "`depends_on` solo admite referencias de texto no vacías",
+                        );
+                    }
+                }
+            }
+            deps
+        }
+        Some(_) => {
+            return Response::error(
+                req.id,
+                "invalid_params",
+                "`depends_on` debe ser un array de referencias de texto",
+            );
+        }
+    };
 
     let create_req = crate::runtime::CreateAgent {
         project_root,

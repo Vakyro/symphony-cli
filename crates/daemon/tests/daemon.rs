@@ -483,6 +483,52 @@ async fn invalid_config_refuses_to_start_instead_of_falling_back_to_default_perm
     );
 }
 
+/// P13.S5 (auditoría de server.rs): un `depends_on` que no sea un array de textos se
+/// rechaza con `invalid_params` en vez de convertirse en silencio en una lista vacía.
+#[tokio::test]
+async fn agent_create_rejects_an_invalid_depends_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    let mut daemon = KillOnDrop(spawn_daemon(&home));
+    wait_ready(&home, &mut daemon.0).await;
+
+    let code = |o: Outcome| match o {
+        Outcome::Error(e) => e.code,
+        Outcome::Ok(v) => panic!("se esperaba un error: {v}"),
+    };
+    for depends_on in [json!("T-1"), json!([123]), json!([""]), json!(["  "])] {
+        let c = code(
+            call(
+                &home,
+                "agent.create",
+                json!({ "title": "tarea", "depends_on": depends_on }),
+            )
+            .await,
+        );
+        assert_eq!(c, "invalid_params", "depends_on: {depends_on}");
+    }
+
+    // Un array de textos sí pasa la validación de parámetros (falla después: no hay repo).
+    let suelto = dir.path().join("suelto");
+    std::fs::create_dir_all(&suelto).unwrap();
+    let c = code(
+        call(
+            &home,
+            "agent.create",
+            json!({
+                "title": "tarea",
+                "project_root": suelto,
+                "depends_on": ["T-1"],
+            }),
+        )
+        .await,
+    );
+    assert_eq!(c, "not_a_repo", "{c}");
+
+    call(&home, "shutdown", json!({})).await;
+    assert!(wait_exit(&mut daemon.0).success());
+}
+
 struct KillOnDrop(Child);
 
 impl Drop for KillOnDrop {
