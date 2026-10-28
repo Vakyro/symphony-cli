@@ -5,11 +5,11 @@
 **Paso actual:** S3 ✅ (soak de 4 h aprobado: 963 tandas, 470 reinicios, RSS 25 → 27 MB) · S5 🟡 (`server.md`: parte A integrada; #51 y #52 en curso) · S8 🟡 (falta gate completo, merge a `main`, tag `p13-done`).
 **Estado del paso:** en curso (2 agentes en Kimi) · pausado al cierre de la jornada.
 **En curso por:** agentes #51 (`k3.1-pro`) y #52 (`k3-256k`); sin revisar.
-**Siguiente:** revisar e integrar #51 y #52 → `cargo xtask check` completo → `cargo deny check` → merge `--no-ff` a `main` y tag `p13-done` (permiso vigente) → rebasar `phase/p16-validacion` → P16.S2–S7.
+**Siguiente:** (#51 y #52 parados por Leo; se revisan más adelante, en documento) revisar e integrar lo que Leo indique → `cargo xtask check` completo → `cargo deny check` → merge `--no-ff` a `main` y tag `p13-done` (permiso vigente) → rebasar `phase/p16-validacion` → P16.S2–S7.
 
 **Cierre de la jornada (detalle en `docs/progress/CIERRE-2026-10-27.md`):** qué salió bien, qué falló, qué se arregló y qué falta. Resumen: integrados #48 (guardia de aislamiento), #49 (freno por disco), #50 (permisos, `depends_on`, `usage.get`). Falta: test inestable `project_files_stay_searchable_as_they_change`, gate completo, disco al 97 %.
 
-**Lo que falta para v1.0 (2026-10-27):** (1) P13: integrar #51 y #52, gate completo, merge a `main`, tag `p13-done`. (2) Rebasar `phase/p16-validacion` sobre `main`. (3) P16.S2 E2E con fake-agents, S3 benchmark, S4 `install-check.yml`, S5 docs as-built, S7 retrospectiva. (4) ⛔ S6 release v1.0.0 y v0.9.0 (tu OK para pushear tags `v*`). Después de P16 autónomo: P17–P20 (ver abajo).
+**Lo que falta para v1.0 (2026-10-27):** (1) P13: integrar #51 y #52, gate completo, merge a `main`, tag `p13-done`. (2) Rebasar `phase/p16-validacion` sobre `main`. (3) P16.S2 E2E con fake-agents, S3 benchmark, S4 `install-check.yml`, S5 docs as-built, S7 retrospectiva. (4) ⛔ S6 release v1.0.0 y v0.9.0 (tu OK para pushear tags `v*`). Antes de v1.0.0, P17–P20 (decidido por Leo; ver abajo).
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
@@ -49,7 +49,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P16 · Validación final** (`phase/p16-validacion`): S1 checklist · S2 E2E (fake-agents) · S3 benchmark · S4 instalación limpia en CI · S5 docs as-built · S6 release ⛔ · S7 retrospectiva
 
-**Después de P16 autónomo (pedido de Leo, 2026-10-27; detalle en `docs/research/backlog-2026-10-27.md` y PLAN § P17–P20):** P17 TUI al día (tema morado apagado, barra de estado con usos/modelo/rama/modo, streaming y diffs, arranque con arte ASCII, mascota, shell en curso, vistas de plan/ramas/status global con heatmap) → P18 contexto y ahorro de tokens (auditar router, flintstone por defecto, sesiones cortas, graphify al iniciar, `/init` de Symphony, segundo cerebro) → P19 orquestación automática (Jev, perfiles `@best-*`, planeador, delegación con effort, `/orchester`, chat principal con paridad Claude Code) → P20 editor integrado, grafo, vista Habbo y móvil. Ideas futuras: cualquier CLI de agente y API keys de cualquier proveedor.
+**Antes de publicar v1.0.0 (decidido por Leo, 2026-10-27; P16.S6 queda después de P20; detalle en `docs/research/backlog-2026-10-27.md` y PLAN § P17–P20):** P17 TUI al día (tema morado apagado, barra de estado con usos/modelo/rama/modo, streaming y diffs, arranque con arte ASCII, mascota, shell en curso, vistas de plan/ramas/status global con heatmap) → P18 contexto y ahorro de tokens (auditar router, flintstone por defecto, sesiones cortas, graphify al iniciar, `/init` de Symphony, segundo cerebro) → P19 orquestación automática (Jev, perfiles `@best-*`, planeador, delegación con effort, `/orchester`, chat principal con paridad Claude Code) → P20 editor integrado, grafo, vista Habbo y móvil. Ideas futuras: cualquier CLI de agente y API keys de cualquier proveedor.
 
 ## Para usar lo nuevo (Leo)
 `symphony daemon stop` y luego `cargo install --path crates/cli --locked --force` y `cargo install --path crates/daemon --locked --force` (no lo hice yo: puede haber un daemon tuyo en uso). Novedades: `symphony chat merge`, `symphony review`, `[providers.permissions]`, texto del chat en vivo con Claude, `Ctrl+G`/`Ctrl+R` en el chat.
@@ -66,7 +66,7 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
-- **2026-10-27 · Backlog nuevo (P17–P20), tres preguntas abiertas** (detalle en `docs/research/backlog-2026-10-27.md`): (1) **Jev**: el repo solo lo menciona como motor de borradores anteriores sin verificar; P19.S1 investiga si existe, su licencia y si cumple CONSTRAINTS (sin Node/Python, sin telemetría, sin ML en la ruta crítica; ADR-0017). Si no, se hace lo mismo con el router determinista. (2) ¿P17–P20 van **antes o después** de publicar v1.0.0? El plan los pone después de la parte autónoma de P16 y deja S6 como decisión tuya. (3) Móvil: se propone empezar por una web local servida por el daemon (con Tailscale/SSH ya documentado), no una app.
+- **2026-10-27 · Backlog nuevo (P17–P20): respondido por Leo.** P17–P20 van antes de v1.0.0. Jev no se usa: se evaluará una versión ligera de código abierto que Leo describirá después. Móvil por Tailscale + SSH + tmux, sin app ni web (P20.S4). ADR-0021 y los agentes #51/#52 se revisan más adelante, en documento.
 - **2026-10-27 · Noche de dogfooding:** reporte completo en `docs/progress/REPORTE-2026-10-27.md`.
 - **ADR-0021** (check `files` para documentos y medios) quedó aceptado por delegación: revísalo.
 - **Publicar v0.9.0 / v1.0.0:** el pipeline de cargo-dist está listo en dry run; pushear un tag `v*` publica (y para Homebrew hace falta crear el repo `Vakyro/homebrew-symphony`).

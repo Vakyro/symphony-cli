@@ -1304,7 +1304,7 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 
 ## P17–P20 · Experiencia, contexto, orquestación y editor (pedido de Leo, 2026-10-27)
 
-**Orden:** después de lo que está en curso (cierre de P13 y la parte autónoma de P16). Fuente completa y preguntas abiertas: [`docs/research/backlog-2026-10-27.md`](docs/research/backlog-2026-10-27.md). Cada fase nueva se abre con su ADR si toca el núcleo (como ADR-0009/0018). Sin colores chillones en toda la UI: morado apagado como marca. `v1.0.0` (P16.S6) sigue siendo decisión de Leo: puede publicarse antes o después de estas fases.
+**Orden (decidido por Leo, 2026-10-27):** van **antes de publicar v1.0.0**, después de cerrar P13 y de la parte autónoma de P16 (P16.S6 se mueve después de P20). Fuente completa y preguntas abiertas: [`docs/research/backlog-2026-10-27.md`](docs/research/backlog-2026-10-27.md). Cada fase nueva se abre con su ADR si toca el núcleo (como ADR-0009/0018). Sin colores chillones en toda la UI: morado apagado como marca. `v1.0.0` (P16.S6) sigue siendo decisión de Leo: puede publicarse antes o después de estas fases.
 
 ### P17 · TUI al día (`phase/p17-tui`)
 - **S1 Tema y barra de estado:** paleta morada apagada, layout responsive; barra siempre visible con modelo:proveedor, uso de la sesión de 5 h y semanal con hora de reinicio, tokens de sesión y de contexto, carpeta, rama y modo (plan/auto/loop/yolo). **Verifica:** snapshots `insta` a 80 y 160 columnas.
@@ -1325,7 +1325,7 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **S7 Cierre.**
 
 ### P19 · Orquestación automática (`phase/p19-orquestacion`)
-- **S1 Investigar Jev** (existencia, licencia, tamaño, runtime, telemetría) y ADR: adoptar, o hacer lo mismo con el router determinista. ⛔ si exige dependencias prohibidas (Node/Python, ML en ruta crítica).
+- **S1 Versión ligera de código abierto para disponibilidad de modelos** (Leo: «no Jev», una alternativa que no pese nada; Leo dará la información en próximas sesiones). Se evalúa licencia, tamaño, runtime y telemetría, y se decide con ADR. ⛔ si exige dependencias prohibidas (Node/Python, ML en ruta crítica).
 - **S2 Disponibilidad y perfiles `@best-coding`, `@best-reasoning`, `@fastest`, `@cheap`, `@automatic`:** se deciden al inicio de la sesión y al cambiar de modelo, nunca por mensaje; usan solo modelos con créditos.
 - **S3 Planeador:** elegir el mejor modelo planeador disponible; plan por fases con tareas.
 - **S4 Delegación y *effort*:** cada tarea al modelo que mejor encaje; el effort sigue lo que pida el usuario (barato, producido, razonado).
@@ -1337,7 +1337,7 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **S1 Editor integrado:** pantalla dividida agente + editor minimalista, árbol de archivos, cursor, atajos de nano (ayuda con `?`), archivos del agente en tiempo real con marcas `+`/`-`. Sin dependencias fuera de STACK sin justificar.
 - **S2 Grafo de graphify** navegable al estilo Obsidian.
 - **S3 Vista interactiva de agentes tipo Habbo** (opcional, alternable con la vista normal).
-- **S4 Acceso desde el celular** (web local servida por el daemon, con autenticación y solo con el equipo encendido; ADR: transporte y seguridad).
+- **S4 Acceso desde el celular por Tailscale** (decidido por Leo: sin app ni web propia). Vía: Tailscale + SSH + `tmux` con la TUI, sin código nuevo; se documenta en la guía de SSH (P13.S6). Una vista móvil dentro de Symphony solo si Leo la pide después, con ADR de transporte y seguridad.
 - **S5 Cierre.**
 
 **Ideas futuras (sin fase):** soporte para cualquier CLI de agente y para API keys de cualquier proveedor.
