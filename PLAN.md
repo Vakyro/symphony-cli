@@ -1302,6 +1302,48 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 
 ---
 
+## P17–P20 · Experiencia, contexto, orquestación y editor (pedido de Leo, 2026-10-27)
+
+**Orden:** después de lo que está en curso (cierre de P13 y la parte autónoma de P16). Fuente completa y preguntas abiertas: [`docs/research/backlog-2026-10-27.md`](docs/research/backlog-2026-10-27.md). Cada fase nueva se abre con su ADR si toca el núcleo (como ADR-0009/0018). Sin colores chillones en toda la UI: morado apagado como marca. `v1.0.0` (P16.S6) sigue siendo decisión de Leo: puede publicarse antes o después de estas fases.
+
+### P17 · TUI al día (`phase/p17-tui`)
+- **S1 Tema y barra de estado:** paleta morada apagada, layout responsive; barra siempre visible con modelo:proveedor, uso de la sesión de 5 h y semanal con hora de reinicio, tokens de sesión y de contexto, carpeta, rama y modo (plan/auto/loop/yolo). **Verifica:** snapshots `insta` a 80 y 160 columnas.
+- **S2 Chat estilo Claude Code:** streaming de la respuesta, pensamientos, ediciones con `+N −M` y archivos tocados. **Verifica:** test L2 con `fake-agent` que emite deltas y diffs.
+- **S3 Arranque:** arte ASCII de sinfonía a pantalla completa, «para empezar» en proyectos nuevos (`/init`, `/usage`, `/status`, `/permissions`, `/harness`…), recuadro de versión/anuncios (solo local, sin telemetría: lee un archivo del repo o de la release), `?` abre atajos.
+- **S4 Mascota** que «piensa» (fuegos artificiales que se contraen y explotan) con frases. Respeta `NO_COLOR` y terminales sin animación.
+- **S5 Shell en curso:** lista de procesos del agente, abrir uno y ver su salida en vivo.
+- **S6 Vistas:** avance de agentes en un plan (rama, tarea/fase, %), ramas de git, pantalla `status` global (uso por modelo/sesión, proveedores, tips, heatmap mensual de uso; requiere ADR por ser datos entre proyectos, ver ADR-0018).
+- **S7 Cierre.**
+
+### P18 · Contexto y ahorro de tokens (`phase/p18-contexto`)
+- **S1 Auditoría del router y del handoff:** medir tokens de contexto por ruta y recortar lo que sobra. **Verifica:** benchmark antes/después.
+- **S2 Flintstone por defecto** en el harness (opcional por `[harness]`), medido contra el modo normal.
+- **S3 Sesiones cortas por defecto** y `/clear`/`/compact` por condiciones (ADR-0013 D2 sigue con `/compact` sin medir): confirmar qué existe, completar lo que falte; sesión larga solo con confirmación explícita.
+- **S4 Graphify al iniciar la conversación** y refresco por fase del proyecto; vista tipo Obsidian queda en P20.
+- **S5 `/init` de Symphony** (no el de cada agente) actualizado.
+- **S6 Segundo cerebro:** markdowns de decisiones, cambios y bitácora por agente, generados por el daemon. Sin embeddings (CONSTRAINTS).
+- **S7 Cierre.**
+
+### P19 · Orquestación automática (`phase/p19-orquestacion`)
+- **S1 Investigar Jev** (existencia, licencia, tamaño, runtime, telemetría) y ADR: adoptar, o hacer lo mismo con el router determinista. ⛔ si exige dependencias prohibidas (Node/Python, ML en ruta crítica).
+- **S2 Disponibilidad y perfiles `@best-coding`, `@best-reasoning`, `@fastest`, `@cheap`, `@automatic`:** se deciden al inicio de la sesión y al cambiar de modelo, nunca por mensaje; usan solo modelos con créditos.
+- **S3 Planeador:** elegir el mejor modelo planeador disponible; plan por fases con tareas.
+- **S4 Delegación y *effort*:** cada tarea al modelo que mejor encaje; el effort sigue lo que pida el usuario (barato, producido, razonado).
+- **S5 `/orchester <mensaje>`** en el chat principal: crea plan y agentes solos. **Verifica:** test L2 con fake-agents de punta a punta.
+- **S6 Chat principal con paridad Claude Code** (lista de capacidades contrastada con la de Claude Code; huecos como tareas).
+- **S7 Cierre.**
+
+### P20 · Editor y movilidad (`phase/p20-editor`)
+- **S1 Editor integrado:** pantalla dividida agente + editor minimalista, árbol de archivos, cursor, atajos de nano (ayuda con `?`), archivos del agente en tiempo real con marcas `+`/`-`. Sin dependencias fuera de STACK sin justificar.
+- **S2 Grafo de graphify** navegable al estilo Obsidian.
+- **S3 Vista interactiva de agentes tipo Habbo** (opcional, alternable con la vista normal).
+- **S4 Acceso desde el celular** (web local servida por el daemon, con autenticación y solo con el equipo encendido; ADR: transporte y seguridad).
+- **S5 Cierre.**
+
+**Ideas futuras (sin fase):** soporte para cualquier CLI de agente y para API keys de cualquier proveedor.
+
+---
+
 ## Apéndice A. Plantilla de `STATUS.md`
 
 ```markdown

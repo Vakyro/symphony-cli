@@ -41,11 +41,13 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · ✅ S4 harness de Symphony (ADR-0019; `[harness] mode`, 5 de 6 proveedores) · ✅ S5 más allá del código (ADR-0020; `symphony init --kind`, perfiles `@write/@media/@research`, migración 008) · ✅ S6 cierre (`p155-done`)
 
-**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · 🟡 S3 checkpoint corrupto y writer a media transacción ✅; soak de 4 h con memoria 25 → 171 MB por aclarar · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos, ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
+**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos, ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
 
 **P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasar sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · 🟡 S4 `install-check.yml` · 🟡 S5 anexo de desviaciones
 
 **P16 · Validación final** (`phase/p16-validacion`): S1 checklist · S2 E2E (fake-agents) · S3 benchmark · S4 instalación limpia en CI · S5 docs as-built · S6 release ⛔ · S7 retrospectiva
+
+**Después de P16 autónomo (pedido de Leo, 2026-10-27; detalle en `docs/research/backlog-2026-10-27.md` y PLAN § P17–P20):** P17 TUI al día (tema morado apagado, barra de estado con usos/modelo/rama/modo, streaming y diffs, arranque con arte ASCII, mascota, shell en curso, vistas de plan/ramas/status global con heatmap) → P18 contexto y ahorro de tokens (auditar router, flintstone por defecto, sesiones cortas, graphify al iniciar, `/init` de Symphony, segundo cerebro) → P19 orquestación automática (Jev, perfiles `@best-*`, planeador, delegación con effort, `/orchester`, chat principal con paridad Claude Code) → P20 editor integrado, grafo, vista Habbo y móvil. Ideas futuras: cualquier CLI de agente y API keys de cualquier proveedor.
 
 ## Para usar lo nuevo (Leo)
 `symphony daemon stop` y luego `cargo install --path crates/cli --locked --force` y `cargo install --path crates/daemon --locked --force` (no lo hice yo: puede haber un daemon tuyo en uso). Novedades: `symphony chat merge`, `symphony review`, `[providers.permissions]`, texto del chat en vivo con Claude, `Ctrl+G`/`Ctrl+R` en el chat.
@@ -62,6 +64,7 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
+- **2026-10-27 · Backlog nuevo (P17–P20), tres preguntas abiertas** (detalle en `docs/research/backlog-2026-10-27.md`): (1) **Jev**: el repo solo lo menciona como motor de borradores anteriores sin verificar; P19.S1 investiga si existe, su licencia y si cumple CONSTRAINTS (sin Node/Python, sin telemetría, sin ML en la ruta crítica; ADR-0017). Si no, se hace lo mismo con el router determinista. (2) ¿P17–P20 van **antes o después** de publicar v1.0.0? El plan los pone después de la parte autónoma de P16 y deja S6 como decisión tuya. (3) Móvil: se propone empezar por una web local servida por el daemon (con Tailscale/SSH ya documentado), no una app.
 - **2026-10-27 · Noche de dogfooding:** reporte completo en `docs/progress/REPORTE-2026-10-27.md`.
 - **ADR-0021** (check `files` para documentos y medios) quedó aceptado por delegación: revísalo.
 - **Publicar v0.9.0 / v1.0.0:** el pipeline de cargo-dist está listo en dry run; pushear un tag `v*` publica (y para Homebrew hace falta crear el repo `Vakyro/homebrew-symphony`).
