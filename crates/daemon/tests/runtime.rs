@@ -285,6 +285,50 @@ async fn exact_model_creates_everything_and_runs_the_executor() {
     e.writer.shutdown();
 }
 
+/// Un agente sin harness tampoco puede pasar inadvertido si toca el repo principal.
+#[tokio::test(flavor = "multi_thread")]
+async fn main_repo_changes_during_a_run_open_workspace_damaged_recovery() {
+    let script = r#"
+[[step]]
+kind = "run"
+command = ["git", "-C", "../../../../repo", "commit", "--allow-empty", "-q", "-m", "daño simulado"]
+
+[[step]]
+kind = "edit"
+path = "../../../../repo/dano.txt"
+content = "cambio sin seguimiento\n"
+"#;
+    let e = env(script, None).await;
+    let initial_head = git(&e.repo, &["rev-parse", "HEAD"]);
+    let _created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Simular una fuga al repo principal",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_ne!(git(&e.repo, &["rev-parse", "HEAD"]), initial_head);
+    assert_eq!(count(&e, "recovery_items"), 1);
+    let recovery = one::<String>(&e, "SELECT kind || '|' || detail FROM recovery_items");
+    assert!(recovery.starts_with("WORKSPACE_DAMAGED|"), "{recovery}");
+    assert!(
+        recovery.contains("HEAD antes:") && recovery.contains("HEAD después:"),
+        "{recovery}"
+    );
+    assert!(recovery.contains("?? dano.txt"), "{recovery}");
+    assert_eq!(
+        one::<String>(&e, "SELECT state FROM agents"),
+        "COMPLETED",
+        "la guardia registra el daño sin borrar el resultado del agente"
+    );
+    e.writer.shutdown();
+}
+
 /// P08.S4: el árbol de procesos del run queda en `processes` y se cierra al terminar.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_process_tree_of_a_run_is_recorded_and_closed() {

@@ -75,6 +75,35 @@ struct Replace<'a> {
     needed_context: Option<u64>,
 }
 
+/// Foto del repo principal antes de un run; el worktree del agente no se incluye.
+struct MainWorkspace {
+    root: PathBuf,
+    before: WorkspaceSnapshot,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct WorkspaceSnapshot {
+    head: String,
+    status: String,
+}
+
+impl WorkspaceSnapshot {
+    fn capture(root: &Path) -> Result<Self, String> {
+        let repo = Repo::at(root);
+        let head = repo.head_commit().map_err(|e| e.to_string())?;
+        let status = repo.status_porcelain().map_err(|e| e.to_string())?;
+        Ok(Self { head, status })
+    }
+
+    fn shown_status(&self) -> &str {
+        if self.status.is_empty() {
+            "(limpio)"
+        } else {
+            &self.status
+        }
+    }
+}
+
 pub(crate) struct Launch {
     pub adapter: Arc<dyn ProviderAdapter>,
     pub project_id: ProjectId,
@@ -308,7 +337,87 @@ impl Runtime {
         )
     }
 
+    /// Antes de cada run se fotografía el repo principal, no el worktree compartido del agente.
+    /// Si Git o el proyecto no se pueden leer, el run sigue y el fallo queda en el log.
+    async fn watch_main_workspace(&self, project: ProjectId) -> Option<MainWorkspace> {
+        let root = match self.read_op(|c| repo::get_project(c, project)) {
+            Ok(p) => PathBuf::from(p.root_path),
+            Err(e) => {
+                tracing::warn!(error = %e, "no se pudo localizar el repo principal para vigilarlo");
+                return None;
+            }
+        };
+        let capture_root = root.clone();
+        let before =
+            tokio::task::spawn_blocking(move || WorkspaceSnapshot::capture(&capture_root)).await;
+        match before {
+            Ok(Ok(before)) => Some(MainWorkspace { root, before }),
+            Ok(Err(e)) => {
+                tracing::warn!(root = %root.display(), error = %e, "no se pudo fotografiar el repo principal");
+                None
+            }
+            Err(e) => {
+                tracing::warn!(root = %root.display(), error = %e, "no se pudo fotografiar el repo principal");
+                None
+            }
+        }
+    }
+
+    /// Un cambio de HEAD o de `git status` mientras corría el agente es daño del workspace,
+    /// aunque el CLI haya terminado bien: queda visible en el Recovery Center.
+    async fn check_main_workspace(&self, l: &Launch, watched: Option<MainWorkspace>) {
+        let Some(watched) = watched else {
+            return;
+        };
+        let root = watched.root.clone();
+        let capture_root = root.clone();
+        let after =
+            tokio::task::spawn_blocking(move || WorkspaceSnapshot::capture(&capture_root)).await;
+        let after = match after {
+            Ok(Ok(after)) => after,
+            Ok(Err(e)) => {
+                tracing::warn!(root = %root.display(), error = %e, "no se pudo revisar el repo principal al cerrar el run");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(root = %root.display(), error = %e, "no se pudo revisar el repo principal al cerrar el run");
+                return;
+            }
+        };
+        if watched.before == after {
+            return;
+        }
+        let detail = format!(
+            "el repo principal {} cambió mientras corría el agente.\nHEAD antes: {}\nHEAD después: {}\ngit status antes:\n{}\ngit status después:\n{}",
+            root.display(),
+            watched.before.head,
+            after.head,
+            watched.before.shown_status(),
+            after.shown_status(),
+        );
+        let (project, agent, run) = (l.project_id, l.agent_id, l.run_id);
+        let result = self
+            .writer
+            .write(Box::new(move |t| {
+                repo::open_recovery_item(
+                    t,
+                    project,
+                    Some(agent),
+                    Some(run),
+                    "WORKSPACE_DAMAGED",
+                    &detail,
+                    now_ms(),
+                )?;
+                Ok(())
+            }))
+            .await;
+        if let Err(e) = result {
+            tracing::error!(agent = %agent, error = %e, "no se pudo registrar el daño del repo principal");
+        }
+    }
+
     async fn launch_inner(&self, l: Launch) -> Result<(), String> {
+        let main_workspace = self.watch_main_workspace(l.project_id).await;
         let mut env = vec![
             ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
             ("SYMPHONY_PROJECT_ID".into(), l.project_id.to_string()),
@@ -445,7 +554,7 @@ impl Runtime {
             );
         }
         let task: Pin<Box<dyn Future<Output = ()> + Send>> =
-            Box::pin(self.clone().pump(l, proc, rx));
+            Box::pin(self.clone().pump(l, proc, rx, main_workspace));
         self.pumps.spawn(task);
         Ok(())
     }
@@ -485,7 +594,13 @@ impl Runtime {
     }
 
     /// Lee la salida del CLI y atiende el control hasta que el proceso termina.
-    async fn pump(self, l: Launch, mut proc: Supervised, mut rx: mpsc::UnboundedReceiver<Control>) {
+    async fn pump(
+        self,
+        l: Launch,
+        mut proc: Supervised,
+        mut rx: mpsc::UnboundedReceiver<Control>,
+        main_workspace: Option<MainWorkspace>,
+    ) {
         let mut fatal: Option<ProviderError> = None;
         // Las últimas líneas de stderr: si el CLI se cae, dicen por qué (dogfooding 2026-10-24).
         let mut err_tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
@@ -585,6 +700,7 @@ impl Runtime {
             }
         };
         let exit = proc.wait().await;
+        self.check_main_workspace(&l, main_workspace).await;
         let run = l.run_id;
         let _ = self
             .writer

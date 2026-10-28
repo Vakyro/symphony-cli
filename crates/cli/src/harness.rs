@@ -2,9 +2,10 @@
 //! sea el CLI que lo lleva. Funciones puras sobre el sistema de archivos y el shell, sin MCP: el
 //! broker (`mcp.rs`) solo las expone.
 //!
-//! Acceso local total (decisión de Leo, 2026-10-23): las rutas relativas cuelgan del directorio
-//! del agente (su worktree), pero nada impide ir más allá. Todos los errores son texto para el
-//! modelo: dicen qué pasó y cómo seguir.
+//! Las rutas relativas cuelgan del directorio del agente (su worktree). Los archivos fuera del
+//! proyecto conservan el acceso local, pero `shell` queda confinado al worktree: no acepta `cd`
+//! ni rutas absolutas fuera de él. Todos los errores son texto para el modelo: dicen qué pasó y
+//! cómo seguir.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -83,6 +84,84 @@ fn guard_write(root: &Path, file: &Path) -> Result<(), String> {
             file.display(),
             root.display()
         ));
+    }
+    Ok(())
+}
+
+/// Palabras de un comando sin interpretar variables ni sustituciones. Las comillas solo agrupan:
+/// así una ruta absoluta con espacios se comprueba entera y los separadores no ocultan un `cd`.
+fn shell_words(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    for c in command.chars() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else {
+                    word.push(c);
+                }
+            }
+            None => match c {
+                '\'' | '"' | '`' => quote = Some(c),
+                c if c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')') => {
+                    if !word.is_empty() {
+                        words.push(std::mem::take(&mut word));
+                    }
+                }
+                _ => word.push(c),
+            },
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// La primera ruta absoluta de una palabra, incluidas formas como `--archivo=/tmp/a` y `-CC:\a`.
+fn absolute_in_word(word: &str) -> Option<&str> {
+    if word.starts_with(['/', '\\']) {
+        return Some(word);
+    }
+    let bytes = word.as_bytes();
+    for i in 0..bytes.len().saturating_sub(2) {
+        if bytes[i].is_ascii_alphabetic()
+            && bytes[i + 1] == b':'
+            && matches!(bytes[i + 2], b'/' | b'\\')
+            && !word[i + 2..].starts_with("//")
+        {
+            return Some(&word[i..]);
+        }
+    }
+    word.split_once('=')
+        .map(|(_, value)| value)
+        .filter(|value| value.starts_with(['/', '\\']))
+}
+
+fn guard_shell(root: &Path, dir: &Path, command: &str) -> Result<(), String> {
+    if !lexical(dir).starts_with(lexical(root)) {
+        return Err(format!(
+            "comando rechazado: el directorio {} está fuera de tu worktree {}",
+            dir.display(),
+            root.display()
+        ));
+    }
+    for word in shell_words(command) {
+        if word.eq_ignore_ascii_case("cd") {
+            return Err(
+                "comando rechazado: no uses `cd`; el shell ya corre dentro de tu worktree".into(),
+            );
+        }
+        if let Some(path) = absolute_in_word(&word)
+            && !lexical(Path::new(path)).starts_with(lexical(root))
+        {
+            return Err(format!(
+                "comando rechazado: la ruta absoluta {path} está fuera de tu worktree {}",
+                root.display()
+            ));
+        }
     }
     Ok(())
 }
@@ -458,6 +537,7 @@ pub async fn shell(
     timeout: Option<Duration>,
 ) -> Result<String, String> {
     let dir = cwd.map_or_else(|| root.to_path_buf(), |c| resolve(root, c));
+    guard_shell(root, &dir, command)?;
     let timeout = timeout
         .filter(|t| !t.is_zero())
         .unwrap_or(SHELL_TIMEOUT)
@@ -783,6 +863,25 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn shell_refuses_cd_and_absolute_paths_outside_the_worktree() {
+        let (_d, root) = tree();
+        let outside = root.with_file_name("fuera-del-worktree");
+        for command in [
+            "cd ..".to_string(),
+            "echo listo && CD /tmp".to_string(),
+            format!("git -C {} status", outside.display()),
+            format!("echo {}", outside.display()),
+        ] {
+            let err = guard_shell(&root, &root, &command).unwrap_err();
+            assert!(err.contains("comando rechazado"), "{command}: {err}");
+        }
+        assert!(guard_shell(&root, &root, "echo https://ejemplo.com/a").is_ok());
+        let inside = root.join("src");
+        assert!(guard_shell(&root, &root, &format!("git -C {} status", inside.display())).is_ok());
+        assert!(guard_shell(&root, &outside, "echo no").is_err());
     }
 
     #[tokio::test]
