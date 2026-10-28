@@ -720,7 +720,8 @@ impl Runtime {
             .join(project_id.to_string())
             .join(dir);
 
-        // 4. Worktree. Si falla, no se creó nada en la base.
+        // 4. Worktree. Si falla, no se creó nada en la base (y `prepare_worktree` ya revirtió
+        // solo lo que llegó a crear este intento, sin tocar recursos preexistentes).
         let plan = {
             let (repo_root, wt_path, branch, wt_base) = (
                 repo_root.clone(),
@@ -733,17 +734,11 @@ impl Runtime {
             })
             .await
             .map_err(store_err)?
-        };
-        let plan = match plan {
-            Ok(plan) => plan,
-            Err(detail) => {
-                self.undo_worktree(&repo_root, &wt_path, &branch).await;
-                return Err(CreateError::Workspace {
-                    detail,
-                    task: task_text,
-                });
-            }
-        };
+        }
+        .map_err(|detail| CreateError::Workspace {
+            detail,
+            task: task_text.clone(),
+        })?;
 
         // 4b. Preparación del worktree (`[worktree] prepare`): si falla, no se creó el agente.
         if let Err(detail) = self
@@ -927,50 +922,89 @@ impl Runtime {
         Ok(created)
     }
 
-    /// Borra el worktree y la rama de un intento fallido (best effort).
+    /// Borra el worktree y la rama creados por este intento fallido.
     async fn undo_worktree(&self, repo_root: &Path, wt_path: &Path, branch: &str) {
         let (root, path, branch) = (
             repo_root.to_path_buf(),
             wt_path.to_path_buf(),
             branch.to_string(),
         );
-        let _ = tokio::task::spawn_blocking(move || {
-            let repo = Repo::at(&root);
-            if path.exists() {
-                let _ = repo.worktree_remove(&path, true);
-                let _ = std::fs::remove_dir_all(&path);
+        let _ = tokio::task::spawn_blocking(move || undo_worktree_sync(&root, &path, &branch))
+            .await;
+    }
+}
+
+fn undo_worktree_sync(repo_root: &Path, wt_path: &Path, branch: &str) {
+    let repo = Repo::at(repo_root);
+    if wt_path.exists() || wt_path.symlink_metadata().is_ok() {
+        if let Err(e) = repo.worktree_remove(wt_path, true) {
+            tracing::warn!(
+                path = %wt_path.display(),
+                error = %e,
+                "no se pudo quitar el worktree con git al revertir la creación"
+            );
+            if (wt_path.exists() || wt_path.symlink_metadata().is_ok())
+                && let Err(e) = std::fs::remove_dir_all(wt_path)
+            {
+                tracing::warn!(
+                    path = %wt_path.display(),
+                    error = %e,
+                    "no se pudo borrar la carpeta del worktree al revertir la creación"
+                );
             }
-            let _ = repo.worktree_prune();
-            let _ = repo.delete_branch(&branch, true);
-        })
-        .await;
+        }
+    }
+    if let Err(e) = repo.worktree_prune() {
+        tracing::warn!(error = %e, "no se pudo podar worktrees al revertir la creación");
+    }
+    if repo.branch_exists(branch).unwrap_or(false)
+        && let Err(e) = repo.delete_branch(branch, true)
+    {
+        tracing::warn!(
+            branch,
+            error = %e,
+            "no se pudo borrar la rama al revertir la creación"
+        );
     }
 }
 
 /// Crea el worktree y aplica la estrategia de dependencias que no necesita el scheduler.
+/// Si hay colisión con una carpeta o rama preexistente, devuelve error sin borrar nada;
+/// si falla después de crear el worktree/rama en este intento, revierte solo lo creado.
 fn prepare_worktree(
     repo_root: &Path,
     wt_path: &Path,
     branch: &str,
     base: &str,
 ) -> Result<deps::DepsPlan, String> {
-    if wt_path.exists() {
+    if wt_path.exists() || wt_path.symlink_metadata().is_ok() {
         return Err(format!("{} ya existe", wt_path.display()));
     }
+    let repo = Repo::at(repo_root);
     // El plan por fases es temporal: no entra en `git add -A` ni en el diff (exclusión local).
-    let _ = Repo::at(repo_root).exclude_locally(crate::plan::PLAN_EXCLUDE);
+    let _ = repo.exclude_locally(crate::plan::PLAN_EXCLUDE);
     if let Some(parent) = wt_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    Repo::at(repo_root)
-        .worktree_add(wt_path, branch, base)
-        .map_err(|e| e.to_string())?;
-    let plan = deps::plan(wt_path, repo_root).map_err(|e| e.to_string())?;
-    // ponytail: INSTALL y PNPM_STORE son operaciones pesadas; las corre el scheduler (P08).
-    if plan.strategy == deps::DepsStrategy::Link {
-        deps::link_node_modules(wt_path, repo_root).map_err(|e| e.to_string())?;
+    if repo.branch_exists(branch).map_err(|e| e.to_string())? {
+        return Err(format!("la rama `{branch}` ya existe"));
     }
-    Ok(plan)
+    if let Err(e) = repo.worktree_add(wt_path, branch, base) {
+        undo_worktree_sync(repo_root, wt_path, branch);
+        return Err(e.to_string());
+    }
+    let setup = (|| {
+        let plan = deps::plan(wt_path, repo_root).map_err(|e| e.to_string())?;
+        // ponytail: INSTALL y PNPM_STORE son operaciones pesadas; las corre el scheduler (P08).
+        if plan.strategy == deps::DepsStrategy::Link {
+            deps::link_node_modules(wt_path, repo_root).map_err(|e| e.to_string())?;
+        }
+        Ok(plan)
+    })();
+    if setup.is_err() {
+        undo_worktree_sync(repo_root, wt_path, branch);
+    }
+    setup
 }
 
 /// Filas de la transacción de creación.

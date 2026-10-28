@@ -779,6 +779,81 @@ async fn workspace_failure_leaves_no_half_built_agent() {
         assert_eq!(count(&e, t), 0, "{t}");
     }
     assert!(dir_is_empty_tree(&e.home.join("worktrees")));
+    assert_eq!(
+        git(&e.repo, &["branch", "--list", "symphony/*"]).trim_start_matches(['*', '+', ' ']),
+        clash.branch,
+        "la rama preexistente no se borra ante una colisión"
+    );
+    e.writer.shutdown();
+}
+
+/// Auditoría P13.S5 (`server.md`, hallazgo 1): una colisión con un worktree o rama preexistentes
+/// devuelve error sin borrar el directorio (con trabajo sin commitear) ni la rama anterior.
+#[tokio::test(flavor = "multi_thread")]
+async fn workspace_collision_preserves_preexisting_worktree_and_branch() {
+    let e = env(WORK, None).await;
+    let clash = e
+        .runtime
+        .create_agent(req(&e, "Primero", Execution::DecideLater))
+        .await
+        .unwrap();
+    let uncommitted = clash.worktree.join("sin-commitear.txt");
+    std::fs::write(&uncommitted, "trabajo valioso\n").unwrap();
+    symphony_store::open(&e.db)
+        .unwrap()
+        .execute_batch(
+            "DELETE FROM checkpoints; DELETE FROM agents; DELETE FROM worktrees; DELETE FROM tasks;",
+        )
+        .unwrap();
+
+    // 1. Colisión de carpeta (`agent-001` sigue en disco con cambios sin commit) y de rama.
+    let err = e
+        .runtime
+        .create_agent(req(&e, "Segundo", Execution::DecideLater))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CreateError::Workspace { detail, .. } if detail.contains("ya existe")),
+        "{err:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&uncommitted).unwrap(),
+        "trabajo valioso\n",
+        "la carpeta preexistente y sus archivos sin commitear se conservan"
+    );
+    assert_eq!(
+        git(&e.repo, &["branch", "--list", "symphony/*"]).trim_start_matches(['*', '+', ' ']),
+        clash.branch,
+        "la rama preexistente se conserva"
+    );
+
+    // 2. Quitada la carpeta, queda solo la rama preexistente con un commit propio: tampoco se borra.
+    git(&clash.worktree, &["add", "-A"]);
+    git(&clash.worktree, &["commit", "-q", "-m", "commit previo"]);
+    let branch_tip = git(&e.repo, &["rev-parse", &clash.branch]);
+    git(
+        &e.repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &clash.worktree.display().to_string(),
+        ],
+    );
+    let err = e
+        .runtime
+        .create_agent(req(&e, "Tercero", Execution::DecideLater))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CreateError::Workspace { detail, .. } if detail.contains("ya existe")),
+        "{err:?}"
+    );
+    assert_eq!(
+        git(&e.repo, &["rev-parse", &clash.branch]),
+        branch_tip,
+        "el commit de la rama preexistente sigue intacto"
+    );
     e.writer.shutdown();
 }
 
