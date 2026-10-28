@@ -529,6 +529,35 @@ async fn agent_create_rejects_an_invalid_depends_on() {
     assert!(wait_exit(&mut daemon.0).success());
 }
 
+/// P13.S5 (auditoría de server.rs): `usage.get` valida `days` (máximo y mínimo) en vez de
+/// multiplicar cualquier `i64` por los milisegundos de un día, lo que podía desbordar.
+#[tokio::test]
+async fn usage_get_validates_days() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    let mut daemon = KillOnDrop(spawn_daemon(&home));
+    wait_ready(&home, &mut daemon.0).await;
+
+    for days in [json!(i64::MAX), json!(0), json!(-3), json!(3651), json!("siete")] {
+        let Outcome::Error(e) = call(&home, "usage.get", json!({ "days": days })).await else {
+            panic!("days {days} tenía que fallar")
+        };
+        assert_eq!(e.code, "invalid_params", "days: {days}");
+    }
+
+    let Outcome::Ok(v) = call(&home, "usage.get", json!({ "days": 30 })).await else {
+        panic!("days 30 tenía que funcionar")
+    };
+    assert_eq!(v["days"], json!(30));
+    let Outcome::Ok(v) = call(&home, "usage.get", json!({})).await else {
+        panic!("sin days tenía que funcionar")
+    };
+    assert_eq!(v["days"], json!(7));
+
+    call(&home, "shutdown", json!({})).await;
+    assert!(wait_exit(&mut daemon.0).success());
+}
+
 struct KillOnDrop(Child);
 
 impl Drop for KillOnDrop {

@@ -1750,9 +1750,25 @@ async fn refresh_providers(
     crate::providers::save(writer, detected, now_ms()).await
 }
 
+/// Tope de `days` en `usage.get`: cubre cualquier historial razonable y, pasado a
+/// milisegundos, queda lejos del desbordamiento de `i64` (auditoría P13.S5).
+const USAGE_MAX_DAYS: i64 = 3650;
+
 /// Uso de tokens de los últimos `days` días (por defecto 7), informado y estimado por separado.
 fn usage_get(req: Request, state: &State) -> Response {
-    let days = req.params.get("days").and_then(Value::as_i64).unwrap_or(7);
+    let days = match req.params.get("days") {
+        None | Some(Value::Null) => 7,
+        Some(v) => match v.as_i64() {
+            Some(d) if (1..=USAGE_MAX_DAYS).contains(&d) => d,
+            _ => {
+                return Response::error(
+                    req.id,
+                    "invalid_params",
+                    format!("`days` debe ser un entero entre 1 y {USAGE_MAX_DAYS}"),
+                );
+            }
+        },
+    };
     let listed = state
         .reader
         .lock()
