@@ -2,10 +2,10 @@
 
 **Actualizado:** 2026-10-28 · por opencode-go/deepseek-v4-pro (orquestación con Symphony, solo opencode-go)
 **Fase actual:** P17 · TUI al día (rama `phase/p17-tui`). P13 **cerrada y mergeada** (`p13-done`); P16 en `phase/p16-validacion`, rebasada sobre `main` y a la espera de Leo (veredicto de uso) y de P17–P20 para los docs as-built.
-**Paso actual:** P17.S1 en curso (tema morado apagado + barra de estado). P16: S0–S1 ✅, S2/S3 medidos con el veredicto pendiente, S3 con el guard de disco ✅, S4 esperando la primera corrida de `install-check.yml`.
-**Estado del paso:** delegado a un agente (`beam-free`, porque la cuota de opencode-go está agotada hasta ~23:28 local).
+**Paso actual:** P17.S1 ✅ (tema `30c0bfe` + barra de estado `98283c9`, 94 tests y snapshots a 80/160). P17.S2 en curso (prueba de streaming + resumen `+N −M` por archivo). P16: S0–S1 ✅, S2/S3 medidos con el veredicto pendiente, S3 con el guard de disco ✅, S4 esperando la primera corrida de `install-check.yml`.
+**Estado del paso:** P17.S2 delegado a `opencode-go/kimi-k3` (la cuota Go volvió a estar sana: `providers.list` da `HEALTHY`).
 **En curso por:** opencode-go/deepseek-v4-pro (orquestador), con delegación a agentes Symphony sobre `opencode-go`.
-**Siguiente:** P17.S1 → P17.S2–S7 → P18 → P19 (⛔ S1: la alternativa ligera que indique Leo) → P20 → P16.S5/S7 → ⛔ P16.S6 release.
+**Siguiente:** P17.S2 → P17.S3–S7 → P18 → P19 (⛔ S1: la alternativa ligera que indique Leo) → P20 → P16.S5/S7 → ⛔ P16.S6 release.
 
 **Hotfix del 2026-10-28 (después del merge de P13):** el CI de `main` quedó en rojo en `check (ubuntu/macos/windows)` y `coverage` por el mismo test, `agent_create_rejects_an_invalid_depends_on`: sin `model`/`profile` el daemon usa `DecideLater` y comprueba primero que haya proveedores, así que en un entorno sin CLIs de proveedor devolvía `no_eligible_provider` donde el test esperaba `not_a_repo`. El test ya acepta los dos fallos posteriores a la validación de parámetros (`9af3668`, gate 733 ✅, pusheado).
 
@@ -46,6 +46,8 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 **P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · ✅ S4 harness de Symphony (ADR-0019; `[harness] mode`, 5 de 6 proveedores) · ✅ S5 más allá del código (ADR-0020; `symphony init --kind`, perfiles `@write/@media/@research`, migración 008) · ✅ S6 cierre (`p155-done`)
 
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos (incluidos #51 y #52 de `server.md`), ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · ✅ S8 cierre (`p13-done`, 2026-10-28: gate 733 ✅, `deny` ✅, merge a `main`; `v0.9.0` local)
+
+**P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ S1 tema y barra de estado (tema en `theme.rs` con `NO_COLOR`, barra de una línea en todas las pantallas con modelo/cuota/carpeta/rama y `tokens`/`modo` a «—» hasta que haya dato; snapshots a 80 y 160) · 🟡 S2 chat estilo Claude Code (prueba del streaming y resumen `+N −M` por archivo) · pendientes S3–S7
 
 **P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasada sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · ✅ S3 benchmark medido con guard de disco · 🟡 S4 `install-check.yml` (espera estar en `main`; el trigger ya no se dispara desde `main`) · 🟡 S5 anexo de desviaciones
 
