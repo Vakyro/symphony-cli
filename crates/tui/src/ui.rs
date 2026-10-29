@@ -481,6 +481,17 @@ fn paragraph(f: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) 
 
 // --- 01 Launch --------------------------------------------------------------
 
+pub const LAUNCH_ART: &[&str] = &[
+    "   *     .-.     *",
+    "         (o o)",
+    "          |=|",
+    "         /| |\\",
+    "        / | | \\  *",
+    "       '  | |  ' /",
+    "          | |",
+    "         /   \\",
+];
+
 fn launch(app: &App, f: &mut Frame, area: Rect) {
     let check = |done: bool| {
         if done {
@@ -489,7 +500,31 @@ fn launch(app: &App, f: &mut Frame, area: Rect) {
             dim("…")
         }
     };
-    let mut lines = vec![
+    let art_lines: Vec<Line<'static>> = if area.width < 66 || area.height < 20 {
+        let inner = area.width.saturating_sub(2) as usize;
+        let label = "SYMPHONY";
+        let pad = inner.saturating_sub(label.len()) / 2;
+        vec![
+            Line::from(vec![
+                Span::raw(" ".repeat(pad)),
+                colored(label.to_string(), current_theme().brand).add_modifier(Modifier::BOLD),
+            ]),
+            Line::raw(""),
+        ]
+    } else {
+        let inner = area.width.saturating_sub(2) as usize;
+        let mut v: Vec<Line<'static>> = Vec::new();
+        for l in LAUNCH_ART {
+            let pad = inner.saturating_sub(l.chars().count()) / 2;
+            v.push(Line::from(vec![
+                Span::raw(" ".repeat(pad)),
+                colored(l.to_string(), current_theme().brand),
+            ]));
+        }
+        v.push(Line::raw(""));
+        v
+    };
+    let status_lines = vec![
         Line::from(vec![
             Span::raw("Proyecto:  "),
             bold(if app.loaded() {
@@ -507,6 +542,8 @@ fn launch(app: &App, f: &mut Frame, area: Rect) {
             check(!app.providers.is_empty()),
         ]),
     ];
+    let mut lines = art_lines;
+    lines.extend(status_lines);
     if app.loaded() && !app.initialized() {
         lines.push(Line::raw(""));
         lines.push(Line::raw(
@@ -521,6 +558,25 @@ fn launch(app: &App, f: &mut Frame, area: Rect) {
             bold("[q]"),
             Span::raw(" Salir"),
         ]));
+        lines.push(Line::raw(""));
+        lines.push(section("PARA EMPEZAR"));
+        for (k, v) in [
+            (
+                "i",
+                "configurar el proyecto (nombre, rendimiento y failover)",
+            ),
+            ("o", "abrir sin configurar"),
+            (
+                ":",
+                "barra de comandos (new, tasks, stats, providers, system...)",
+            ),
+            ("q", "salir"),
+        ] {
+            lines.push(Line::from(vec![
+                bold(k.to_string()),
+                Span::raw(format!("        {}", v)),
+            ]));
+        }
     } else {
         lines.push(Line::from(vec![
             Span::raw("Restaurando sesión…                "),

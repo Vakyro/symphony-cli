@@ -250,6 +250,35 @@ fn view_01_launch_not_a_repo() {
 }
 
 #[test]
+fn launch_art_fits_and_is_hidden_in_a_small_terminal() {
+    let app = App::new("/work/arete-mobile");
+    let out = draw(&app);
+    assert!(out.contains(ui::LAUNCH_ART[0]));
+    for l in ui::LAUNCH_ART {
+        assert!(l.chars().count() <= 64);
+    }
+    let small = terminal(&app, 60, 16).backend().to_string();
+    assert!(!small.contains(ui::LAUNCH_ART[0]));
+    assert!(small.contains("SYMPHONY"));
+}
+
+#[test]
+fn launch_new_project_lists_what_to_do_first() {
+    let mut app = App::new("/work/arete-mobile");
+    app.start();
+    ok(&mut app, Req::Providers, providers());
+    ok(&mut app, Req::ProjectStatus, status(false, 0));
+    assert_eq!(app.screen, Screen::Launch);
+    let out = draw(&app);
+    assert!(out.contains("PARA EMPEZAR"));
+    assert!(out.contains("configurar el proyecto"));
+    assert!(out.contains("abrir sin configurar"));
+    let home = home_app();
+    let home_out = draw(&home);
+    assert!(!home_out.contains("PARA EMPEZAR"));
+}
+
+#[test]
 fn view_02_first_run() {
     let mut app = App::new("/work/arete-mobile");
     app.start();
