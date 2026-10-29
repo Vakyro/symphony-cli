@@ -122,6 +122,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::MergePreflight => "· Integración",
         Screen::ConflictReview => "· Conflictos",
         Screen::ReviewResult => "· Revisión",
+        Screen::Help => "· Atajos",
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -159,6 +160,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::MergePreflight => merge_preflight(app, f, body),
         Screen::ConflictReview => conflict_review(app, f, body),
         Screen::ReviewResult => review_result(app, f, body),
+        Screen::Help => help(app, f, body),
     }
 
     status_line(app, f, status_bar);
@@ -220,6 +222,7 @@ fn hints(app: &App) -> &'static str {
             "m resuelto a mano · w pedir revisor · p volver a comprobar · x abandonar · Esc"
         }
         Screen::ReviewResult => "w pedir revisión · r releer · Esc volver",
+        Screen::Help => "Esc cerrar",
     }
 }
 
@@ -2762,4 +2765,73 @@ fn review_result(app: &App, f: &mut Frame, area: Rect) {
         &format!("Revisión{}", flow_agent_label(app)),
         lines,
     );
+}
+
+// --- Help --------------------------------------------------------------------
+
+fn help(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec![
+        bold("Symphony"),
+        Span::raw(format!("  v{}", crate::app::SYMPHONY_VERSION)),
+    ]));
+    if !app.news.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("ANUNCIOS LOCALES (.symphony/anuncios.md)"));
+        for n in &app.news {
+            lines.push(Line::from(dim(n.clone())));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("ATAJOS"));
+    for (k, v) in [
+        (
+            "?",
+            "abre esta ayuda (en cualquier pantalla salvo el agente)",
+        ),
+        ("Esc / q", "volver o salir"),
+        ("j/k o ↑/↓", "mover la selección"),
+        ("Enter", "abrir / confirmar"),
+        (": o /", "barra de comandos"),
+    ] {
+        lines.push(Line::from(vec![bold(format!("{:<12}", k)), Span::raw(v)]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("HOME"));
+    for (k, v) in [
+        ("n", "nuevo agente"),
+        ("t", "tareas"),
+        ("m", "milestones"),
+        ("s", "sistema"),
+        ("p", "proveedores"),
+        ("r", "recovery"),
+        ("c", "contexto"),
+    ] {
+        lines.push(Line::from(vec![bold(format!("{:<12}", k)), Span::raw(v)]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("CHAT / AGENTE"));
+    for (k, v) in [
+        ("Tab", "cambiar modelo"),
+        ("^Y", "copiar"),
+        ("^E", "exportar"),
+        ("^R", "revisar"),
+        ("^G", "integrar a main"),
+        ("F2", "ratón"),
+        ("m", "mensaje"),
+        ("p", "pausa"),
+        ("s", "modelo"),
+        ("v", "validación"),
+        ("g", "integrar"),
+        ("d", "diff"),
+        ("x", "detener"),
+    ] {
+        lines.push(Line::from(vec![bold(format!("{:<12}", k)), Span::raw(v)]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(dim(
+        "Sin telemetría: los avisos se leen solo del repo local.",
+    )));
+    lines.push(Line::from(dim("Esc para cerrar.")));
+    paragraph(f, area, "Atajos", lines);
 }

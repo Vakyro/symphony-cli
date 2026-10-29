@@ -61,6 +61,8 @@ pub enum Screen {
     ConflictReview,
     /// 29 Review Agent Result.
     ReviewResult,
+    /// Ayuda: atajos y versión (S3b).
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,6 +231,25 @@ pub fn ctx_file_uri(path: &str) -> String {
         .replace('#', "%23");
     format!("ctx://file/{esc}")
 }
+
+/// Lee avisos locales del repo (`.symphony/anuncios.md`), sin red. Devuelve hasta 8 líneas no vacías.
+fn load_local_news(cwd: &str) -> Vec<String> {
+    let path = std::path::Path::new(cwd)
+        .join(".symphony")
+        .join("anuncios.md");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(8)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Versión del binario (del crate), para el recuadro de ayuda.
+pub const SYMPHONY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Líneas sumadas y quitadas de un archivo en el diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -548,8 +569,12 @@ pub const POLL_TICKS: u64 = 15;
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
     pub screen: Screen,
+    /// Pantalla desde la que se abrió la ayuda, para volver con Esc.
+    pub help_from: Option<Screen>,
     /// Carpeta desde la que se abrió Symphony.
     pub cwd: String,
+    /// Avisos del repo local (`.symphony/anuncios.md`), leídos una sola vez al arrancar.
+    pub news: Vec<String>,
     /// Respuesta de `project.status` (`Null` hasta que llega).
     pub project: Value,
     pub providers: Vec<Value>,
@@ -659,9 +684,13 @@ fn cycle(i: usize, len: usize, forward: bool) -> usize {
 
 impl App {
     pub fn new(cwd: impl Into<String>) -> Self {
+        let cwd = cwd.into();
+        let news = load_local_news(&cwd);
         Self {
             screen: Screen::Launch,
-            cwd: cwd.into(),
+            help_from: None,
+            cwd,
+            news,
             project: Value::Null,
             providers: Vec::new(),
             agents: Vec::new(),
@@ -1037,7 +1066,11 @@ impl App {
                 }
                 calls.extend(self.chat_calls());
             }
-            Screen::Launch | Screen::NotARepo | Screen::FirstRun | Screen::NewAgent => {}
+            Screen::Launch
+            | Screen::NotARepo
+            | Screen::FirstRun
+            | Screen::NewAgent
+            | Screen::Help => {}
         }
         calls
     }
@@ -1468,6 +1501,20 @@ impl App {
         if self.screen != Screen::Chat {
             self.chat_merge_armed = false;
         }
+        if key.code == KeyCode::Char('?')
+            && !matches!(
+                self.screen,
+                Screen::Agent
+                    | Screen::FirstRun
+                    | Screen::NewAgent
+                    | Screen::ProviderSetup
+                    | Screen::Help
+            )
+        {
+            self.help_from = Some(self.screen);
+            self.screen = Screen::Help;
+            return Vec::new();
+        }
         match self.screen {
             Screen::Launch => self.launch_key(key),
             Screen::NotARepo => {
@@ -1498,6 +1545,7 @@ impl App {
             Screen::MergePreflight => self.merge_key(key),
             Screen::ConflictReview => self.conflict_key(key),
             Screen::ReviewResult => self.review_key(key),
+            Screen::Help => self.help_key(key),
         }
     }
 
@@ -1537,6 +1585,16 @@ impl App {
             }
             _ => Vec::new(),
         }
+    }
+
+    fn help_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if matches!(
+            key.code,
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')
+        ) {
+            self.screen = self.help_from.take().unwrap_or(Screen::Home);
+        }
+        Vec::new()
     }
 
     fn first_run_key(&mut self, key: KeyEvent) -> Vec<Call> {
