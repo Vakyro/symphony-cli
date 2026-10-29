@@ -291,7 +291,9 @@ Paths are relative to your working directory. Read a file before editing it, and
 tests and anything else.";
 
 /// El broker (`symphony mcp serve`) en el mismo ejecutable que el hook, con las variables del
-/// agente que tiene que ver (`SYMPHONY_*`: ningún CLI se las pasa solo a un servidor MCP).
+/// agente que tiene que ver (`SYMPHONY_*`: ningún CLI se las pasa solo a un servidor MCP) y el
+/// `build-dir` de Cargo compartido (o el `CARGO_TARGET_DIR` del usuario), que usan los `shell`
+/// del harness.
 /// `None` si el spawn no lleva hook o si `SYMPHONY_NO_MCP` está definida (apagado de emergencia).
 pub fn broker(req: &SpawnRequest) -> Option<(HookCommand, Vec<(String, String)>)> {
     if std::env::var_os("SYMPHONY_NO_MCP").is_some() {
@@ -305,7 +307,11 @@ pub fn broker(req: &SpawnRequest) -> Option<(HookCommand, Vec<(String, String)>)
     let env = req
         .env
         .iter()
-        .filter(|(k, _)| k.starts_with("SYMPHONY_") && k != ENV_MCP_EXTRA && k != ENV_PLUGIN_DIR)
+        .filter(|(k, _)| {
+            (k.starts_with("SYMPHONY_") && !is_internal_env(k))
+                || k == "CARGO_TARGET_DIR"
+                || k == "CARGO_BUILD_BUILD_DIR"
+        })
         .cloned()
         .collect();
     Some((command, env))
@@ -315,6 +321,12 @@ pub fn broker(req: &SpawnRequest) -> Option<(HookCommand, Vec<(String, String)>)
 pub const ENV_MCP_EXTRA: &str = "SYMPHONY_MCP_EXTRA";
 /// Variable con el plugin de sesión que lleva las skills compartidas (P09.S9).
 pub const ENV_PLUGIN_DIR: &str = "SYMPHONY_PLUGIN_DIR";
+
+/// `true` si la variable de entorno es de transporte interno entre el daemon y los
+/// adapters y nunca debe propagarse al entorno del proceso CLI ni de sus herramientas.
+pub fn is_internal_env(key: &str) -> bool {
+    key == ENV_MCP_EXTRA || key == ENV_PLUGIN_DIR
+}
 
 /// Un servidor MCP del usuario que se registra por invocación.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -463,4 +475,17 @@ pub trait ProviderAdapter: Send + Sync {
     fn parse_hook(&self, payload: &Value) -> Vec<AgentEvent>;
     /// Texto de error (stderr, mensaje de fallo) → error clasificado, si lo reconoce.
     fn parse_error(&self, text: &str) -> Option<ProviderError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_env_identifies_transport_variables() {
+        assert!(is_internal_env(ENV_MCP_EXTRA));
+        assert!(is_internal_env(ENV_PLUGIN_DIR));
+        assert!(!is_internal_env("SYMPHONY_AGENT_ID"));
+        assert!(!is_internal_env("CARGO_TARGET_DIR"));
+    }
 }

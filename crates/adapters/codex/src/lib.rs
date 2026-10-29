@@ -16,7 +16,7 @@ use serde_json::Value;
 use symphony_adapter_common::hooks::parse_standard_hook;
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, HookCommand, ModelInfo, ProcessSpec,
-    ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest,
+    ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest, has_token,
     parse_retry_after_ms,
 };
 use symphony_core::FailureType;
@@ -110,7 +110,7 @@ pub fn hook_command_line(hook: &HookCommand) -> String {
 pub fn hook_overrides(hook: &HookCommand) -> Vec<String> {
     let cmd = hook_command_line(hook);
     // Cadena TOML básica: escapar `\` y `"`.
-    let toml_str = format!("\"{}\"", cmd.replace('\\', "\\\\").replace('"', "\\\""));
+    let toml_str = toml_quote(&cmd);
     HOOK_EVENTS
         .iter()
         .map(|e| format!("hooks.{e}=[{{hooks=[{{type=\"command\",command={toml_str},timeout={HOOK_TIMEOUT_SECS}}}]}}]"))
@@ -137,6 +137,9 @@ pub fn mcp_overrides(cmd: &HookCommand, env: &[(String, String)]) -> Vec<String>
         ),
         format!("mcp_servers.{name}.args=[{}]", args.join(",")),
         format!("mcp_servers.{name}.env={{{}}}", env.join(",")),
+        // Por encima del tope del `shell` del harness (30 min): si no, Codex corta a los 300 s un
+        // comando que el broker todavía deja correr (dogfooding 2026-10-24).
+        format!("mcp_servers.{name}.tool_timeout_sec=1900"),
     ]
 }
 
@@ -171,7 +174,7 @@ pub fn extra_mcp_overrides(m: &symphony_adapter_common::ExtraMcp) -> Vec<String>
 const CODEX_NATIVE_TOOLS: [&str; 3] = ["shell_tool", "unified_exec", "view_image"];
 
 fn s(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).map(str::to_string)
+    symphony_adapter_common::json_str(v, key)
 }
 
 impl CodexAdapter {
@@ -215,7 +218,9 @@ impl CodexAdapter {
             }
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         spec
     }
@@ -367,36 +372,38 @@ impl ProviderAdapter for CodexAdapter {
 
     fn parse_error(&self, text: &str) -> Option<ProviderError> {
         let lower = text.to_lowercase();
-        let (failure_type, code, transient) =
-            if lower.contains("usage limit") || lower.contains("hit your limit") {
-                (FailureType::DailyQuota, "usage_limit", false)
-            } else if lower.contains("rate limit")
-                || lower.contains("429")
-                || lower.contains("too many requests")
-            {
-                (FailureType::TempRateLimit, "rate_limit", true)
-            } else if lower.contains("401")
-                || lower.contains("unauthorized")
-                || lower.contains("codex login")
-                || lower.contains("not logged in")
-            {
-                (FailureType::Auth, "unauthorized", false)
-            } else if lower.contains("reconnecting")
-                || lower.contains("stream disconnected")
-                || lower.contains("waiting for network")
-                || lower.contains("error sending request")
-            {
-                // P01 Test D: Codex reintenta solo y espera la red sin fallar.
-                (FailureType::Network, "network", true)
-            } else if lower.contains("model")
-                && (lower.contains("not supported")
-                    || lower.contains("does not exist")
-                    || lower.contains("not found"))
-            {
-                (FailureType::ModelUnavailable, "model_unavailable", false)
-            } else {
-                return None;
-            };
+        let (failure_type, code, transient) = if lower.contains("usage limit")
+            || lower.contains("hit your limit")
+            || lower.contains("out of credits")
+        {
+            (FailureType::DailyQuota, "usage_limit", false)
+        } else if lower.contains("rate limit")
+            || has_token(&lower, "429")
+            || lower.contains("too many requests")
+        {
+            (FailureType::TempRateLimit, "rate_limit", true)
+        } else if has_token(&lower, "401")
+            || lower.contains("unauthorized")
+            || lower.contains("codex login")
+            || lower.contains("not logged in")
+        {
+            (FailureType::Auth, "unauthorized", false)
+        } else if lower.contains("reconnecting")
+            || lower.contains("stream disconnected")
+            || lower.contains("waiting for network")
+            || lower.contains("error sending request")
+        {
+            // P01 Test D: Codex reintenta solo y espera la red sin fallar.
+            (FailureType::Network, "network", true)
+        } else if lower.contains("model")
+            && (lower.contains("not supported")
+                || lower.contains("does not exist")
+                || lower.contains("not found"))
+        {
+            (FailureType::ModelUnavailable, "model_unavailable", false)
+        } else {
+            return None;
+        };
         Some(ProviderError {
             failure_type,
             raw_code: Some(code.into()),
@@ -448,4 +455,20 @@ pub fn quota_from_rollout(rollout: &Path) -> Vec<QuotaSnapshot> {
 
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/codex")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbers_containing_status_codes_are_not_false_positive_errors() {
+        let adapter = CodexAdapter::default();
+        assert!(
+            adapter
+                .parse_error("Revisé 4012 líneas de código")
+                .is_none()
+        );
+        assert!(adapter.parse_error("Procesé 4290 peticiones").is_none());
+    }
 }

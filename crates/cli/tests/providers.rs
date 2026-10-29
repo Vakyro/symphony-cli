@@ -3,13 +3,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
-use common::{fake_agent, symphonyd};
+use common::{DaemonGuard, fake_agent, symphonyd};
 
 use std::path::Path;
 use std::process::Command;
 
 /// Corre `symphony providers` con un home propio y solo `bin` en el PATH.
 fn providers(bin: &Path, home: &Path) -> String {
+    let daemon = DaemonGuard::new(home);
     let run = |args: &[&str]| {
         let out = Command::new(env!("CARGO_BIN_EXE_symphony"))
             .args(args)
@@ -26,7 +27,7 @@ fn providers(bin: &Path, home: &Path) -> String {
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
     let listed = run(&["providers"]);
-    run(&["daemon", "stop"]);
+    assert!(daemon.stop().unwrap().status.success());
     listed
 }
 
@@ -81,6 +82,7 @@ fn usage_without_runs_says_so() {
     let bin = dir.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let home = dir.path().join("h");
+    let daemon = DaemonGuard::new(&home);
     let run = |args: &[&str]| {
         let out = Command::new(env!("CARGO_BIN_EXE_symphony"))
             .args(args)
@@ -93,7 +95,7 @@ fn usage_without_runs_says_so() {
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
     let out = run(&["usage", "--days", "3"]);
-    run(&["daemon", "stop"]);
+    assert!(daemon.stop().unwrap().status.success());
     assert!(
         out.contains("Sin uso registrado en los últimos 3 días"),
         "{out}"

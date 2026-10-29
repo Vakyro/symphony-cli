@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use symphony_adapter_common::hooks::{classify_error_category, parse_standard_hook};
 use symphony_adapter_common::{
     AdapterError, AgentEvent, AuthStatus, Detection, HookCommand, ModelInfo, ProcessSpec,
-    ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest,
+    ProviderAdapter, ProviderError, QuotaSnapshot, ResumeRequest, SpawnRequest, has_token,
     parse_retry_after_ms,
 };
 use symphony_core::FailureType;
@@ -105,7 +105,7 @@ fn user_message(text: &str) -> Vec<u8> {
 }
 
 fn s(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).map(str::to_string)
+    symphony_adapter_common::json_str(v, key)
 }
 
 impl ClaudeAdapter {
@@ -194,7 +194,9 @@ impl ClaudeAdapter {
             spec = spec.arg("--plugin-dir").arg(dir);
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         Ok(spec)
     }
@@ -379,9 +381,25 @@ impl ProviderAdapter for ClaudeAdapter {
                 .collect(),
             (Some("result"), _) if v.get("is_error").and_then(Value::as_bool) == Some(true) => {
                 let text = s(&v, "result").unwrap_or_default();
-                self.parse_error(&text)
-                    .map(|e| vec![AgentEvent::ProviderError(e)])
-                    .unwrap_or_default()
+                if let Some(e) = self.parse_error(&text) {
+                    vec![AgentEvent::ProviderError(e)]
+                } else {
+                    let subtype = s(&v, "subtype");
+                    let error = ProviderError {
+                        failure_type: FailureType::Unknown,
+                        raw_code: subtype,
+                        message: symphony_core::redact(&text).chars().take(500).collect(),
+                        retry_after_ms: parse_retry_after_ms(&text),
+                        resets_at: None,
+                        transient: false,
+                    };
+                    vec![
+                        AgentEvent::ProviderError(error),
+                        AgentEvent::TurnFinished {
+                            last_message: s(&v, "result"),
+                        },
+                    ]
+                }
             }
             // Fin del turno: con `--input-format stream-json` el CLI no sale solo;
             // el runtime cierra stdin al ver este evento (ADR-0005, adenda P07).
@@ -418,45 +436,51 @@ impl ProviderAdapter for ClaudeAdapter {
 
     fn parse_error(&self, text: &str) -> Option<ProviderError> {
         let lower = text.to_lowercase();
-        let (failure_type, code) = if lower.contains("usage limit")
-            || lower.contains("limit will reset")
-            || lower.contains("weekly limit")
-        {
-            (
-                if lower.contains("weekly") {
-                    FailureType::WeeklyQuota
-                } else {
-                    FailureType::DailyQuota
-                },
-                "usage_limit",
-            )
-        } else if lower.contains("rate_limit")
-            || lower.contains("rate limit")
-            || lower.contains("429")
-        {
-            (FailureType::TempRateLimit, "rate_limit")
-        } else if lower.contains("authentication")
-            || lower.contains("/login")
-            || lower.contains("not logged in")
-            || lower.contains("401")
-        {
-            (FailureType::Auth, "authentication_failed")
-        } else if lower.contains("overloaded")
-            || lower.contains("529")
-            || lower.contains("server_error")
-        {
-            (FailureType::ProviderError, "overloaded")
-        } else if lower.contains("model_not_found") || lower.contains("model not found") {
-            (FailureType::ModelUnavailable, "model_not_found")
-        } else if lower.contains("connection error")
-            || lower.contains("network")
-            || lower.contains("enotfound")
-            || lower.contains("econnreset")
-        {
-            (FailureType::Network, "network")
-        } else {
-            return None;
-        };
+        // Un modelo que la suscripción no incluye (p. ej. Fable sin créditos) llega como 429
+        // `rate_limit_error`, pero esperar no lo arregla: es el modelo el que no se puede usar
+        // (dogfooding 2026-10-24: el failover eligió `claude/fable` y quedó esperando).
+        let (failure_type, code) =
+            if lower.contains("credits_required") || lower.contains("usage credits are required") {
+                (FailureType::ModelUnavailable, "credits_required")
+            } else if lower.contains("usage limit")
+                || lower.contains("limit will reset")
+                || lower.contains("weekly limit")
+            {
+                (
+                    if lower.contains("weekly") {
+                        FailureType::WeeklyQuota
+                    } else {
+                        FailureType::DailyQuota
+                    },
+                    "usage_limit",
+                )
+            } else if lower.contains("rate_limit")
+                || lower.contains("rate limit")
+                || has_token(&lower, "429")
+            {
+                (FailureType::TempRateLimit, "rate_limit")
+            } else if lower.contains("authentication")
+                || lower.contains("/login")
+                || lower.contains("not logged in")
+                || has_token(&lower, "401")
+            {
+                (FailureType::Auth, "authentication_failed")
+            } else if lower.contains("overloaded")
+                || has_token(&lower, "529")
+                || lower.contains("server_error")
+            {
+                (FailureType::ProviderError, "overloaded")
+            } else if lower.contains("model_not_found") || lower.contains("model not found") {
+                (FailureType::ModelUnavailable, "model_not_found")
+            } else if lower.contains("connection error")
+                || lower.contains("network")
+                || lower.contains("enotfound")
+                || lower.contains("econnreset")
+            {
+                (FailureType::Network, "network")
+            } else {
+                return None;
+            };
         Some(ProviderError {
             failure_type,
             raw_code: Some(code.into()),
@@ -471,4 +495,47 @@ impl ProviderAdapter for ClaudeAdapter {
 /// Fixtures L1 reales, sanitizados (`fixtures/providers/claude-code/`).
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/claude-code")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_with_unrecognized_error_emits_provider_error_and_turn_finished() {
+        let adapter = ClaudeAdapter::default();
+        let line = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Reached maximum number of turns"}"#;
+        let events = adapter.parse_stream_line(line);
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            AgentEvent::ProviderError(e) => {
+                assert_eq!(e.failure_type, FailureType::Unknown);
+                assert_eq!(e.raw_code.as_deref(), Some("error_max_turns"));
+                assert_eq!(e.message, "Reached maximum number of turns");
+                assert!(!e.transient);
+            }
+            other => panic!("esperaba ProviderError, obtuve {other:?}"),
+        }
+        match &events[1] {
+            AgentEvent::TurnFinished { last_message } => {
+                assert_eq!(
+                    last_message.as_deref(),
+                    Some("Reached maximum number of turns")
+                );
+            }
+            other => panic!("esperaba TurnFinished, obtuve {other:?}"),
+        }
+    }
+
+    #[test]
+    fn numbers_containing_status_codes_are_not_false_positive_errors() {
+        let adapter = ClaudeAdapter::default();
+        assert!(
+            adapter
+                .parse_error("Corregí 4010 líneas, el build falló")
+                .is_none()
+        );
+        assert!(adapter.parse_error("Procesadas 4290 peticiones").is_none());
+        assert!(adapter.parse_error("Línea 5290 con warning").is_none());
+    }
 }

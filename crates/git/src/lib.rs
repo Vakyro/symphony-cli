@@ -306,6 +306,17 @@ impl Repo {
             .is_empty())
     }
 
+    /// Sin ningún cambio, tampoco archivos nuevos sin seguimiento (los ignorados no cuentan):
+    /// lo que hay que comprobar antes de borrar un worktree.
+    pub fn has_no_work(&self) -> Result<bool, GitError> {
+        Ok(self.text(["status", "--porcelain"])?.is_empty())
+    }
+
+    /// Estado completo del worktree en un formato estable, incluidos los archivos sin seguimiento.
+    pub fn status_porcelain(&self) -> Result<String, GitError> {
+        self.text(["status", "--porcelain"])
+    }
+
     /// Integra `branch` en la rama actual con un commit de merge (`--no-ff`). Con conflictos
     /// aborta el merge y devuelve los archivos, sin dejar el worktree a medias.
     pub fn merge_no_ff(&self, branch: &str, message: &str) -> Result<MergeOutcome, GitError> {

@@ -38,4 +38,7 @@ daemon: corriendo
 $ symphony daemon stop
 daemon: detenido
 
+$ symphony daemon start
+daemon: iniciado (pid [..])
+
 ```

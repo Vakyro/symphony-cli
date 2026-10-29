@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::{path_with_fake_claude, symphonyd};
+use common::{path_with_fake_claude, stop_daemon, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -90,5 +90,5 @@ fn skills_and_mcp_servers_are_listed_and_toggled() {
     let (_, out, _) = symphony(&home, &repo, &["mcp", "list"]);
     assert!(out.contains("off fs"), "{out}");
 
-    symphony(&home, &repo, &["daemon", "stop"]);
+    assert!(stop_daemon(&home).status.success());
 }

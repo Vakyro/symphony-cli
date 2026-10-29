@@ -165,9 +165,13 @@ impl KimiAdapter {
     }
 
     fn base_spec(&self, req: &SpawnRequest) -> Result<ProcessSpec, AdapterError> {
+        // Kimi es Python: en Windows, con la salida en un pipe, escribe en cp1252 y se cae con el
+        // primer carácter que no cabe (p. ej. «⛔» leído de un archivo). Dogfooding 2026-10-24.
         let mut spec = ProcessSpec::new(self.binary()?)
             .args(["--print", "--output-format", "stream-json"])
             .cwd(&req.worktree)
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUTF8", "1")
             .with_stdin();
         if req.model != DEFAULT_MODEL {
             spec = spec.args(["-m", &req.model]);
@@ -190,7 +194,9 @@ impl KimiAdapter {
                 .arg(servers.to_string());
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         Ok(spec)
     }
@@ -344,8 +350,12 @@ impl ProviderAdapter for KimiAdapter {
         let lower = text.to_lowercase();
         let (failure_type, code, transient) = if lower.contains("llm not set") {
             (FailureType::ModelUnavailable, "llm_not_set", false)
-        } else if lower.contains("insufficient balance")
-            || lower.contains("quota")
+        } else if lower.contains("subscription does not") || lower.contains("higher-tier") {
+            // 403 de un modelo fuera del plan (`kimi-for-coding-highspeed`); llega partido en varias
+            // líneas por stdout y la primera ya lo dice (dogfooding 2026-10-24).
+            (FailureType::ModelUnavailable, "plan_without_model", false)
+        } else if lower.contains("quota exceeded")
+            || lower.contains("insufficient balance")
             || lower.contains("usage limit")
         {
             (FailureType::DailyQuota, "quota", false)
@@ -354,6 +364,8 @@ impl ProviderAdapter for KimiAdapter {
             || lower.contains("too many requests")
         {
             (FailureType::TempRateLimit, "rate_limit", true)
+        } else if lower.contains("quota") {
+            (FailureType::DailyQuota, "quota", false)
         } else if has_token(&lower, "401")
             || lower.contains("unauthorized")
             || lower.contains("kimi login")
@@ -376,4 +388,29 @@ impl ProviderAdapter for KimiAdapter {
 
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/kimi")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_with_quota_text_is_classified_as_transient() {
+        let adapter = KimiAdapter::default();
+        let err = adapter
+            .parse_error("rate limit: too many requests, quota per minute")
+            .expect("debe clasificar el error");
+        assert_eq!(err.failure_type, FailureType::TempRateLimit);
+        assert!(err.transient);
+    }
+
+    /// El mensaje real del límite de 5 h (dogfooding 2026-10-26): trae «429» pero es cuota.
+    #[test]
+    fn the_five_hour_limit_is_quota_not_a_transient_429() {
+        let err = KimiAdapter::default()
+            .parse_error(r#"Error code: 429 - {'error': {'message': "You've reached your 5-hour usage limit"}}"#)
+            .expect("debe clasificar el error");
+        assert_eq!(err.failure_type, FailureType::DailyQuota);
+        assert!(!err.transient);
+    }
 }

@@ -162,7 +162,9 @@ impl CopilotAdapter {
                 .args(["--available-tools", name]);
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         Ok(spec)
     }
@@ -311,7 +313,7 @@ impl ProviderAdapter for CopilotAdapter {
         let (failure_type, code, transient) =
             if lower.contains("model") && lower.contains("is not available") {
                 (FailureType::ModelUnavailable, "model_unavailable", false)
-            } else if lower.contains("quota") || lower.contains("premium request") {
+            } else if lower.contains("quota exceeded") || lower.contains("usage limit") {
                 (FailureType::DailyQuota, "quota", false)
             } else if lower.contains("rate limit")
                 || lower.contains("rate-limit")
@@ -319,6 +321,8 @@ impl ProviderAdapter for CopilotAdapter {
                 || lower.contains("too many requests")
             {
                 (FailureType::TempRateLimit, "rate_limit", true)
+            } else if lower.contains("quota") || lower.contains("premium request") {
+                (FailureType::DailyQuota, "quota", false)
             } else if has_token(&lower, "401")
                 || lower.contains("unauthorized")
                 || lower.contains("copilot login")
@@ -342,4 +346,19 @@ impl ProviderAdapter for CopilotAdapter {
 
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/copilot")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_with_quota_text_is_classified_as_transient() {
+        let adapter = CopilotAdapter::default();
+        let err = adapter
+            .parse_error("rate limit: too many requests, quota per minute")
+            .expect("debe clasificar el error");
+        assert_eq!(err.failure_type, FailureType::TempRateLimit);
+        assert!(err.transient);
+    }
 }

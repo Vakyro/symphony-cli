@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::{fake_agent, symphonyd};
+use common::{fake_agent, stop_daemon, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -126,6 +126,10 @@ fn agent_lifecycle_cli_commands() {
     assert!(stdout.contains("#2"), "salida: {stdout}");
 
     // 10. Cleanup daemon
-    let (ok, stdout, stderr) = symphony(&home, &repo, &["daemon", "stop"]);
-    assert!(ok, "daemon stop falló: {stdout}\n{stderr}");
+    let stopped = stop_daemon(&home);
+    assert!(
+        stopped.status.success(),
+        "daemon stop falló: {}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
 }

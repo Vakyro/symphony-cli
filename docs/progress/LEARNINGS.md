@@ -141,3 +141,39 @@ Una sola sesión cubrió P11.S2–S6, P10 completa y P09.S1–S10, con una compa
 - **`cargo fmt` cambia el texto antes de la siguiente edición:** un reemplazo de texto exacto falló porque fmt ya había partido la línea. Hay que releer antes de editar algo que fmt pudo tocar.
 - **Antes de la compactación (P11/P10):** la carrera de `symphonyd.exe` en Windows (resuelta con `pinned_bin`), `copilot --version` de 1,7–3,4 s en cada arranque de daemon (resuelto con detección en paralelo), y corridas live de 30–70 s por par de proveedores.
 - **El trabajo en sí** (tres fases con revisión de código y CI en tres sistemas) también es mucho para una sola sesión. Partirla por fase deja STATUS al día y evita la compactación.
+
+## Dogfooding (2026-10-24)
+- **Python en Windows escribe en cp1252 si su salida va a un pipe.** Kimi se caía con el primer carácter fuera de cp1252 (`⛔`). Cualquier CLI en Python necesita `PYTHONIOENCODING=utf-8` y `PYTHONUTF8=1`.
+- **Un servidor MCP no hereda el entorno del agente:** cada CLI le pasa solo lo que se le dice. Lo que el broker necesite (`SYMPHONY_*`, `CARGO_TARGET_DIR`) va explícito en su config.
+- **`Path::starts_with` distingue mayúsculas también en Windows:** `Desktop` ≠ `desktop`. Para comparar rutas de usuario, normalizar.
+- **El silencio no es cuelgue:** un `cargo test` en frío puede pasar 15 min sin una línea. El watchdog tiene que mirar algo más que la salida.
+- **Los modelos baratos rinden en tareas acotadas con un plan escrito:** los dos modelos gratis de OpenCode entregaron docs y CI correctos al primer intento.
+
+## Noche de dogfooding (2026-10-26/27)
+- **Compartir `target/` entre worktrees pisa binarios:** lo que se comparte es el `build-dir` de Cargo (`CARGO_BUILD_BUILD_DIR`); los binarios finales, en el `target/` de cada worktree.
+- **El fuzzing encuentra lo que proptest no:** dos fallos reales de idempotencia en `redact` (uno a los 80 s, otro a los 40 min) que el proptest con 50 000 casos no había visto. Correr cada target los 30 min completos.
+- **Lo que no se ejecuta en Linux no está probado:** el watcher perdía archivos en carpetas nuevas solo con inotify; el CI de ubuntu llevaba dos días en rojo sin que nadie lo mirara. Mirar el CI después de cada push.
+- **Los agentes no respetan el aislamiento por sí solos:** dos modelos escribieron en el repo principal (rutas absolutas, `cd` + `git commit`). Sin una guardia de Symphony, el integrador tiene que mirar `git status` y `git log` del repo principal en cada integración, y no dejar cambios sin commitear mientras corren agentes.
+- **Verificar la evidencia que cita un agente:** un checklist con 37 referencias inventadas parecía impecable (143/145 ✅). Un script que comprueba que cada `archivo::función` existe lo destapó en segundos.
+- **El disco también es un recurso:** el `target/` del integrador llegó a 104 GB y tumbó todo a medianoche. `cargo clean` de vez en cuando; Symphony debería vigilar el disco como vigila CPU y RAM.
+- **Correr `typos` antes de cada push:** un repo en español mete palabras nuevas en cada commit de docs.
+- **`is_clean` sin untracked no sirve para decidir un borrado:** un archivo nuevo sin commitear también es trabajo (`Repo::has_no_work`).
+
+## Fuga del soak (2026-10-27)
+- **Una tarea de tokio con un clon fuerte del dueño lo mantiene vivo para siempre:** el watchdog de `Runtime` era un bucle infinito con `Runtime` clonado, y cada reabrir el runtime dejaba uno vivo (~0,25 MB). Las tareas de fondo de un objeto deben guardar `Weak` y salir cuando `upgrade()` falla.
+- **Separar variables antes de adivinar:** el soak ya tenía `SOAK_RESTART_SECS`; correrlo sin reinicios (plano, 25 → 27 MB) y con reinicios cada 5 s (crece) señaló la causa en 7 minutos, sin heap profiler.
+- **Revisar las tareas de fondo del daemon al buscar fugas:** `tokio::spawn` de bucles sin fin en `scheduling.rs`, `dependencies.rs` y `resources.rs` terminan con `CancellationToken`; el watchdog era la excepción.
+
+## Jornada de orquestación (2026-10-27)
+- **Dos `cargo` sobre el mismo `target/` se bloquean:** el soak tenía `soak.exe` abierto y el build de tests falló con `LNK1104`. Cada corrida larga en su propio `CARGO_TARGET_DIR`.
+- **Un guard por palabras sueltas da falsos positivos:** `https://…` se tomaba por ruta absoluta. Probar la guardia con URLs y rutas legítimas antes de integrar.
+- **Un agente que cae por cuota no pierde el trabajo:** `symphony switch` lo pasó de Antigravity a Kimi. Usarlo antes de rehacer.
+- **Un benchmark que necesita disco libre debe decirlo:** falló con 1,8 GB sin mensaje útil; pasó con 16 GB.
+- **Un run marcado `FAILED` puede traer código bueno:** #48 quedó `FAILED` con su commit sin hacer. Revisar el worktree antes de descartar.
+
+## Orquestación con Symphony (2026-10-28)
+- **Una sesión de agente no aguanta el gate completo:** #54 murió a los 59 min con `NO_HEARTBEAT` (exit 1) después de encadenar varias corridas de `nextest --workspace`. El agente arregla y verifica **como mucho el crate afectado** (`-p <crate>`); el gate completo lo corre el orquestador. Si un agente tiene que correr el gate, que sea su última acción y con el trabajo ya commiteado.
+- **Los `SYMPHONY_*` heredados contaminan los tests del CLI:** si el orquestador corre los tests desde dentro de un agente, `hook_emit`, `hook_scheduler` y MCP leen el home / el socket de la sesión y fallan (0 eventos frente a 20). Limpiar `SYMPHONY_*` (y `CARGO_BUILD_BUILD_DIR`) antes de `cargo xtask check`; si no, hay que depurar fallos que no existen.
+- **`daemon stop` no espera al proceso, solo al lock:** en Windows el proceso sigue destruyendo su runtime un instante y nextest lo ve vivo → `LEAK`. Un guard que capture el PID, pare, espere y haga `taskkill /F /T` lo cierra; hay que correr también en el `Drop` para que cubra las aserciones que fallan.
+- **`nextest` marca `LEAK` sin fallar ningún test:** el resumen puede decir `733 passed` y el gate salir en rojo. El motivo está en las líneas `LEAK` del log, no en el resumen.
+- **El gate no corre con el daemon del repo vivo:** `symphonyd.exe` en ejecución ocupa `target/debug/symphonyd.exe` y clippy falla con `failed to remove file`. Parar el daemon del proyecto (`symphony daemon stop`) antes de `cargo xtask check`, no después.

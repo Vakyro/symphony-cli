@@ -163,7 +163,14 @@ fn session_id_comes_from_stderr_only() {
 #[test]
 fn spawn_and_resume_specs_use_print_mode_and_the_session_flag() {
     let a = adapter();
-    let spawn = args(&a.spawn_spec(&request("kimi-x", Some("abc"))).unwrap());
+    let spec = a.spawn_spec(&request("kimi-x", Some("abc"))).unwrap();
+    // Python en Windows escribe en cp1252 si nadie le dice otra cosa (se caía con «⛔»).
+    assert!(
+        spec.env
+            .iter()
+            .any(|(k, v)| k == "PYTHONIOENCODING" && v == "utf-8")
+    );
+    let spawn = args(&spec);
     assert_eq!(
         spawn,
         [
@@ -264,4 +271,33 @@ fn the_symphony_harness_runs_kimi_with_no_tools_of_its_own() {
     let server = &mcp["mcpServers"]["symphony-context"];
     assert_eq!(server["args"], serde_json::json!(["mcp", "serve"]));
     assert_eq!(server["env"]["SYMPHONY_HARNESS"], "1");
+}
+
+/// Real (kimi 1.44, 2026-10-24): el modelo no está en el plan. Llega partido por stdout; la primera
+/// línea basta para no esperar ni reintentar ese modelo.
+#[test]
+fn a_model_outside_the_plan_is_unavailable() {
+    let ev = adapter().parse_stream_line(
+        "Error code: 403 - {'error': {'message': 'Your current subscription does not hav",
+    );
+    assert!(
+        matches!(
+            &ev[..],
+            [symphony_adapter_common::AgentEvent::ProviderError(e)]
+                if e.failure_type == symphony_core::FailureType::ModelUnavailable
+        ),
+        "{ev:?}"
+    );
+}
+
+#[test]
+fn internal_env_vars_are_not_passed_to_spec() {
+    let mut req = request("default", None);
+    req.env.push(("SYMPHONY_AGENT_ID".into(), "agent-1".into()));
+    req.env.push(("SYMPHONY_MCP_EXTRA".into(), "{}".into()));
+    req.env.push(("SYMPHONY_PLUGIN_DIR".into(), "/tmp".into()));
+    let spec = adapter().spawn_spec(&req).unwrap();
+    assert!(!spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"));
+    assert!(!spec.env.iter().any(|(k, _)| k == "SYMPHONY_PLUGIN_DIR"));
+    assert!(spec.env.iter().any(|(k, _)| k == "SYMPHONY_AGENT_ID"));
 }

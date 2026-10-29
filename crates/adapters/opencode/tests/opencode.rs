@@ -354,6 +354,13 @@ fn the_version_comes_from_the_npm_package_without_running_the_cli() {
     )
     .unwrap();
     assert_eq!(version_from_package(&exe).as_deref(), Some("1.18.34"));
+    // El nombre nuevo del paquete (2026-10).
+    std::fs::write(
+        pkg.join("package.json"),
+        r#"{"name":"@opencode/cli","version":"2.1.4"}"#,
+    )
+    .unwrap();
+    assert_eq!(version_from_package(&exe).as_deref(), Some("2.1.4"));
     // El `package.json` de otro paquete no cuenta.
     std::fs::write(
         pkg.join("package.json"),
@@ -406,6 +413,10 @@ fn mcp_servers_travel_in_the_config_env_per_invocation() {
     assert_eq!(parsed, cfg);
 
     assert_eq!(parsed["mcp"], mcp_config(&req).unwrap()["mcp"]);
+    assert!(
+        !spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"),
+        "las variables internas no deben propagarse al entorno del proceso CLI"
+    );
 
     // Sin hook ni servidores del usuario solo viaja el permiso del worktree, sin `mcp`.
     let plain = run_config(&request("default"));
@@ -491,4 +502,20 @@ fn the_harness_keeps_opencodes_tools_when_there_is_no_broker() {
     req.hook = None;
     req.env.push(("SYMPHONY_HARNESS".into(), "1".into()));
     assert!(run_config(&req)["permission"].get("bash").is_none());
+}
+
+/// opencode 2.x cambió la forma del error (`type`, `message`, `status`, `retryAfterMs`): antes
+/// llegaba como «: » y no pedía failover (dogfooding 2026-10-24).
+#[test]
+fn the_free_limit_of_opencode_2_is_a_quota_with_its_reset() {
+    let ev = adapter().parse_stream_line(&lines("error-free-limit-2.1.4.jsonl").remove(0));
+    assert!(
+        matches!(
+            &ev[..],
+            [AgentEvent::ProviderError(e)] if e.failure_type == FailureType::DailyQuota
+                && e.message.contains("Free usage limit")
+                && e.retry_after_ms == Some(6_968_000)
+        ),
+        "{ev:?}"
+    );
 }

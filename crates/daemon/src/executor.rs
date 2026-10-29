@@ -29,17 +29,38 @@ use crate::runtime::{Runtime, now_ms};
 /// Lo que hace falta para lanzar un executor.
 /// Cada cuánto se toma la foto del árbol de procesos de un run.
 const PROCESS_SAMPLE_EVERY: Duration = Duration::from_secs(5);
+/// CPU del árbol entre dos muestras que cuenta como latido (4 % de un núcleo en 5 s).
+const CPU_ALIVE_MS: u64 = 200;
+/// La CPU solo cuenta como latido si el CLI escribió algo en este tiempo: un proceso colgado en
+/// un bucle activo no vive para siempre. Dogfooding 2026-10-27: un agente de Antigravity siguió
+/// «vivo» casi 4 h sin escribir nada tras llenarse el disco.
+/// ponytail: tope fijo; Antigravity no escribe hasta terminar, así que una corrida suya de más
+/// de una hora cae aquí. Configurable si alguien lo necesita.
+const CPU_BEAT_MAX_SILENCE: Duration = Duration::from_secs(60 * 60);
 
 /// Límites del SO según `[performance]` del `config.toml` (se relee en cada lanzamiento).
 pub(crate) fn os_limits(home: &Path) -> symphony_process::Limits {
     let limits = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home))
         .map(|c| symphony_scheduler::OsLimits::from_config(&c.performance))
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            // Auditoría P13.S5, hallazgo 13: un `config.toml` roto no puede quitar los límites
+            // en silencio.
+            tracing::warn!(error = %e, "config.toml ilegible: el agente arranca sin límites del SO");
+            Default::default()
+        });
     symphony_process::Limits {
         max_memory_bytes: limits.max_memory_bytes,
         cpu_cores: limits.cpu_cores,
         max_processes: limits.max_processes,
     }
+}
+
+/// El pump ya no puede publicar (la base dejó de aceptar escrituras): mata el árbol y drena la
+/// salida pendiente. Sin esto el reenviador de `symphony_process` se bloquea con la cola llena y
+/// `wait` espera para siempre a un CLI que sigue vivo (auditoría P13.S5, hallazgo 5).
+async fn abort_unpublishable(proc: &mut Supervised) {
+    let _ = proc.terminate_tree();
+    while proc.next_output().await.is_some() {}
 }
 
 /// De dónde sale el agente y qué pide el reemplazo (`Runtime::pick_replacement`).
@@ -52,6 +73,35 @@ struct Replace<'a> {
     rotate: bool,
     /// Tamaño del handoff en tokens, para descartar modelos cuya ventana no lo cabe.
     needed_context: Option<u64>,
+}
+
+/// Foto del repo principal antes de un run; el worktree del agente no se incluye.
+struct MainWorkspace {
+    root: PathBuf,
+    before: WorkspaceSnapshot,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct WorkspaceSnapshot {
+    head: String,
+    status: String,
+}
+
+impl WorkspaceSnapshot {
+    fn capture(root: &Path) -> Result<Self, String> {
+        let repo = Repo::at(root);
+        let head = repo.head_commit().map_err(|e| e.to_string())?;
+        let status = repo.status_porcelain().map_err(|e| e.to_string())?;
+        Ok(Self { head, status })
+    }
+
+    fn shown_status(&self) -> &str {
+        if self.status.is_empty() {
+            "(limpio)"
+        } else {
+            &self.status
+        }
+    }
 }
 
 pub(crate) struct Launch {
@@ -146,6 +196,9 @@ pub(crate) fn needs_failover(e: &ProviderError) -> bool {
                 | FailureType::Auth
         )
 }
+
+/// Cuántas líneas de stderr se guardan con un run caído.
+const ERR_TAIL_LINES: usize = 3;
 
 /// Error de las operaciones sobre un agente existente, con frase legible.
 #[derive(Debug, thiserror::Error)]
@@ -284,7 +337,87 @@ impl Runtime {
         )
     }
 
+    /// Antes de cada run se fotografía el repo principal, no el worktree compartido del agente.
+    /// Si Git o el proyecto no se pueden leer, el run sigue y el fallo queda en el log.
+    async fn watch_main_workspace(&self, project: ProjectId) -> Option<MainWorkspace> {
+        let root = match self.read_op(|c| repo::get_project(c, project)) {
+            Ok(p) => PathBuf::from(p.root_path),
+            Err(e) => {
+                tracing::warn!(error = %e, "no se pudo localizar el repo principal para vigilarlo");
+                return None;
+            }
+        };
+        let capture_root = root.clone();
+        let before =
+            tokio::task::spawn_blocking(move || WorkspaceSnapshot::capture(&capture_root)).await;
+        match before {
+            Ok(Ok(before)) => Some(MainWorkspace { root, before }),
+            Ok(Err(e)) => {
+                tracing::warn!(root = %root.display(), error = %e, "no se pudo fotografiar el repo principal");
+                None
+            }
+            Err(e) => {
+                tracing::warn!(root = %root.display(), error = %e, "no se pudo fotografiar el repo principal");
+                None
+            }
+        }
+    }
+
+    /// Un cambio de HEAD o de `git status` mientras corría el agente es daño del workspace,
+    /// aunque el CLI haya terminado bien: queda visible en el Recovery Center.
+    async fn check_main_workspace(&self, l: &Launch, watched: Option<MainWorkspace>) {
+        let Some(watched) = watched else {
+            return;
+        };
+        let root = watched.root.clone();
+        let capture_root = root.clone();
+        let after =
+            tokio::task::spawn_blocking(move || WorkspaceSnapshot::capture(&capture_root)).await;
+        let after = match after {
+            Ok(Ok(after)) => after,
+            Ok(Err(e)) => {
+                tracing::warn!(root = %root.display(), error = %e, "no se pudo revisar el repo principal al cerrar el run");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(root = %root.display(), error = %e, "no se pudo revisar el repo principal al cerrar el run");
+                return;
+            }
+        };
+        if watched.before == after {
+            return;
+        }
+        let detail = format!(
+            "el repo principal {} cambió mientras corría el agente.\nHEAD antes: {}\nHEAD después: {}\ngit status antes:\n{}\ngit status después:\n{}",
+            root.display(),
+            watched.before.head,
+            after.head,
+            watched.before.shown_status(),
+            after.shown_status(),
+        );
+        let (project, agent, run) = (l.project_id, l.agent_id, l.run_id);
+        let result = self
+            .writer
+            .write(Box::new(move |t| {
+                repo::open_recovery_item(
+                    t,
+                    project,
+                    Some(agent),
+                    Some(run),
+                    "WORKSPACE_DAMAGED",
+                    &detail,
+                    now_ms(),
+                )?;
+                Ok(())
+            }))
+            .await;
+        if let Err(e) = result {
+            tracing::error!(agent = %agent, error = %e, "no se pudo registrar el daño del repo principal");
+        }
+    }
+
     async fn launch_inner(&self, l: Launch) -> Result<(), String> {
+        let main_workspace = self.watch_main_workspace(l.project_id).await;
         let mut env = vec![
             ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
             ("SYMPHONY_PROJECT_ID".into(), l.project_id.to_string()),
@@ -305,10 +438,14 @@ impl Runtime {
         let harness =
             symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&self.home))
                 .map(|c| c.harness.mode)
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "config.toml ilegible: harness por defecto");
+                    Default::default()
+                });
         if harness == symphony_core::HarnessMode::Symphony {
             env.push((symphony_adapter_common::ENV_HARNESS.into(), "1".into()));
         }
+        env.extend(crate::gc::cargo_env(&self.home, &l.worktree));
         env.extend(self.shared_env(&l).await);
         let spawn_req = SpawnRequest {
             worktree: l.worktree.clone(),
@@ -417,13 +554,14 @@ impl Runtime {
             );
         }
         let task: Pin<Box<dyn Future<Output = ()> + Send>> =
-            Box::pin(self.clone().pump(l, proc, rx));
+            Box::pin(self.clone().pump(l, proc, rx, main_workspace));
         self.pumps.spawn(task);
         Ok(())
     }
 
-    /// Foto del árbol de procesos del run hacia la tabla `processes` (P08.S4).
-    async fn record_processes(&self, l: &Launch, proc: &Supervised) {
+    /// Foto del árbol de procesos del run hacia la tabla `processes` (P08.S4). Devuelve el tiempo
+    /// de CPU acumulado del árbol, en ms.
+    async fn record_processes(&self, l: &Launch, proc: &Supervised) -> u64 {
         let samples: Vec<symphony_store::processes::ProcSample> = proc
             .process_tree()
             .into_iter()
@@ -437,8 +575,9 @@ impl Runtime {
             })
             .collect();
         if samples.is_empty() {
-            return;
+            return 0;
         }
+        let cpu = samples.iter().map(|p| p.cpu_time_ms).sum();
         let run = l.run_id;
         let _ = self
             .writer
@@ -451,23 +590,58 @@ impl Runtime {
                 )?)
             }))
             .await;
+        cpu
     }
 
     /// Lee la salida del CLI y atiende el control hasta que el proceso termina.
-    async fn pump(self, l: Launch, mut proc: Supervised, mut rx: mpsc::UnboundedReceiver<Control>) {
+    async fn pump(
+        self,
+        l: Launch,
+        mut proc: Supervised,
+        mut rx: mpsc::UnboundedReceiver<Control>,
+        main_workspace: Option<MainWorkspace>,
+    ) {
         let mut fatal: Option<ProviderError> = None;
+        // Las últimas líneas de stderr: si el CLI se cae, dicen por qué (dogfooding 2026-10-24).
+        let mut err_tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
         let mut control_open = true;
-        let mut monitor = tokio::time::interval(PROCESS_SAMPLE_EVERY);
+        let mut tree_cpu_ms = 0u64;
+        let mut suspended = false;
+        let mut last_line = std::time::Instant::now();
+        // Más seguido que el watchdog: si no, un árbol ocupado parecería callado.
+        // `interval` hace panic con 0: un `stale_after` de 0 no puede tumbar el pump.
+        let mut monitor = tokio::time::interval(
+            PROCESS_SAMPLE_EVERY
+                .min(self.stale_after / 3)
+                .max(Duration::from_millis(10)),
+        );
         monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let stopped = loop {
             tokio::select! {
-                _ = monitor.tick() => self.record_processes(&l, &proc).await,
+                _ = monitor.tick() => {
+                    // Un `cargo test` en frío puede pasar 15 min sin una línea: si el árbol gasta
+                    // CPU, el agente trabaja, no está colgado (dogfooding 2026-10-24).
+                    let cpu = self.record_processes(&l, &proc).await;
+                    // Contra la muestra anterior, no contra el máximo: la suma baja cuando un hijo
+                    // termina, y el siguiente comando no tiene que superar al anterior (auditoría
+                    // P13.S5, hallazgo 1).
+                    // Un árbol pausado está congelado a propósito, no colgado: sin salida ni CPU
+                    // el watchdog lo mataría (auditoría P13.S5, hallazgo 7).
+                    let busy = cpu >= tree_cpu_ms + CPU_ALIVE_MS
+                        && last_line.elapsed() < CPU_BEAT_MAX_SILENCE;
+                    if suspended || busy {
+                        self.beat(l.run_id);
+                    }
+                    tree_cpu_ms = cpu;
+                }
                 line = proc.next_output() => match line {
                     None => break None,
                     Some(OutputLine::Stdout(line)) => {
                         self.beat(l.run_id);
+                        last_line = std::time::Instant::now();
                         let mut end_turn = false;
                         if !self.handle_line(&l, &proc, &line, &mut fatal, &mut end_turn).await {
+                            abort_unpublishable(&mut proc).await;
                             break None;
                         }
                         if end_turn {
@@ -476,9 +650,17 @@ impl Runtime {
                     }
                     Some(OutputLine::Stderr(line)) => {
                         self.beat(l.run_id);
+                        last_line = std::time::Instant::now();
+                        if !line.trim().is_empty() {
+                            if err_tail.len() == ERR_TAIL_LINES {
+                                err_tail.pop_front();
+                            }
+                            err_tail.push_back(line.trim().chars().take(300).collect());
+                        }
                         let mut end_turn = false;
                         let events = l.adapter.parse_stderr_line(&line);
                         if !self.apply_events(&l, &proc, events, &mut fatal, &mut end_turn).await {
+                            abort_unpublishable(&mut proc).await;
                             break None;
                         }
                         if end_turn {
@@ -505,15 +687,20 @@ impl Runtime {
                         let _ = done.send(proc.write_stdin(&bytes).await.map_err(|e| e.to_string()));
                     }
                     Some(Control::Suspend(done)) => {
-                        let _ = done.send(proc.suspend().map_err(|e| e.to_string()));
+                        let r = proc.suspend().map_err(|e| e.to_string());
+                        suspended = suspended || r.is_ok();
+                        let _ = done.send(r);
                     }
                     Some(Control::Resume(done)) => {
-                        let _ = done.send(proc.resume().map_err(|e| e.to_string()));
+                        let r = proc.resume().map_err(|e| e.to_string());
+                        suspended = suspended && r.is_err();
+                        let _ = done.send(r);
                     }
                 },
             }
         };
         let exit = proc.wait().await;
+        self.check_main_workspace(&l, main_workspace).await;
         let run = l.run_id;
         let _ = self
             .writer
@@ -612,7 +799,7 @@ impl Runtime {
                 let _ = done.send(());
             }
             (None, Some(err)) => self.failover(&l, &err, code).await,
-            (None, None) => self.finish_natural(&l, exit).await,
+            (None, None) => self.finish_natural(&l, exit, err_tail).await,
         }
         self.bus.run_ended(l.run_id);
     }
@@ -680,7 +867,12 @@ impl Runtime {
     }
 
     /// El CLI terminó solo, sin un fallo de proveedor que pida failover.
-    async fn finish_natural(&self, l: &Launch, exit: ExitStatus) {
+    async fn finish_natural(
+        &self,
+        l: &Launch,
+        exit: ExitStatus,
+        err_tail: std::collections::VecDeque<String>,
+    ) {
         // ponytail: exit 0 = tarea terminada; el heartbeat (P06.S6) cubre los cuelgues.
         if exit == ExitStatus::Exited(0) {
             // Con plan por fases, el CLI que salió bien puede dejar fases pendientes (sesión
@@ -747,6 +939,15 @@ impl Runtime {
             ExitStatus::Killed(None) | ExitStatus::Unknown => {
                 (None, format!("{cli} terminó de forma inesperada"))
             }
+        };
+        let reason = if err_tail.is_empty() {
+            reason
+        } else {
+            let tail = Vec::from(err_tail).join(
+                "
+",
+            );
+            format!("{reason}; stderr: {}", symphony_core::redact(&tail))
         };
         self.finish_failed(l, RunStatus::Failed, code, &reason)
             .await;
@@ -1337,12 +1538,27 @@ impl Runtime {
         agent: AgentId,
         make: impl FnOnce(oneshot::Sender<T>) -> Control,
     ) -> Option<T> {
+        self.control_if(agent, None, make).await
+    }
+
+    /// Manda una orden al executor vivo del agente solo si sigue siendo `expected_run` (cuando se
+    /// indica), comprobándolo bajo el lock de `live`, y espera la respuesta.
+    pub(crate) async fn control_if<T>(
+        &self,
+        agent: AgentId,
+        expected_run: Option<RunId>,
+        make: impl FnOnce(oneshot::Sender<T>) -> Control,
+    ) -> Option<T> {
         let (tx, rx) = oneshot::channel();
         let sent = self
             .live
             .lock()
             .ok()
-            .and_then(|live| live.get(&agent).map(|r| r.control.send(make(tx)).is_ok()))
+            .and_then(|live| {
+                live.get(&agent)
+                    .filter(|r| expected_run.is_none_or(|run| r.run_id == run))
+                    .map(|r| r.control.send(make(tx)).is_ok())
+            })
             .unwrap_or(false);
         if !sent {
             return None;
@@ -2034,10 +2250,12 @@ impl Runtime {
                 Ok(())
             }))
             .await
-            .map_err(op_err)
+            .map_err(op_err)?;
+        self.reclaim_disk(false).await;
+        Ok(())
     }
 
-    /// Termina forzosamente el executor y el agente (FLOW §7).
+    /// Alias de `stop`: no hay una parada más fuerte (`stop` ya mata el árbol completo) (FLOW §7).
     pub async fn kill(&self, agent_id: AgentId) -> Result<(), AgentOpError> {
         self.stop(agent_id).await
     }

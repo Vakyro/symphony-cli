@@ -368,3 +368,45 @@ fn project_facts_enforces_single_current_per_key_in_db() {
         "el índice único parcial project_facts_one_current debe rechazar 2 CURRENT"
     );
 }
+
+#[test]
+fn deleting_a_directory_uri_removes_its_indexed_files() {
+    // Un `rm -rf` llega como un evento del directorio: sus archivos tienen que salir del
+    // índice, no solo la URI exacta del directorio (P13.S5).
+    let (conn, ..) = seeded();
+    for uri in [
+        "ctx://file/viejo/a.rs",
+        "ctx://file/viejo/sub/b.rs",
+        "ctx://file/viejo.txt",
+    ] {
+        conn.execute(
+            "INSERT INTO context_objects (id, uri, project_id, kind, blob_hash, created_at)
+             VALUES (?1, ?2, 'p1', 'FILE', 'h1', 0)",
+            rusqlite::params![ContextObjectId::new().to_string(), uri],
+        )
+        .unwrap();
+    }
+    let released = ctx::delete_file_prefix(&conn, "p1", "ctx://file/viejo/").unwrap();
+    assert_eq!(
+        released.len(),
+        2,
+        "solo los hijos del directorio: {released:?}"
+    );
+    let uris = ctx::file_uris(&conn, "p1").unwrap();
+    assert!(
+        uris.iter().all(|u| !u.starts_with("ctx://file/viejo/")),
+        "{uris:?}"
+    );
+    assert!(
+        uris.iter().any(|u| u == "ctx://file/viejo.txt"),
+        "el hermano con el mismo prefijo sin barra sigue: {uris:?}"
+    );
+    assert!(uris.iter().any(|u| u == "ctx://file/auth.ts"), "{uris:?}");
+    assert!(
+        ctx::file_uris(&conn, "p2")
+            .unwrap()
+            .iter()
+            .any(|u| u == "ctx://file/otro.ts"),
+        "no se toca otro proyecto"
+    );
+}

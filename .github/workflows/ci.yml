@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, "phase/**"]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,6 +25,67 @@ jobs:
         with:
           tool: cargo-nextest
       - run: cargo xtask check
+
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [frame_decoder, ctx_uri, redact, claude_stream]
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-10-01
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: nightly-2026-10-01
+      - name: Instalar cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Ejecutar el target durante 60 segundos
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60
+      - name: Guardar entradas que provocaron fallos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+  # P13.S7: release en seco. Construye con cargo-dist lo mismo que `release.yml` (archivos,
+  # instaladores, sha256) y lo deja como artefactos del workflow; no crea releases ni tags.
+  # P16.S4 instala desde estos artefactos en runners limpios.
+  release-dry-run:
+    name: release dry run (${{ matrix.target }})
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/phase/'))
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar dist (Unix)
+        if: runner.os != 'Windows'
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+      - name: Instalar dist (Windows)
+        if: runner.os == 'Windows'
+        run: powershell -ExecutionPolicy Bypass -c "irm https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.ps1 | iex"
+      - uses: Swatinem/rust-cache@v2
+      - name: dist build (local)
+        run: dist build --artifacts=local --target ${{ matrix.target }}
+      - name: dist build (global)
+        if: runner.os == 'Linux'
+        run: dist build --artifacts=global
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: target/distrib/
+          if-no-files-found: error
 
   msrv:
     name: msrv (1.95)
@@ -102,4 +164,53 @@ jobs:
         with:
           name: symphony-gui-${{ matrix.os }}
           path: apps/gui/src-tauri/target/release/bundle/**
+          if-no-files-found: error
+
+  # P13.S5: typos (ortografía) y lychee (links rotos en .md). La configuración
+  # vive en `_typos.toml` y `lychee.toml` en la raíz.
+  docs:
+    name: docs (typos + lychee + mdbook)
+    runs-on: ubuntu-latest
+    # Bloqueante desde 2026-10-27 (primera corrida revisada: palabras en español en
+    # `_typos.toml` y rutas históricas excluidas en `lychee.toml`).
+    steps:
+      - uses: actions/checkout@v4
+      - name: typos
+        uses: crate-ci/typos@v1.50.2
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2.9.0
+        with:
+          args: --offline --no-progress '**/*.md'
+      - uses: taiki-e/install-action@v2.87.30
+        with:
+          tool: mdbook
+      - name: mdbook
+        run: mdbook build docs/book -d "$RUNNER_TEMP/book"
+
+  # P13.S5: cobertura con cargo-llvm-cov en CI.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    # Sin umbral que falle todavía: se revisa de forma informativa en CI.
+    continue-on-error: true
+    env:
+      SYMPHONY_LIVE: ""
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2.87.30
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - name: Correr pruebas y generar lcov.info
+        run: cargo llvm-cov nextest --workspace --lcov --output-path lcov.info
+        env:
+          SYMPHONY_LIVE: ""
+      - name: Imprimir resumen por crate
+        run: cargo llvm-cov report --workspace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov.info
+          path: lcov.info
           if-no-files-found: error

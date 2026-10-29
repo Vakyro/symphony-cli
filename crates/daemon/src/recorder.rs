@@ -254,9 +254,12 @@ impl Recorder {
     ) -> WriteFn {
         let objects = self.objects.clone();
         let text = text.to_string();
+        // Trocear y comprimir cuesta CPU: se hace aquí, fuera del hilo del writer (P13.S5).
+        let prepared = (text.len() > INLINE_MAX)
+            .then(|| crate::context_index::prepare(&text, symphony_context::compress::Hint::Auto));
         Box::new(move |t| {
             let id = MessageId::new();
-            let (content, object) = if text.len() > INLINE_MAX {
+            let (content, object) = if let Some(prepared) = prepared {
                 // ponytail: el archivo del blob se escribe en el hilo del writer; mensajes largos son pocos.
                 let stored = objects
                     .put(t, text.as_bytes(), Some("text/plain"))
@@ -275,12 +278,7 @@ impl Recorder {
                     now,
                 )?;
                 // Buscable por el MCP de contexto (P09): el original sigue en su blob.
-                crate::context_index::index_text(
-                    t,
-                    object,
-                    &text,
-                    symphony_context::compress::Hint::Auto,
-                )?;
+                crate::context_index::apply(t, object, prepared)?;
                 (None, Some(object))
             } else {
                 (Some(text), None)

@@ -28,11 +28,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
 publish = false
+repository = "https://github.com/Vakyro/symphony-cli"
+homepage = "https://github.com/Vakyro/symphony-cli"
 
 # Se llena al usar cada crate (STACK §58, versiones de ADR-0001). Fuera de §58 → justificar en la bitácora.
 [workspace.dependencies]
@@ -68,7 +70,7 @@ blake3 = "1.8"
 zstd = "0.14"
 criterion = { version = "0.8.2", default-features = false }
 processkit = { version = "3.3", features = ["limits", "stats"] }
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system", "disk"] }
 ratatui = "0.30.2"
 
 [workspace.lints.rust]
@@ -86,3 +88,7 @@ undocumented_unsafe_blocks = "deny"
 opt-level = 3
 lto = "thin"
 # Nunca panic = "abort" (STACK §38): el cleanup y el diagnóstico dependen del unwinding.
+
+# P13.S7: perfil de los binarios que publica cargo-dist (mismo que release).
+[profile.dist]
+inherits = "release"

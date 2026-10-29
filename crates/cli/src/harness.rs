@@ -2,11 +2,13 @@
 //! sea el CLI que lo lleva. Funciones puras sobre el sistema de archivos y el shell, sin MCP: el
 //! broker (`mcp.rs`) solo las expone.
 //!
-//! Acceso local total (decisión de Leo, 2026-10-23): las rutas relativas cuelgan del directorio
-//! del agente (su worktree), pero nada impide ir más allá. Todos los errores son texto para el
-//! modelo: dicen qué pasó y cómo seguir.
+//! Las rutas relativas cuelgan del directorio del agente (su worktree). Los archivos fuera del
+//! proyecto conservan el acceso local, pero `shell` queda confinado al worktree: no acepta `cd`
+//! ni rutas absolutas fuera de él. Todos los errores son texto para el modelo: dicen qué pasó y
+//! cómo seguir.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use ignore::WalkBuilder;
@@ -20,11 +22,14 @@ const LINE_MAX: usize = 2000;
 /// Archivos de más de esto no se recorren en `grep`.
 const GREP_FILE_MAX: u64 = 2 * 1024 * 1024;
 const GREP_RESULTS: usize = 100;
+/// Tope duro de `max_results`: la llamada no puede pedir una respuesta sin límite (P13.S5).
+const GREP_MAX: usize = 1000;
 const GLOB_RESULTS: usize = 500;
 /// Lo que devuelve `shell` por flujo antes de recortar (cabeza y cola).
 const SHELL_OUT_MAX: usize = 30_000;
 pub const SHELL_TIMEOUT: Duration = Duration::from_secs(120);
-pub const SHELL_TIMEOUT_MAX: Duration = Duration::from_secs(600);
+/// Un `cargo test` en frío con otros agentes compilando pasa de 10 min (dogfooding 2026-10-24).
+pub const SHELL_TIMEOUT_MAX: Duration = Duration::from_secs(1800);
 
 fn resolve(root: &Path, p: &str) -> PathBuf {
     let p = Path::new(p);
@@ -33,6 +38,171 @@ fn resolve(root: &Path, p: &str) -> PathBuf {
     } else {
         root.join(p)
     }
+}
+
+/// Ruta normalizada sin `.`/`..` (sin tocar el disco: el archivo puede no existir), en minúsculas
+/// en Windows, para comparar prefijos.
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    if cfg!(windows) {
+        PathBuf::from(out.to_string_lossy().to_lowercase())
+    } else {
+        out
+    }
+}
+
+/// Un worktree por agente (PLAN §2): dentro del repo del proyecto, un agente solo escribe en su
+/// worktree. Fuera del proyecto rige el acceso local que el usuario le dio. Dogfooding
+/// 2026-10-26/27: dos modelos escribieron en el repo principal con rutas absolutas.
+fn outside_own_worktree(project: Option<&Path>, root: &Path, file: &Path) -> bool {
+    let Some(project) = project else {
+        return false;
+    };
+    let file = lexical(file);
+    file.starts_with(lexical(project)) && !file.starts_with(lexical(root))
+}
+
+/// La raíz del proyecto del agente: `SYMPHONY_HOME` es `<proyecto>/.symphony` (ADR-0018).
+fn project_root() -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var_os("SYMPHONY_HOME")?);
+    home.parent().map(Path::to_path_buf)
+}
+
+fn guard_write(root: &Path, file: &Path) -> Result<(), String> {
+    if outside_own_worktree(project_root().as_deref(), root, file) {
+        return Err(format!(
+            "{} está en el repo del proyecto pero fuera de tu worktree: escribe solo dentro de {} (rutas relativas)",
+            file.display(),
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Palabras de un comando sin interpretar variables ni sustituciones. Las comillas solo agrupan:
+/// así una ruta absoluta con espacios se comprueba entera y los separadores no ocultan un `cd`.
+fn shell_words(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    for c in command.chars() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else {
+                    word.push(c);
+                }
+            }
+            None => match c {
+                '\'' | '"' | '`' => quote = Some(c),
+                c if c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')') => {
+                    if !word.is_empty() {
+                        words.push(std::mem::take(&mut word));
+                    }
+                }
+                _ => word.push(c),
+            },
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// La primera ruta absoluta de una palabra, incluidas formas como `--archivo=/tmp/a` y `-CC:\a`.
+fn absolute_in_word(word: &str) -> Option<&str> {
+    if word.starts_with(['/', '\\']) {
+        return Some(word);
+    }
+    let bytes = word.as_bytes();
+    for i in 0..bytes.len().saturating_sub(2) {
+        if bytes[i].is_ascii_alphabetic()
+            && bytes[i + 1] == b':'
+            && matches!(bytes[i + 2], b'/' | b'\\')
+            && !word[i + 2..].starts_with("//")
+        {
+            return Some(&word[i..]);
+        }
+    }
+    word.split_once('=')
+        .map(|(_, value)| value)
+        .filter(|value| value.starts_with(['/', '\\']))
+}
+
+fn guard_shell(root: &Path, dir: &Path, command: &str) -> Result<(), String> {
+    if !lexical(dir).starts_with(lexical(root)) {
+        return Err(format!(
+            "comando rechazado: el directorio {} está fuera de tu worktree {}",
+            dir.display(),
+            root.display()
+        ));
+    }
+    for word in shell_words(command) {
+        if word.eq_ignore_ascii_case("cd") {
+            return Err(
+                "comando rechazado: no uses `cd`; el shell ya corre dentro de tu worktree".into(),
+            );
+        }
+        if let Some(path) = absolute_in_word(&word)
+            && !lexical(Path::new(path)).starts_with(lexical(root))
+        {
+            return Err(format!(
+                "comando rechazado: la ruta absoluta {path} está fuera de tu worktree {}",
+                root.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Sufijo único para los temporales de `write_atomic`.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Escribe el archivo de una vez: temporal en la misma carpeta, `sync_all` y `rename` encima.
+/// Un fallo a mitad deja intacta la versión anterior; nunca se trunca el original (P13.S5).
+fn write_atomic(file: &Path, content: &[u8]) -> Result<(), String> {
+    // A través de un symlink se escribe su destino, y el archivo conserva sus permisos
+    // (el bit ejecutable de un script), como con una escritura normal (revisión de P13).
+    let target = std::fs::canonicalize(file).ok();
+    let file = target.as_deref().unwrap_or(file);
+    let perms = std::fs::metadata(file).ok().map(|m| m.permissions());
+    let dir = file.parent().unwrap_or_else(|| Path::new("."));
+    let name = file.file_name().map_or_else(
+        || "archivo".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}.{seq}.symphony-tmp", std::process::id()));
+    let result = (|| -> Result<(), String> {
+        let mut tmp_file = std::fs::File::create(&tmp)
+            .map_err(|e| format!("no pude crear {}: {e}", tmp.display()))?;
+        std::io::Write::write_all(&mut tmp_file, content)
+            .map_err(|e| format!("no pude escribir {}: {e}", tmp.display()))?;
+        tmp_file
+            .sync_all()
+            .map_err(|e| format!("no pude sincronizar {}: {e}", tmp.display()))?;
+        drop(tmp_file);
+        if let Some(p) = &perms {
+            let _ = std::fs::set_permissions(&tmp, p.clone());
+        }
+        std::fs::rename(&tmp, file)
+            .map_err(|e| format!("no pude reemplazar {}: {e}", file.display()))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 fn cut_line(l: &str) -> String {
@@ -50,21 +220,39 @@ pub fn read(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<String, String> {
+    use std::io::BufRead as _;
     let file = resolve(root, path);
-    let bytes =
-        std::fs::read(&file).map_err(|e| format!("no pude leer {}: {e}", file.display()))?;
-    let text = String::from_utf8(bytes)
-        .map_err(|_| format!("{} no es texto UTF-8 (¿binario?)", file.display()))?;
-    let total = text.lines().count();
+    let opened =
+        std::fs::File::open(&file).map_err(|e| format!("no pude leer {}: {e}", file.display()))?;
     let first = offset.unwrap_or(1).max(1);
     let limit = limit.unwrap_or(READ_LINES).max(1);
-    let shown: Vec<String> = text
-        .lines()
-        .enumerate()
-        .skip(first - 1)
-        .take(limit)
-        .map(|(i, l)| format!("{:>6}\t{}", i + 1, cut_line(l)))
-        .collect();
+    // Línea a línea y solo hasta completar la página: un archivo de gigas no se recorre entero
+    // para devolver un rango corto (revisión de seguridad P13.S1 y P13.S5).
+    let mut reader = std::io::BufReader::new(opened);
+    let (mut total, mut shown) = (0usize, Vec::new());
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        let n = reader.read_line(&mut buf).map_err(|e| match e.kind() {
+            std::io::ErrorKind::InvalidData => {
+                format!("{} no es texto UTF-8 (¿binario?)", file.display())
+            }
+            _ => format!("no pude leer {}: {e}", file.display()),
+        })?;
+        if n == 0 {
+            break;
+        }
+        total += 1;
+        if total >= first {
+            shown.push(format!(
+                "{total:>6}\t{}",
+                cut_line(buf.trim_end_matches(['\r', '\n']))
+            ));
+            if shown.len() >= limit {
+                break;
+            }
+        }
+    }
     if shown.is_empty() {
         return Ok(format!(
             "(sin líneas desde la {first}: el archivo tiene {total})"
@@ -72,9 +260,10 @@ pub fn read(
     }
     let last = first - 1 + shown.len();
     let mut out = shown.join("\n");
-    if last < total {
+    // Para saber si quedan líneas basta con mirar el búfer: no se lee ni se valida el resto.
+    if reader.fill_buf().is_ok_and(|pending| !pending.is_empty()) {
         out.push_str(&format!(
-            "\n[mostradas {first}-{last} de {total}; pide el resto con `offset`]"
+            "\n[mostradas {first}-{last}; hay más líneas, pide el resto con `offset`]"
         ));
     }
     Ok(out)
@@ -83,11 +272,12 @@ pub fn read(
 /// Crea o reemplaza un archivo (con sus carpetas).
 pub fn write(root: &Path, path: &str, content: &str) -> Result<String, String> {
     let file = resolve(root, path);
+    guard_write(root, &file)?;
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("no pude crear {}: {e}", dir.display()))?;
     }
-    std::fs::write(&file, content)
+    write_atomic(&file, content.as_bytes())
         .map_err(|e| format!("no pude escribir {}: {e}", file.display()))?;
     Ok(format!(
         "escrito {} ({} bytes)",
@@ -106,6 +296,7 @@ pub fn edit(
     replace_all: bool,
 ) -> Result<String, String> {
     let file = resolve(root, path);
+    guard_write(root, &file)?;
     let text = std::fs::read_to_string(&file)
         .map_err(|e| format!("no pude leer {}: {e}", file.display()))?;
     if old.is_empty() {
@@ -136,7 +327,7 @@ pub fn edit(
             } else {
                 text.replacen(old.as_str(), &new, 1)
             };
-            std::fs::write(&file, changed)
+            write_atomic(&file, changed.as_bytes())
                 .map_err(|e| format!("no pude escribir {}: {e}", file.display()))?;
             Ok(format!("editado {} ({count} cambio(s))", file.display()))
         }
@@ -170,21 +361,27 @@ fn shown(base: &Path, p: &Path) -> String {
 /// Archivos que cumplen un patrón (`**/*.rs`, `src/*.ts`), sin lo que git ignora.
 pub fn glob(root: &Path, pattern: &str, path: Option<&str>) -> Result<String, String> {
     let base = path.map_or_else(|| root.to_path_buf(), |p| resolve(root, p));
+    // Se corta al llegar al límite: no se acumulan ni se ordenan millones de rutas (P13.S5).
     let mut found: Vec<String> = Vec::new();
+    let mut partial = false;
     for entry in walker(&base, Some(pattern))?.flatten() {
         if entry.file_type().is_some_and(|t| t.is_file()) {
+            if found.len() >= GLOB_RESULTS {
+                partial = true;
+                break;
+            }
             found.push(shown(&base, entry.path()));
         }
     }
-    found.sort();
     if found.is_empty() {
         return Ok("Sin resultados.".into());
     }
-    let total = found.len();
-    found.truncate(GLOB_RESULTS);
+    found.sort();
     let mut out = found.join("\n");
-    if total > GLOB_RESULTS {
-        out.push_str(&format!("\n[{total} en total; afina el patrón]"));
+    if partial {
+        out.push_str(&format!(
+            "\n[búsqueda parcial: hay más de {GLOB_RESULTS} archivos; afina el patrón]"
+        ));
     }
     Ok(out)
 }
@@ -203,26 +400,27 @@ pub fn grep(
         .build()
         .map_err(|e| format!("expresión regular inválida: {e}"))?;
     let base = path.map_or_else(|| root.to_path_buf(), |p| resolve(root, p));
-    let max = max.unwrap_or(GREP_RESULTS).max(1);
+    let max = max.unwrap_or(GREP_RESULTS).clamp(1, GREP_MAX);
     let mut hits: Vec<String> = Vec::new();
-    let mut total = 0;
-    let mut files: Vec<PathBuf> = Vec::new();
-    if base.is_file() {
-        files.push(base.clone());
+    let mut partial = false;
+    // En flujo: no se guardan todas las rutas ni se recorren todos los archivos si ya hay
+    // suficientes coincidencias (P13.S5).
+    let files: Box<dyn Iterator<Item = PathBuf>> = if base.is_file() {
+        Box::new(std::iter::once(base.clone()))
     } else {
-        for entry in walker(&base, glob)?.flatten() {
-            if entry.file_type().is_some_and(|t| t.is_file()) {
-                files.push(entry.into_path());
-            }
-        }
-    }
-    files.sort();
+        Box::new(
+            walker(&base, glob)?
+                .flatten()
+                .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+                .map(ignore::DirEntry::into_path),
+        )
+    };
     let rel_base = if base.is_file() {
         base.parent().unwrap_or(&base).to_path_buf()
     } else {
         base
     };
-    for file in files {
+    'archivos: for file in files {
         if std::fs::metadata(&file).is_ok_and(|m| m.len() > GREP_FILE_MAX) {
             continue;
         }
@@ -231,15 +429,16 @@ pub fn grep(
         };
         for (i, line) in text.lines().enumerate() {
             if re.is_match(line) {
-                total += 1;
-                if hits.len() < max {
-                    hits.push(format!(
-                        "{}:{}:{}",
-                        shown(&rel_base, &file),
-                        i + 1,
-                        cut_line(line.trim_end())
-                    ));
+                if hits.len() >= max {
+                    partial = true;
+                    break 'archivos;
                 }
+                hits.push(format!(
+                    "{}:{}:{}",
+                    shown(&rel_base, &file),
+                    i + 1,
+                    cut_line(line.trim_end())
+                ));
             }
         }
     }
@@ -247,9 +446,9 @@ pub fn grep(
         return Ok("Sin resultados.".into());
     }
     let mut out = hits.join("\n");
-    if total > hits.len() {
+    if partial {
         out.push_str(&format!(
-            "\n[{total} coincidencias; muestro {}]",
+            "\n[hay más coincidencias; muestro {} (búsqueda parcial)]",
             hits.len()
         ));
     }
@@ -277,23 +476,42 @@ fn clip(s: &str) -> String {
     )
 }
 
-/// El shell de la máquina: Git Bash en Windows si está (`bash.exe` del PATH suele ser el lanzador
-/// de WSL, que no es lo que se quiere), si no PowerShell; `sh` en el resto.
+/// El `bash.exe` de Git para Windows, si está (el `bash.exe` del PATH suele ser el lanzador de
+/// WSL, que no es lo que se quiere).
+#[cfg(windows)]
+fn git_bash() -> Option<PathBuf> {
+    ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .flat_map(|d| {
+            let d = PathBuf::from(d);
+            [
+                d.join("Git").join("bin").join("bash.exe"),
+                d.join("Programs").join("Git").join("bin").join("bash.exe"),
+            ]
+        })
+        .find(|p| p.is_file())
+}
+
+/// ¿El shell que se va a usar entiende la sintaxis de `sh`? Los tests lo consultan para no
+/// lanzar comandos de bash cuando toca PowerShell.
+#[cfg(test)]
+fn posix_shell() -> bool {
+    #[cfg(windows)]
+    {
+        git_bash().is_some()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
+/// El shell de la máquina: Git Bash en Windows si está, si no PowerShell; `sh` en el resto.
 fn shell_command(command: &str) -> tokio::process::Command {
     #[cfg(windows)]
     {
-        let git_bash = ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"]
-            .iter()
-            .filter_map(std::env::var_os)
-            .flat_map(|d| {
-                let d = PathBuf::from(d);
-                [
-                    d.join("Git").join("bin").join("bash.exe"),
-                    d.join("Programs").join("Git").join("bin").join("bash.exe"),
-                ]
-            })
-            .find(|p| p.is_file());
-        if let Some(bash) = git_bash {
+        if let Some(bash) = git_bash() {
             let mut c = tokio::process::Command::new(bash);
             c.arg("-c").arg(command);
             return c;
@@ -319,6 +537,7 @@ pub async fn shell(
     timeout: Option<Duration>,
 ) -> Result<String, String> {
     let dir = cwd.map_or_else(|| root.to_path_buf(), |c| resolve(root, c));
+    guard_shell(root, &dir, command)?;
     let timeout = timeout
         .filter(|t| !t.is_zero())
         .unwrap_or(SHELL_TIMEOUT)
@@ -337,7 +556,8 @@ pub async fn shell(
         .map_err(|e| format!("no pude lanzar el shell en {}: {e}", dir.display()))?;
     let pid = child.id();
     // Se lee la salida aparte: así, al vencer el tiempo, el árbol se mata antes de soltar el hijo.
-    let (out_task, err_task) = (drain(child.stdout.take()), drain(child.stderr.take()));
+    let (out_buf, out_task) = drain(child.stdout.take());
+    let (err_buf, err_task) = drain(child.stderr.take());
     match tokio::time::timeout(timeout, child.wait()).await {
         Err(_) => {
             kill_tree(pid);
@@ -351,15 +571,9 @@ pub async fn shell(
         }
         Ok(Err(e)) => Err(format!("falló la ejecución: {e}")),
         Ok(Ok(status)) => {
-            // Un proceso que dejó corriendo en segundo plano puede mantener abierta la salida.
-            let grab = |t: tokio::task::JoinHandle<Vec<u8>>| async move {
-                tokio::time::timeout(Duration::from_secs(2), t)
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .unwrap_or_default()
-            };
-            let (stdout, stderr) = (grab(out_task).await, grab(err_task).await);
+            // Un proceso que dejó algo corriendo en segundo plano puede mantener abierta la
+            // salida: se espera un poco y, si no cierra, se devuelve lo ya leído.
+            let (stdout, stderr) = tokio::join!(grab(out_buf, out_task), grab(err_buf, err_task));
             let stdout = String::from_utf8_lossy(&stdout);
             let stderr = String::from_utf8_lossy(&stderr);
             let code = status
@@ -387,17 +601,73 @@ pub async fn shell(
     }
 }
 
-/// Lee un flujo hasta que se cierra, en su propia tarea.
+/// Lo retenido de un flujo: cabeza, cola y cuántos bytes se omitieron.
+#[derive(Default)]
+struct Captured {
+    head: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
+    skipped: usize,
+}
+
+impl Captured {
+    fn push(&mut self, data: &[u8]) {
+        // Cabeza + marca + cola caben en SHELL_OUT_MAX: `clip` no vuelve a cortar.
+        const HALF: usize = SHELL_OUT_MAX / 2 - 64;
+        let mut data = data;
+        let take = HALF.saturating_sub(self.head.len()).min(data.len());
+        self.head.extend_from_slice(&data[..take]);
+        data = &data[take..];
+        self.tail.extend(data);
+        let excess = self.tail.len().saturating_sub(HALF);
+        self.tail.drain(..excess);
+        self.skipped += excess;
+    }
+
+    /// Lo leído hasta ahora, con el marcador de los bytes omitidos.
+    fn finish(&mut self) -> Vec<u8> {
+        let mut out = std::mem::take(&mut self.head);
+        if self.skipped > 0 {
+            out.extend_from_slice(format!("\n[… {} bytes omitidos …]\n", self.skipped).as_bytes());
+        }
+        out.extend(self.tail.drain(..));
+        out
+    }
+}
+
+type Shared = std::sync::Arc<std::sync::Mutex<Captured>>;
+
+/// El búfer aunque otra tarea hubiera muerto con el cerrojo tomado.
+fn retained(buf: &Shared) -> std::sync::MutexGuard<'_, Captured> {
+    match buf.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Lee un flujo hasta que se cierra, en su propia tarea, publicando lo leído en un búfer
+/// compartido: si un descendiente mantiene el pipe abierto, lo ya leído no se pierde (P13.S5).
 fn drain(
     s: Option<impl tokio::io::AsyncRead + Unpin + Send + 'static>,
-) -> tokio::task::JoinHandle<Vec<u8>> {
-    tokio::spawn(async move {
-        let mut buf = Vec::new();
+) -> (Shared, tokio::task::JoinHandle<()>) {
+    let buf: Shared = std::sync::Arc::default();
+    let writer = std::sync::Arc::clone(&buf);
+    let task = tokio::spawn(async move {
+        let mut chunk = [0u8; 8192];
         if let Some(mut s) = s {
-            let _ = tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf).await;
+            while let Ok(n @ 1..) = tokio::io::AsyncReadExt::read(&mut s, &mut chunk).await {
+                retained(&writer).push(&chunk[..n]);
+            }
         }
-        buf
-    })
+    });
+    (buf, task)
+}
+
+/// Espera a que el flujo cierre; si un descendiente lo mantiene abierto, corta la lectura y
+/// devuelve lo que ya estaba retenido, en vez de descartarlo.
+async fn grab(buf: Shared, mut task: tokio::task::JoinHandle<()>) -> Vec<u8> {
+    let _ = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
+    task.abort();
+    retained(&buf).finish()
 }
 
 /// `kill_on_drop` solo mata al shell; los hijos que dejó hay que matarlos por el árbol.
@@ -421,6 +691,33 @@ fn kill_tree(pid: Option<u32>) {
 
 #[cfg(test)]
 mod tests {
+    /// Dentro del repo del proyecto solo se escribe en el propio worktree; fuera, sin cambios.
+    #[test]
+    fn writes_inside_the_project_but_outside_the_worktree_are_refused() {
+        let project = Path::new("/p/repo");
+        let wt = Path::new("/p/repo/.symphony/worktrees/x/agent-1");
+        let out = |f: &str| outside_own_worktree(Some(project), wt, Path::new(f));
+        assert!(out("/p/repo/docs/a.md"), "el repo principal");
+        assert!(
+            out("/p/repo/.symphony/worktrees/x/agent-2/a.rs"),
+            "otro agente"
+        );
+        assert!(
+            out("/p/repo/.symphony/worktrees/x/agent-1/../agent-2/a.rs"),
+            "con .."
+        );
+        assert!(!out("/p/repo/.symphony/worktrees/x/agent-1/src/a.rs"));
+        assert!(
+            !out("/tmp/otra/cosa.txt"),
+            "fuera del proyecto rige el acceso local"
+        );
+        assert!(!outside_own_worktree(
+            None,
+            wt,
+            Path::new("/p/repo/docs/a.md")
+        ));
+    }
+
     use super::*;
 
     fn tree() -> (tempfile::TempDir, PathBuf) {
@@ -449,12 +746,47 @@ mod tests {
             page.contains("fn dos") && !page.contains("fn uno"),
             "{page}"
         );
-        assert!(page.contains("mostradas 2-2 de 3"), "{page}");
+        assert!(page.contains("mostradas 2-2; hay más líneas"), "{page}");
+        assert!(page.contains("offset"), "{page}");
         assert!(
             read(&root, "no-existe", None, None)
                 .unwrap_err()
                 .contains("no pude leer")
         );
+    }
+
+    #[test]
+    fn replacing_a_file_does_not_truncate_the_previous_version() {
+        use std::io::Read as _;
+        let (_d, root) = tree();
+        let path = root.join("src/b.txt");
+        let original = std::fs::read_to_string(&path).unwrap();
+        let mut opened = std::fs::File::open(&path).unwrap();
+        write(&root, "src/b.txt", "nuevo").unwrap();
+        let mut previous = String::new();
+        opened.read_to_string(&mut previous).unwrap();
+        assert_eq!(previous, original);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "nuevo");
+
+        let mut opened = std::fs::File::open(&path).unwrap();
+        edit(&root, "src/b.txt", "nuevo", "editado", false).unwrap();
+        previous.clear();
+        opened.read_to_string(&mut previous).unwrap();
+        assert_eq!(previous, "nuevo");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "editado");
+    }
+
+    /// Revisión de P13: escribir de forma atómica no le quita el bit ejecutable a un script.
+    #[cfg(unix)]
+    #[test]
+    fn editing_a_script_keeps_it_executable() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_d, root) = tree();
+        let path = root.join("src/b.txt");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write(&root, "src/b.txt", "#!/bin/sh\n").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
     }
 
     #[test]
@@ -530,6 +862,135 @@ mod tests {
             started.elapsed() < Duration::from_secs(3),
             "{:?}",
             started.elapsed()
+        );
+    }
+
+    #[test]
+    fn shell_refuses_cd_and_absolute_paths_outside_the_worktree() {
+        let (_d, root) = tree();
+        let outside = root.with_file_name("fuera-del-worktree");
+        for command in [
+            "cd ..".to_string(),
+            "echo listo && CD /tmp".to_string(),
+            format!("git -C {} status", outside.display()),
+            format!("echo {}", outside.display()),
+        ] {
+            let err = guard_shell(&root, &root, &command).unwrap_err();
+            assert!(err.contains("comando rechazado"), "{command}: {err}");
+        }
+        assert!(guard_shell(&root, &root, "echo https://ejemplo.com/a").is_ok());
+        let inside = root.join("src");
+        assert!(guard_shell(&root, &root, &format!("git -C {} status", inside.display())).is_ok());
+        assert!(guard_shell(&root, &outside, "echo no").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_huge_output_keeps_only_head_and_tail_in_memory() {
+        let big: Vec<u8> = (0..5_000_000u32)
+            .map(|i| if i % 80 == 79 { b'\n' } else { b'x' })
+            .chain(*b"FIN")
+            .collect();
+        let (buf, task) = drain(Some(std::io::Cursor::new(big)));
+        task.await.unwrap();
+        let text = String::from_utf8(retained(&buf).finish()).unwrap();
+        assert!(text.len() <= SHELL_OUT_MAX, "{}", text.len());
+        assert!(text.contains("bytes omitidos") && text.ends_with("FIN"));
+        assert_eq!(clip(&text), text, "no se corta dos veces");
+    }
+
+    #[test]
+    fn read_does_not_parse_beyond_the_requested_page() {
+        let (_d, root) = tree();
+        std::fs::write(root.join("pagina.txt"), b"primera\n\xff").unwrap();
+        let page = read(&root, "pagina.txt", None, Some(1)).unwrap();
+        assert!(
+            page.contains("primera") && page.contains("offset"),
+            "{page}"
+        );
+    }
+
+    #[test]
+    fn grep_reports_a_partial_search_at_the_requested_limit() {
+        let (_d, root) = tree();
+        std::fs::write(root.join("muchas.txt"), "hallazgo\n".repeat(300)).unwrap();
+        let hits = grep(&root, "hallazgo", Some("muchas.txt"), None, false, Some(2)).unwrap();
+        assert!(hits.contains("búsqueda parcial"), "{hits}");
+        assert_eq!(
+            hits.lines()
+                .filter(|line| line.starts_with("muchas.txt:"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn grep_caps_the_requested_number_of_results() {
+        let (_d, root) = tree();
+        std::fs::write(root.join("muchas.txt"), "hallazgo\n".repeat(1200)).unwrap();
+        let hits = grep(
+            &root,
+            "hallazgo",
+            Some("muchas.txt"),
+            None,
+            false,
+            Some(usize::MAX),
+        )
+        .unwrap();
+        assert!(
+            hits.lines()
+                .filter(|line| line.starts_with("muchas.txt:"))
+                .count()
+                <= 1000
+        );
+    }
+
+    #[test]
+    fn glob_reports_a_partial_search_at_its_limit() {
+        let (_d, root) = tree();
+        for i in 0..501 {
+            std::fs::write(root.join(format!("{i}.log")), "").unwrap();
+        }
+        let found = glob(&root, "*.log", None).unwrap();
+        assert!(found.contains("búsqueda parcial"), "{found}");
+        assert_eq!(
+            found.lines().filter(|line| line.ends_with(".log")).count(),
+            500
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_keeps_output_when_a_descendant_holds_the_pipe_open() {
+        // El `&` es sintaxis de sh: con el PowerShell de reserva no se monta el escenario.
+        if !posix_shell() {
+            return;
+        }
+        let (_d, root) = tree();
+        let started = std::time::Instant::now();
+        let output = shell(&root, "sleep 6 & echo resultado-retenido", None, None)
+            .await
+            .unwrap();
+        assert!(output.contains("resultado-retenido"), "{output}");
+        // No espera al nieto: corta la lectura a los dos segundos y devuelve lo leído.
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn read_streams_lines_and_still_rejects_binaries() {
+        let (_d, root) = tree();
+        std::fs::write(root.join("bin.dat"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
+        assert!(
+            read(&root, "bin.dat", None, None)
+                .unwrap_err()
+                .contains("UTF-8")
+        );
+        std::fs::write(root.join("crlf.txt"), "uno\r\ndos\r\n").unwrap();
+        assert_eq!(
+            read(&root, "crlf.txt", None, None).unwrap(),
+            "     1\tuno\n     2\tdos"
         );
     }
 }

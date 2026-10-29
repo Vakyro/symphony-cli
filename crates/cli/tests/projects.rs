@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::{fake_agent, symphonyd};
+use common::{DaemonGuard, fake_agent, stop_daemon, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -67,6 +67,7 @@ fn each_project_keeps_its_own_state_and_cannot_see_the_others() {
     let dir = tempfile::tempdir().unwrap();
     let user = dir.path().join("user");
     let (a, b) = (repo(dir.path(), "alfa"), repo(dir.path(), "beta"));
+    let daemons = [&a, &b].map(|root| DaemonGuard::new(&root.join(".symphony")));
 
     let (ok, out) = symphony(&user, &a, &["spawn", "Tarea exclusiva de alfa"]);
     assert!(ok, "spawn en alfa: {out}");
@@ -121,9 +122,14 @@ fn each_project_keeps_its_own_state_and_cannot_see_the_others() {
         "no debe crear estado dentro del worktree"
     );
 
-    for root in [&a, &b] {
-        let (ok, out) = symphony(&user, root, &["daemon", "stop"]);
-        assert!(ok, "daemon stop: {out}");
+    for daemon in &daemons {
+        let stopped = daemon.stop().unwrap();
+        let out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&stopped.stdout),
+            String::from_utf8_lossy(&stopped.stderr)
+        );
+        assert!(stopped.status.success(), "daemon stop: {out}");
     }
 }
 
@@ -132,6 +138,7 @@ fn migrate_split_moves_a_global_database_into_each_project() {
     let dir = tempfile::tempdir().unwrap();
     let user = dir.path().join("user");
     let (a, b) = (repo(dir.path(), "alfa"), repo(dir.path(), "beta"));
+    let daemon = DaemonGuard::new(&a.join(".symphony"));
     {
         let conn = symphony_store::open(&user.join("symphony.db")).unwrap();
         for (id, name, root, at) in [("pa", "alfa", &a, 1), ("pb", "beta", &b, 2)] {
@@ -182,8 +189,13 @@ fn migrate_split_moves_a_global_database_into_each_project() {
     // El daemon del proyecto abre la base ya repartida.
     let (ok, out) = symphony(&user, &a, &["agents"]);
     assert!(ok, "agents tras migrar: {out}");
-    let (ok, out) = symphony(&user, &a, &["daemon", "stop"]);
-    assert!(ok, "daemon stop: {out}");
+    let stopped = daemon.stop().unwrap();
+    let out = format!(
+        "{}{}",
+        String::from_utf8_lossy(&stopped.stdout),
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert!(stopped.status.success(), "daemon stop: {out}");
 }
 
 /// ADR-0020: una carpeta cualquiera (sin git) pasa a ser un proyecto de documentos y el router
@@ -221,6 +233,8 @@ fn a_plain_folder_becomes_a_document_project() {
     );
     assert!(ok, "spawn con @write: {out}");
     assert!(out.contains("agente #1 creado"), "{out}");
-    let (ok, out) = symphony(&user, &folder, &["daemon", "stop"]);
-    assert!(ok, "daemon stop: {out}");
+    assert!(
+        stop_daemon(&folder.join(".symphony")).status.success(),
+        "daemon stop"
+    );
 }

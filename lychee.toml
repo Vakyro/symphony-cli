@@ -1,0 +1,16 @@
+# lychee (https://github.com/lycheeverse/lychee) — P13.S5
+# Se carga automáticamente: es el default de `--config` en lychee >= 0.15.
+
+# Trata las exclusiones como regex sobre el path
+exclude_path = [
+  "target",
+  "docs/spec",
+  # Prompts de handoff grabados en el spike de P01: citan rutas de la máquina de Leo.
+  "spikes/results/test-d-handoffs",
+]
+
+# Excluye URLs / locales que no se deben chequear (regex sobre la URL)
+exclude = [
+  "localhost",
+  "127\\.0\\.0\\.1",
+]

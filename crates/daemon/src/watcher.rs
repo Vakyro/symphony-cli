@@ -14,7 +14,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{RecursiveMode, Watcher as _};
 use symphony_object_store::ObjectStore;
 use symphony_store::WriterHandle;
-use symphony_store::context::{self, FileUpsert};
+use symphony_store::context::{self, FileUpsert, NewChunk};
 use tokio::sync::mpsc;
 
 /// Archivos más grandes no se indexan (se nombran en el handoff igual).
@@ -23,6 +23,10 @@ const MAX_FILE_BYTES: u64 = 512 * 1024;
 const MAX_FILES: usize = 5_000;
 /// Silencio que se espera antes de aplicar una ráfaga de cambios.
 const DEBOUNCE: Duration = Duration::from_millis(300);
+/// Tope de espera de una ráfaga: un flujo de eventos sin pausa no puede dejarla sin aplicar.
+const MAX_BURST: Duration = Duration::from_secs(2);
+/// Capacidad de la cola del callback de notify. Si se llena, se re-escanea el proyecto.
+const WATCH_QUEUE: usize = 4096;
 /// Archivos por transacción del writer.
 const BATCH: usize = 200;
 
@@ -37,6 +41,10 @@ struct Change {
     rel: String,
     text: Option<String>,
 }
+
+/// Lo ya calculado fuera del writer: `(uri, texto y chunks)`, con `None` cuando el archivo ya no
+/// existe y solo hay que borrarlo del índice.
+type PreparedFile = (String, Option<(String, Vec<NewChunk>)>);
 
 /// `src\a.rs` → `ctx://file/src/a.rs` (y `@scope/x.ts` → `ctx://file/%40scope/x.ts`), solo si es
 /// una dirección válida.
@@ -53,6 +61,17 @@ fn uri_of(rel: &str) -> Option<String> {
 fn hidden(rel: &Path) -> bool {
     rel.components()
         .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+}
+
+/// ¿La ruta puede tocar lo indexado? Lo oculto y lo ignorado se descartan ya en el callback de
+/// notify, antes de encolarlo (P13.S5).
+fn wanted(root: &Path, ignore: &Gitignore, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    !rel.as_os_str().is_empty()
+        && !hidden(rel)
+        && !ignore.matched_path_or_any_parents(rel, false).is_ignore()
 }
 
 /// El texto del archivo si es indexable (existe, cabe y no es binario).
@@ -135,8 +154,27 @@ fn changes(root: &Path, ignore: &Gitignore, paths: BTreeSet<PathBuf>) -> Vec<Cha
         {
             continue;
         }
+        if path.is_dir() {
+            // Una carpeta nueva o movida llega como un solo evento, y en Linux (inotify) lo que se
+            // escribe en ella antes de que el watcher la vigile no avisa: se recorre entera.
+            out.extend(
+                scan(&path)
+                    .into_iter()
+                    .map(|c| Change {
+                        rel: rel.join(&c.rel).to_string_lossy().into_owned(),
+                        text: c.text,
+                    })
+                    .filter(|c| {
+                        !ignore
+                            .matched_path_or_any_parents(Path::new(&c.rel), false)
+                            .is_ignore()
+                            && !ignored_by_nested(root, &root.join(&c.rel))
+                    }),
+            );
+            continue;
+        }
         let rel_s = rel.to_string_lossy().into_owned();
-        if path.is_dir() || ignored_by_nested(root, &path) {
+        if ignored_by_nested(root, &path) {
             continue;
         }
         let text = read_text(&path);
@@ -156,15 +194,27 @@ fn changes(root: &Path, ignore: &Gitignore, paths: BTreeSet<PathBuf>) -> Vec<Cha
 
 /// Guarda una tanda de cambios en una transacción del writer.
 async fn apply(writer: &WriterHandle, objects: &ObjectStore, project: &str, batch: Vec<Change>) {
-    // El archivo del blob se escribe acá, fuera del hilo del writer.
-    let prepared: Vec<(String, Option<(String, String)>)> = batch
+    // El archivo del blob y el troceado se hacen acá, fuera del hilo del writer (P13.S5).
+    let prepared: Vec<PreparedFile> = batch
         .into_iter()
         .filter_map(|c| {
             let uri = uri_of(&c.rel)?;
             let stored = match c.text {
                 Some(text) => {
-                    let s = objects.write_object(text.as_bytes()).ok()?;
-                    Some((s.hash, text))
+                    let chunks = crate::context_index::chunks(&text);
+                    match objects.write_object(text.as_bytes()) {
+                        Ok(_) => Some((text, chunks)),
+                        Err(e) => {
+                            // No se descarta en silencio: el índice queda como estaba hasta el
+                            // próximo evento, pero al menos queda la señal (P13.S5).
+                            tracing::warn!(
+                                path = %c.rel,
+                                error = %e,
+                                "no se pudo guardar el blob del archivo; se conserva lo indexado"
+                            );
+                            return None;
+                        }
+                    }
                 }
                 None => None,
             };
@@ -183,7 +233,7 @@ async fn apply(writer: &WriterHandle, objects: &ObjectStore, project: &str, batc
             let now = crate::runtime::now_ms();
             for (uri, stored) in prepared {
                 match stored {
-                    Some((_, text)) => {
+                    Some((text, chunks)) => {
                         // `put` ve que el archivo ya existe y solo registra la fila del blob.
                         let blob = store
                             .put(t, text.as_bytes(), Some("text/plain"))
@@ -195,11 +245,23 @@ async fn apply(writer: &WriterHandle, objects: &ObjectStore, project: &str, batc
                             if let Some(old) = previous {
                                 store.release(t, &old).map_err(sql)?;
                             }
-                            crate::context_index::index_chunks(t, id, &text)?;
+                            context::replace_chunks(t, id, &chunks)?;
                         }
                     }
                     None => {
+                        // Un solo evento puede ser el borrado de un directorio entero: además
+                        // de la URI exacta se limpian sus hijos (`ctx://file/dir/...`), que
+                        // si no seguirían en `context.search` hasta reiniciar (P13.S5).
+                        let mut released = Vec::new();
                         if let Some(old) = context::delete_file(t, &owner, &uri)? {
+                            released.push(old);
+                        }
+                        released.extend(context::delete_file_prefix(
+                            t,
+                            &owner,
+                            &format!("{uri}/"),
+                        )?);
+                        for old in released {
                             store.release(t, &old).map_err(sql)?;
                         }
                     }
@@ -213,12 +275,54 @@ async fn apply(writer: &WriterHandle, objects: &ObjectStore, project: &str, batc
     }
 }
 
+/// Quita del índice los archivos del proyecto que no están en `keep`.
+async fn prune_missing(
+    writer: &WriterHandle,
+    objects: &ObjectStore,
+    project: &str,
+    keep: std::collections::HashSet<String>,
+) {
+    let (store, owner) = (objects.clone(), project.to_string());
+    let pruned = writer
+        .write(Box::new(move |t| {
+            for uri in context::file_uris(t, &owner)? {
+                if keep.contains(&uri) {
+                    continue;
+                }
+                if let Some(old) = context::delete_file(t, &owner, &uri)? {
+                    store
+                        .release(t, &old)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                }
+            }
+            Ok(())
+        }))
+        .await;
+    if let Err(e) = pruned {
+        tracing::warn!(project, error = %e, "no se pudo limpiar el índice de archivos");
+    }
+}
+
 async fn apply_all(writer: &WriterHandle, objects: &ObjectStore, project: &str, all: Vec<Change>) {
     let mut all = all.into_iter().peekable();
     while all.peek().is_some() {
         let batch: Vec<Change> = all.by_ref().take(BATCH).collect();
         apply(writer, objects, project, batch).await;
     }
+}
+
+/// Recorrido completo: indexa lo que hay y quita del índice lo que ya no está. Se usa al
+/// arrancar y cuando la cola del watcher se desborda (P13.S5).
+async fn rescan(writer: &WriterHandle, objects: &ObjectStore, project: &str, root: &Path) {
+    let scan_root = root.to_path_buf();
+    let all = tokio::task::spawn_blocking(move || scan(&scan_root))
+        .await
+        .unwrap_or_default();
+    if all.len() < MAX_FILES {
+        let keep = all.iter().filter_map(|c| uri_of(&c.rel)).collect();
+        prune_missing(writer, objects, project, keep).await;
+    }
+    apply_all(writer, objects, project, all).await;
 }
 
 impl Watchers {
@@ -234,11 +338,25 @@ impl Watchers {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        let (tx, mut rx) = mpsc::unbounded_channel::<PathBuf>();
+        // Filtro y cola acotada: un `cargo build` no puede inflar la memoria del daemon. Si la
+        // cola se llena, se anota y al vaciarla se re-escanea el proyecto (P13.S5).
+        let ignore = gitignore(root);
+        let (tx, mut rx) = mpsc::channel::<PathBuf>(WATCH_QUEUE);
+        let overflow = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (cb_root, cb_ignore, cb_overflow) = (
+            root.to_path_buf(),
+            ignore.clone(),
+            std::sync::Arc::clone(&overflow),
+        );
         let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(event) = res {
-                for p in event.paths {
-                    let _ = tx.send(p);
+            let Ok(event) = res else { return };
+            for p in event.paths {
+                // Lo oculto (`.git`, `.symphony`) y lo ignorado no llegan ni a la cola.
+                if !wanted(&cb_root, &cb_ignore, &p) {
+                    continue;
+                }
+                if tx.try_send(p).is_err() {
+                    cb_overflow.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         });
@@ -257,23 +375,33 @@ impl Watchers {
 
         let (project, root) = (project.to_string(), root.to_path_buf());
         handle.spawn(async move {
-            let scan_root = root.clone();
-            let initial = tokio::task::spawn_blocking(move || scan(&scan_root))
-                .await
-                .unwrap_or_default();
-            apply_all(&writer, &objects, &project, initial).await;
-            let ignore = gitignore(&root);
+            rescan(&writer, &objects, &project, &root).await;
             while let Some(first) = rx.recv().await {
                 let mut paths = BTreeSet::from([first]);
-                // Debounce: junta la ráfaga hasta que haya `DEBOUNCE` de silencio.
-                while let Ok(Some(p)) = tokio::time::timeout(DEBOUNCE, rx.recv()).await {
-                    paths.insert(p);
+                // Debounce: junta la ráfaga hasta que haya `DEBOUNCE` de silencio o hasta
+                // `MAX_BURST`: un flujo continuo no puede dejarla sin aplicar nunca.
+                let deadline = tokio::time::Instant::now() + MAX_BURST;
+                loop {
+                    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    match tokio::time::timeout(DEBOUNCE.min(left), rx.recv()).await {
+                        Ok(Some(p)) => {
+                            paths.insert(p);
+                        }
+                        Ok(None) | Err(_) => break,
+                    }
                 }
                 let (r, ig) = (root.clone(), ignore.clone());
                 let batch = tokio::task::spawn_blocking(move || changes(&r, &ig, paths))
                     .await
                     .unwrap_or_default();
                 apply_all(&writer, &objects, &project, batch).await;
+                // La cola se llenó: puede faltar algún cambio, así que se re-escanea.
+                if overflow.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    rescan(&writer, &objects, &project, &root).await;
+                }
             }
         });
     }
@@ -338,5 +466,24 @@ mod tests {
             uri_of("packages/@scope/a b#1.ts").as_deref(),
             Some("ctx://file/packages/%40scope/a b%231.ts")
         );
+    }
+
+    #[test]
+    fn the_callback_filter_drops_hidden_and_ignored_paths() {
+        // Lo que ni siquiera entra a la cola del watcher: un `cargo build` no puede inundarla
+        // con `target/` ni con `.git/` (P13.S5).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
+        let ig = gitignore(root);
+        assert!(wanted(root, &ig, &root.join("src/a.rs")));
+        assert!(!wanted(root, &ig, &root.join(".git/config")));
+        assert!(!wanted(root, &ig, &root.join("target/x.rs")));
+        assert!(!wanted(root, &ig, &root.join("debug.log")));
+        assert!(
+            !wanted(root, &ig, root),
+            "la raíz no es un cambio indexable"
+        );
+        assert!(!wanted(root, &ig, Path::new("fuera-del-proyecto.rs")));
     }
 }

@@ -84,6 +84,7 @@ fn fixtures() -> Fixtures {
         (r#"{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":2000,"error_status":429,"error":"rate_limit"}"#.to_string(), vec!["ProviderError"]),
         (r#"{"type":"user","isReplay":true,"message":{"role":"user","content":"agregá tests"}}"#.to_string(), vec!["UserMessage"]),
         (r#"{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached|1790300000"}"#.to_string(), vec!["ProviderError"]),
+        (r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Reached maximum number of turns"}"#.to_string(), vec!["ProviderError", "TurnFinished"]),
     ]);
     let hooks = lines("hooks.jsonl")
         .into_iter()
@@ -100,6 +101,8 @@ fn fixtures() -> Fixtures {
             ("Claude AI usage limit reached. Your limit will reset at 5pm".into(), FailureType::DailyQuota),
             ("You've hit your weekly limit".into(), FailureType::WeeklyQuota),
             ("API Error: 429 rate_limit_error".into(), FailureType::TempRateLimit),
+            // Real (claude 2.1.310, 2026-10-24): un modelo fuera de la suscripción no es esperable.
+            (r#"429 {"type":"error","error":{"type":"rate_limit_error","message":"Usage credits are required for this model.","details":{"error_code":"credits_required"}}}"#.into(), FailureType::ModelUnavailable),
             ("Invalid API key · Please run /login (Authorization: Bearer sk-ant-api03-XXXXXXXXXXXXXXXXXXXX)".into(), FailureType::Auth),
             ("API Error: 529 overloaded_error".into(), FailureType::ProviderError),
             ("Connection error: getaddrinfo ENOTFOUND api.anthropic.com".into(), FailureType::Network),
@@ -368,9 +371,8 @@ fn shared_skills_plugin_and_extra_mcp_servers_are_registered_per_invocation() {
             ),
         ],
     };
-    let args: Vec<String> = adapter()
-        .spawn_spec(&req)
-        .unwrap()
+    let spec = adapter().spawn_spec(&req).unwrap();
+    let args: Vec<String> = spec
         .args
         .iter()
         .map(|s| s.to_string_lossy().into_owned())
@@ -388,6 +390,14 @@ fn shared_skills_plugin_and_extra_mcp_servers_are_registered_per_invocation() {
     assert_eq!(servers["fs"]["env"]["RAIZ"], ".");
     assert_eq!(servers["remoto"]["type"], "http");
     assert_eq!(at("--allowedTools"), "mcp__fs,mcp__remoto");
+    assert!(
+        !spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"),
+        "las variables internas no deben propagarse al entorno del proceso CLI"
+    );
+    assert!(
+        !spec.env.iter().any(|(k, _)| k == "SYMPHONY_PLUGIN_DIR"),
+        "las variables internas no deben propagarse al entorno del proceso CLI"
+    );
 }
 
 /// P11.5.S2: el modo de permisos sale de la config; el valor por defecto sigue siendo `acceptEdits`.

@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod common;
-use common::symphonyd;
+use common::{DaemonGuard, symphonyd};
 
 fn symphony(home: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_symphony"));
@@ -61,6 +61,7 @@ fn event_types(db: &Path, agent: &str) -> Vec<String> {
 fn hook_reaches_the_bus_and_never_breaks_the_cli() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
+    let daemon = DaemonGuard::new(&home);
     let db = home.join("symphony.db");
     symphony_store::open(&db)
         .unwrap()
@@ -103,13 +104,7 @@ fn hook_reaches_the_bus_and_never_breaks_the_cli() {
     let (ok, out, _) = hook(&home, "agente-fantasma", pre);
     assert!(ok && out.is_empty(), "{out}");
 
-    assert!(
-        symphony(&home)
-            .args(["daemon", "stop"])
-            .status()
-            .unwrap()
-            .success()
-    );
+    assert!(daemon.stop().unwrap().status.success());
     let types = event_types(&db, "a1");
     assert_eq!(
         types.iter().filter(|t| *t == "CommandRequested").count(),

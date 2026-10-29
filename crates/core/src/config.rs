@@ -166,6 +166,7 @@ impl SymphonyHome {
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub performance: PerformanceConfig,
+    pub retention: RetentionConfig,
     pub routing: RoutingConfig,
     pub context: ContextConfig,
     pub providers: ProvidersConfig,
@@ -185,11 +186,11 @@ pub struct HarnessConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HarnessMode {
-    /// Las herramientas propias de cada CLI (comportamiento de siempre).
-    #[default]
+    /// Las herramientas propias de cada CLI.
     Native,
     /// Las de Symphony, iguales para todos los modelos; se apagan las nativas de los CLIs
-    /// que lo permiten.
+    /// que lo permiten. Es el defecto desde 2026-10-24 (decisión de Leo).
+    #[default]
     Symphony,
 }
 
@@ -251,6 +252,29 @@ pub struct PerformanceConfig {
     pub os_max_memory_mb: Option<u64>,
     /// Procesos máximos por agente. Sin límite por defecto.
     pub os_max_processes: Option<u32>,
+}
+
+/// `[retention]`: cuánto se guarda lo que más crece (DB §8). El job corre al arrancar el
+/// daemon: purga eventos de agentes terminados o archivados y muestras de recursos viejas.
+/// Checkpoints y runs no se tocan.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RetentionConfig {
+    /// Días que se guardan eventos de agentes en estado terminal (COMPLETED/FAILED/CANCELLED)
+    /// o archivados. Los de agentes vivos y los referenciados por checkpoints o project_facts
+    /// no se borran.
+    pub events_days: u32,
+    /// Días que se guardan las muestras por minuto de `resource_samples`.
+    pub samples_days: u32,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            events_days: 30,
+            samples_days: 14,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -393,6 +417,14 @@ profile = "BALANCED"
 # os_max_memory_mb = 4096
 # os_max_processes = 512
 
+[retention]
+# El job corre al arrancar el daemon: purga en lotes lo que ya no se necesita.
+# Eventos de agentes terminados o archivados más viejos que esto. Los de agentes vivos,
+# los referenciados por checkpoints o project_facts, y checkpoints y runs no se tocan.
+events_days = 30
+# Muestras por minuto de recursos más viejas que esto.
+samples_days = 14
+
 [routing]
 # Profile o modelo por defecto al crear un agente.
 default_profile = "@code"
@@ -410,7 +442,7 @@ min_tasks_per_phase = 2
 # Con qué herramientas trabajan los modelos (ADR-0019): "native" (las de cada CLI) o
 # "symphony" (las de Symphony: leer, escribir, editar, buscar y shell, iguales para todos;
 # se apagan las nativas de los CLIs que lo permiten).
-mode = "native"
+mode = "symphony"
 
 [context]
 # Cuánto se comprime el contexto en un handoff: RAW · SAFE · BALANCED · AGGRESSIVE
@@ -870,22 +902,42 @@ mod tests {
     }
 
     #[test]
-    fn harness_mode_defaults_to_native_and_rejects_unknown_values() {
+    fn harness_mode_defaults_to_symphony_and_rejects_unknown_values() {
         let (_d, home) = home();
         std::fs::create_dir_all(home.root()).unwrap();
-        // El archivo creado con la plantilla trae el modo nativo.
-        assert_eq!(
-            load_or_create(&home).unwrap().harness.mode,
-            HarnessMode::Native
-        );
-        std::fs::write(home.config_path(), "[harness]\nmode = \"symphony\"\n").unwrap();
+        // El archivo creado con la plantilla trae el modo de Symphony.
         assert_eq!(
             load_or_create(&home).unwrap().harness.mode,
             HarnessMode::Symphony
         );
+        std::fs::write(home.config_path(), "[harness]\nmode = \"native\"\n").unwrap();
+        assert_eq!(
+            load_or_create(&home).unwrap().harness.mode,
+            HarnessMode::Native
+        );
         std::fs::write(home.config_path(), "[harness]\nmode = \"otro\"\n").unwrap();
         let err = load_or_create(&home).unwrap_err().to_string();
         assert!(err.contains("otro") || err.contains("mode"), "{err}");
+    }
+
+    /// P13.S4: `[retention]` — días de retención de `events` y `resource_samples`.
+    #[test]
+    fn retention_defaults_and_overrides() {
+        let (_d, home) = home();
+        std::fs::create_dir_all(home.root()).unwrap();
+        // Ausente: 30 días de eventos, 14 de muestras de recursos (DB §8).
+        let config = load_or_create(&home).unwrap();
+        assert_eq!(config.retention.events_days, 30);
+        assert_eq!(config.retention.samples_days, 14);
+
+        std::fs::write(
+            home.config_path(),
+            "[retention]\nevents_days = 7\nsamples_days = 3\n",
+        )
+        .unwrap();
+        let config = load_or_create(&home).unwrap();
+        assert_eq!(config.retention.events_days, 7);
+        assert_eq!(config.retention.samples_days, 3);
     }
 
     #[test]

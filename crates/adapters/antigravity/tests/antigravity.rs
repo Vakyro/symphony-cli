@@ -65,10 +65,16 @@ fn expected(line: &str) -> Vec<&'static str> {
                     vec!["ToolFinished", "FileModified"]
                 }
                 ("tool", _) => vec!["ToolFinished"],
-                ("agent_response", "DONE")
-                    if s["usage"]["input_tokens"].as_u64().unwrap_or(0) > 0 =>
-                {
-                    vec!["TurnUsage"]
+                ("agent_response", state) => {
+                    let mut want = if s["text_delta"].as_str().is_some_and(|t| !t.is_empty()) {
+                        vec!["AssistantDelta"]
+                    } else {
+                        vec![]
+                    };
+                    if state == "DONE" && s["usage"]["input_tokens"].as_u64().unwrap_or(0) > 0 {
+                        want.push("TurnUsage");
+                    }
+                    want
                 }
                 _ => vec![],
             }
@@ -88,6 +94,7 @@ fn fixtures() -> Fixtures {
         "resume.jsonl",
         "tools.jsonl",
         "tools-denied.jsonl",
+        "stream-agy-1.4.7.jsonl",
         "error-modelo.jsonl",
     ] {
         for l in lines(file) {
@@ -162,6 +169,41 @@ fn tool_events_carry_command_path_and_result() {
     assert!(matches!(
         ev.last(),
         Some(AgentEvent::AssistantText { text }) if text.contains("hecho")
+    ));
+}
+
+#[test]
+fn live_fixture_emits_tools_and_text_before_the_final_result() {
+    let a = adapter();
+    let stream = lines("stream-agy-1.4.7.jsonl");
+    let events: Vec<Vec<AgentEvent>> = stream
+        .iter()
+        .map(|line| a.parse_stream_line(line))
+        .collect();
+
+    assert!(matches!(
+        &events[3][..],
+        [AgentEvent::ToolRequested { tool, .. }] if tool == "read_file"
+    ));
+    assert!(matches!(
+        &events[4][..],
+        [AgentEvent::ToolFinished { tool, ok: true, .. }] if tool == "read_file"
+    ));
+    let deltas: String = events[..events.len() - 1]
+        .iter()
+        .flatten()
+        .filter_map(|event| match event {
+            AgentEvent::AssistantDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        deltas,
+        "El texto dice: «La luz de la mañana entra por la ventana». Transmite un ambiente de calma, calidez y serenidad cotidiana al comenzar el día.\n"
+    );
+    assert!(matches!(
+        events.last().map(Vec::as_slice),
+        Some([AgentEvent::AssistantText { text }]) if text == deltas.trim_end()
     ));
 }
 
@@ -285,6 +327,27 @@ fn skip_permissions_is_opt_in() {
 #[test]
 fn lists_only_google_models() {
     let models = adapter().list_models();
-    assert!(models.len() >= 3);
-    assert!(models.iter().all(|m| m.id.starts_with("google/gemini-")));
+    assert_eq!(models.len(), 13);
+    // El id y el nombre dicen quién es el proveedor de cada modelo.
+    for (prefix, vendor) in [
+        ("google/gemini-", "Google"),
+        ("anthropic/claude-", "Anthropic"),
+        ("openai/gpt-oss-", "OpenAI"),
+    ] {
+        let of_vendor: Vec<_> = models.iter().filter(|m| m.id.starts_with(prefix)).collect();
+        assert!(!of_vendor.is_empty(), "{prefix}");
+        assert!(of_vendor.iter().all(|m| m.display_name.ends_with(vendor)));
+    }
+}
+
+#[test]
+fn internal_env_vars_are_not_passed_to_spec() {
+    let mut req = request("gemini-x");
+    req.env.push(("SYMPHONY_AGENT_ID".into(), "agent-1".into()));
+    req.env.push(("SYMPHONY_MCP_EXTRA".into(), "{}".into()));
+    req.env.push(("SYMPHONY_PLUGIN_DIR".into(), "/tmp".into()));
+    let spec = adapter().spawn_spec(&req).unwrap();
+    assert!(!spec.env.iter().any(|(k, _)| k == "SYMPHONY_MCP_EXTRA"));
+    assert!(!spec.env.iter().any(|(k, _)| k == "SYMPHONY_PLUGIN_DIR"));
+    assert!(spec.env.iter().any(|(k, _)| k == "SYMPHONY_AGENT_ID"));
 }

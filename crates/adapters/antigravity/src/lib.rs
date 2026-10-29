@@ -3,9 +3,9 @@
 //! - Turno headless por stdin: `agy --print= --input-format stream-json --output-format
 //!   stream-json`, con un mensaje `{"event":"user","message":{"content":…}}` por línea. `--print`
 //!   exige el prompt como valor, y el contrato prohíbe pasarlo como argumento.
-//! - Eventos NDJSON: `init` (trae `conversation_id`), `step_update` (herramientas, uso por paso) y
-//!   `result` (respuesta completa y estado). El texto se toma del `result`: los `text_delta` llegan
-//!   troceados por paso y un parser sin estado no puede juntarlos.
+//! - Eventos NDJSON: `init` (trae `conversation_id`), `step_update` (herramientas, deltas y uso por
+//!   paso) y `result` (respuesta completa y estado). Cada `text_delta` se emite al llegar; el texto
+//!   completo del `result` sigue siendo el mensaje que se persiste.
 //! - Permisos: en headless Antigravity **deniega solo** lo que pide permiso. Por defecto,
 //!   `--mode accept-edits` (ediciones sí, shell no); `skip_permissions` pasa
 //!   `--dangerously-skip-permissions` (todo, sin sandbox: `--sandbox` se cuelga en Windows).
@@ -96,18 +96,24 @@ fn step_events(step: &Value) -> Vec<AgentEvent> {
                 _ => Vec::new(),
             }
         }
-        // El último paso de respuesta deja el tamaño real del contexto (el `result` suma todos).
-        Some("agent_response") if state == "DONE" => {
-            let u = &step["usage"];
-            let tokens = u["input_tokens"].as_u64().unwrap_or(0)
-                + u["cache_read_tokens"].as_u64().unwrap_or(0);
-            if tokens == 0 {
-                Vec::new()
-            } else {
-                vec![AgentEvent::TurnUsage {
-                    context_tokens: tokens,
-                }]
+        Some("agent_response") => {
+            let mut out: Vec<AgentEvent> = json_str(step, "text_delta")
+                .filter(|text| !text.is_empty())
+                .map(|text| AgentEvent::AssistantDelta { text })
+                .into_iter()
+                .collect();
+            // El último paso de respuesta deja el tamaño real del contexto (el `result` suma todos).
+            if state == "DONE" {
+                let u = &step["usage"];
+                let tokens = u["input_tokens"].as_u64().unwrap_or(0)
+                    + u["cache_read_tokens"].as_u64().unwrap_or(0);
+                if tokens > 0 {
+                    out.push(AgentEvent::TurnUsage {
+                        context_tokens: tokens,
+                    });
+                }
             }
+            out
         }
         _ => Vec::new(),
     }
@@ -177,7 +183,9 @@ impl AntigravityAdapter {
             spec.args(["--mode", "accept-edits"])
         };
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         Ok(spec)
     }
@@ -218,24 +226,95 @@ impl ProviderAdapter for AntigravityAdapter {
         AuthStatus::Unknown
     }
 
-    /// Los de Google que lista `agy models` (agy 1.4.7, 2026-10-23). Los de Anthropic y OpenAI que
-    /// también ofrece (Claude Opus/Sonnet 5.5, GPT-OSS) quedan fuera hasta revisar los ToS
-    /// (docs/research/cli-p11.md; STATUS § Para Leo).
+    /// Todos los que lista `agy models` (agy 1.4.7, 2026-10-23), con el proveedor de cada modelo
+    /// en el id y en el nombre. Leo habilitó los de Anthropic y OpenAI el 2026-10-24.
     /// ponytail: lista fija; si `agy` vuelve a rotar modelos, pedirla a `agy models` con caché.
     fn list_models(&self) -> Vec<ModelInfo> {
         [
-            ("gemini-4-argon-high", "Gemini 4 Argon (High)"),
-            ("gemini-4-argon-medium", "Gemini 4 Argon (Medium)"),
-            ("gemini-4-argon-low", "Gemini 4 Argon (Low)"),
-            ("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
-            ("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"),
-            ("gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"),
+            (
+                "google",
+                "Google",
+                "gemini-4-argon-high",
+                "Gemini 4 Argon (High)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-4-argon-medium",
+                "Gemini 4 Argon (Medium)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-4-argon-low",
+                "Gemini 4 Argon (Low)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-3.8-flash-high",
+                "Gemini 3.8 Flash (High)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-3.8-flash-medium",
+                "Gemini 3.8 Flash (Medium)",
+            ),
+            (
+                "google",
+                "Google",
+                "gemini-3.8-flash-low",
+                "Gemini 3.8 Flash (Low)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-opus-5-5-high",
+                "Claude Opus 5.5 (High)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-opus-5-5-medium",
+                "Claude Opus 5.5 (Medium)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-opus-5-5-low",
+                "Claude Opus 5.5 (Low)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-sonnet-5-5-high",
+                "Claude Sonnet 5.5 (High)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-sonnet-5-5-medium",
+                "Claude Sonnet 5.5 (Medium)",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                "claude-sonnet-5-5-low",
+                "Claude Sonnet 5.5 (Low)",
+            ),
+            (
+                "openai",
+                "OpenAI",
+                "gpt-oss-120b-medium",
+                "GPT-OSS 120B (Medium)",
+            ),
         ]
         .iter()
-        .map(|(slug, name)| ModelInfo {
-            id: format!("google/{slug}"),
+        .map(|(vendor, vendor_name, slug, name)| ModelInfo {
+            id: format!("{vendor}/{slug}"),
             cli_model_id: (*slug).into(),
-            display_name: (*name).into(),
+            display_name: format!("{name} · {vendor_name}"),
         })
         .collect()
     }
@@ -313,13 +392,15 @@ impl ProviderAdapter for AntigravityAdapter {
             || lower.contains("not recognized as a known model")
         {
             (FailureType::ModelUnavailable, "invalid_model", false)
-        } else if lower.contains("resource_exhausted") || lower.contains("quota") {
+        } else if lower.contains("quota exceeded") || lower.contains("resource_exhausted") {
             (FailureType::DailyQuota, "quota", false)
         } else if lower.contains("rate limit")
             || has_token(&lower, "429")
             || lower.contains("too many requests")
         {
             (FailureType::TempRateLimit, "rate_limit", true)
+        } else if lower.contains("quota") {
+            (FailureType::DailyQuota, "quota", false)
         } else if has_token(&lower, "401")
             || lower.contains("unauthenticated")
             || lower.contains("unauthorized")
@@ -343,4 +424,19 @@ impl ProviderAdapter for AntigravityAdapter {
 
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/antigravity")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_with_quota_text_is_classified_as_transient() {
+        let adapter = AntigravityAdapter::default();
+        let err = adapter
+            .parse_error("rate limit: too many requests, quota per minute")
+            .expect("debe clasificar el error");
+        assert_eq!(err.failure_type, FailureType::TempRateLimit);
+        assert!(err.transient);
+    }
 }

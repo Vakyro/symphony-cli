@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 mod common;
-use common::{path_with_fake_claude, symphonyd};
+use common::{DaemonGuard, path_with_fake_claude, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -146,6 +146,7 @@ fn mcp_broker_serves_context_tools_from_the_daemon() {
     std::fs::write(repo.join("src/auth.ts"), &body).unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "init"]);
+    let daemon = DaemonGuard::new(&home);
 
     let (ok, out, err) = symphony(
         &home,
@@ -239,7 +240,7 @@ fn mcp_broker_serves_context_tools_from_the_daemon() {
         .unwrap_or_default();
     assert!(line.contains("(1 sin resultado)"), "{stats}");
 
-    symphony(&home, &repo, &["daemon", "stop"]);
+    let _ = daemon.stop();
 }
 
 /// ADR-0019: con `SYMPHONY_HARNESS` el broker suma las herramientas de archivos y shell, que

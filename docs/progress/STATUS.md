@@ -1,17 +1,22 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-23 · por claude-code/sonnet-5.5
-**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`), S1 · seguridad
-**Paso actual:** P13.S1 · Seguridad
-**Estado del paso:** por empezar
-**En curso por:** nadie
+**Actualizado:** 2026-10-28 · por opencode-go/deepseek-v4-pro (orquestación con Symphony, solo opencode-go)
+**Fase actual:** P13 · Endurecimiento y pre-release — **cerrada y mergeada a `main`** (tag `p13-done`). P16.S0 adelantado en `phase/p16-validacion`.
+**Paso actual:** S3 ✅ (soak de 4 h aprobado) · S5 ✅ (`server.md` completo: A + #51 watchdog/colisiones + #52 plazos IPC) · S8 ✅ (gate 733 ✅ · `deny` ✅ · merge `--no-ff` · tag `p13-done` · push).
+**Estado del paso:** cerrado.
+**En curso por:** opencode-go/deepseek-v4-pro (orquestador), con delegación a agentes Symphony sobre `opencode-go`.
+**Siguiente:** rebasar `phase/p16-validacion` sobre `main` → P16.S2–S7 → P17–P20 (delegado a agentes opencode-go). Pendientes menores: benchmark que declare disco libre, desviación de ADR-0021 (`PASS` en vez de `SKIPPED`).
+
+**Cierre de la jornada (detalle en `docs/progress/CIERRE-2026-10-27.md`):** qué salió bien, qué falló, qué se arregló y qué falta. Resumen: integrados #48 (guardia de aislamiento), #49 (freno por disco), #50 (permisos, `depends_on`, `usage.get`). **2026-10-28:** integrados #51 y #52, arreglado el test inestable del watcher y los `LEAK` del CLI, verificado ADR-0021, gate y `deny` en verde, P13 mergeada a `main`.
+
+**Lo que falta para v1.0 (2026-10-28):** (1) Rebasar `phase/p16-validacion` sobre `main`. (2) P16.S2 E2E con fake-agents, S3 benchmark, S4 `install-check.yml`, S5 docs as-built, S7 retrospectiva. (3) ⛔ S6 release v1.0.0 y v0.9.0 (tu OK para pushear tags `v*`). Antes de v1.0.0, P17–P20 (decidido por Leo; ver abajo).
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: ✅ al cierre de P14 (634 tests; el gate quita `SYMPHONY_LIVE`, nunca corre live).
-- `cargo deny check`: ✅ (solo avisos de duplicados).
-- CI en `main`: ✅ (ubuntu, windows, macos, msrv, deny).
+- `cargo xtask check`: ✅ **733 tests, 0 fallos, 0 leaky** (2026-10-28, rama de P13; el gate quita `SYMPHONY_LIVE`, nunca corre live).
+- `cargo deny check`: ✅ en la rama `phase/p13-endurecimiento` (tokio 1.54.1 por RUSTSEC-2026-0386); en `main` el job `deny` sigue en rojo hasta que esa rama se integre.
+- CI en `main`: 🔴 solo el job `deny` (aviso nuevo contra tokio 1.53.1, publicado después de P14); los demás ✅. Arreglo ya hecho en la rama de P13 (P13.S1), pendiente de integrar.
 - Tests conocidos en rojo: ninguno.
 
 ## Cola de trabajo (en orden)
@@ -38,9 +43,13 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · ✅ S4 harness de Symphony (ADR-0019; `[harness] mode`, 5 de 6 proveedores) · ✅ S5 más allá del código (ADR-0020; `symphony init --kind`, perfiles `@write/@media/@research`, migración 008) · ✅ S6 cierre (`p155-done`)
 
-**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): S1 seguridad · S2 fuzzing · S3 recuperación y 4 h · S4 rendimiento y retención · S5 calidad del repo · S6 mdBook (+ guía SSH) · S7 pipeline de release en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
+**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos (incluidos #51 y #52 de `server.md`), ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · ✅ S8 cierre (`p13-done`, 2026-10-28: gate 733 ✅, `deny` ✅, merge a `main`; `v0.9.0` local)
+
+**P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasar sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · 🟡 S4 `install-check.yml` · 🟡 S5 anexo de desviaciones
 
 **P16 · Validación final** (`phase/p16-validacion`): S1 checklist · S2 E2E (fake-agents) · S3 benchmark · S4 instalación limpia en CI · S5 docs as-built · S6 release ⛔ · S7 retrospectiva
+
+**Antes de publicar v1.0.0 (decidido por Leo, 2026-10-27; P16.S6 queda después de P20; detalle en `docs/research/backlog-2026-10-27.md` y PLAN § P17–P20):** P17 TUI al día (tema morado apagado, barra de estado con usos/modelo/rama/modo, streaming y diffs, arranque con arte ASCII, mascota, shell en curso, vistas de plan/ramas/status global con heatmap) → P18 contexto y ahorro de tokens (auditar router, flintstone por defecto, sesiones cortas, graphify al iniciar, `/init` de Symphony, segundo cerebro) → P19 orquestación automática (Jev, perfiles `@best-*`, planeador, delegación con effort, `/orchester`, chat principal con paridad Claude Code) → P20 editor integrado, grafo, vista Habbo y móvil. Ideas futuras: cualquier CLI de agente y API keys de cualquier proveedor.
 
 ## Para usar lo nuevo (Leo)
 `symphony daemon stop` y luego `cargo install --path crates/cli --locked --force` y `cargo install --path crates/daemon --locked --force` (no lo hice yo: puede haber un daemon tuyo en uso). Novedades: `symphony chat merge`, `symphony review`, `[providers.permissions]`, texto del chat en vivo con Claude, `Ctrl+G`/`Ctrl+R` en el chat.
@@ -57,15 +66,26 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
+- **2026-10-27 · Backlog nuevo (P17–P20): respondido por Leo.** P17–P20 van antes de v1.0.0. Jev no se usa: se evaluará una versión ligera de código abierto que Leo describirá después. Móvil por Tailscale + SSH + tmux, sin app ni web (P20.S4).
+- **2026-10-28 · #51, #52 y ADR-0021: revisados e integrados** (Leo autorizó hacerlo en vez de dejarlo en documento). #51 (`5e46112`, `fe4ec5d`) y #52 (`1840654`) están en `main`. ADR-0021 coincide con su implementación; única desviación menor y no bloqueante: sin archivos que revisar el check devuelve `PASS` con resumen, no `SKIPPED` como decía el ADR. Si prefieres `SKIPPED`, es un cambio de dos líneas en `files_check.rs`.
+- **2026-10-27 · Noche de dogfooding:** reporte completo en `docs/progress/REPORTE-2026-10-27.md`.
+- **Publicar v0.9.0 / v1.0.0:** el pipeline de cargo-dist está listo en dry run; pushear un tag `v*` publica (y para Homebrew hace falta crear el repo `Vakyro/homebrew-symphony`).
+- **Aislamiento:** dos modelos escribieron en el repo principal (DOGFOOD § Hallazgos). Antes de delegar sin supervisión hace falta una guardia en Symphony; mientras tanto, no dejar cambios sin commitear en el repo principal con agentes corriendo.
+- **Agente #39 (arreglos de `server.md`)** dejó 1154 líneas sin commitear en su worktree; no se integró. Lo que faltaba de `server.md` se cubrió con #51 y #52 (integrados el 2026-10-28); lo que #39 traía de más ya no aplica.
+- **Watchdog:** la CPU ya no mantiene vivo un run que lleva 60 min sin escribir nada (tope fijo). Una corrida de Antigravity de más de una hora sin salida caería: si te pasa, se hace configurable.
+- **Disco:** `cargo clean` en el repo si vuelve a crecer (`target/` llegó a 104 GB); WSL creció por los clones del fuzzing (`wsl --shutdown` + compactar el vhdx si molesta).
+- **Basura en `~` de WSL:** clones `~/symphony-fuzz-*` y `~/symphony-linux-*` (se pueden borrar).
+- **2026-10-24 · Dogfooding:** la copia estable de Symphony con la que se delega está en `~/.symphony-stable/bin` (commit en `VERSION`); el estado de los agentes de este repo, en `<repo>/.symphony/`. Detalle y hallazgos en `docs/progress/DOGFOOD.md`.
+- **2026-10-24 · Disco:** tu `~/.symphony` vieja (97 MB de base y unos 60 worktrees con `node_modules`/`target/`) se limpia sola cuando corras `symphony migrate split` en cada proyecto y abras su daemon (los worktrees de agentes terminados se borran al arrancar). Lo que no se migre, bórralo a mano.
 - **Basura que dejé yo:** por un typo de ruta se creó el archivo `C:\LATITU~1\x` (y su carpeta `C:\LATITU~1`) en la raíz del disco. No pude borrarlo: la comprobación de seguridad bloqueó el `rmdir` de una carpeta en la raíz. Es seguro quitarlo con `rmdir /s /q C:\LATITU~1`.
 Formato: paso · qué hace falta · comando exacto si aplica.
 - **Siempre ⛔:** live que gaste cuota (Claude, Codex, Kimi, Antigravity, Copilot); push de ramas que no sean `main`; publicar releases o pushear tags `v*`; cambiar defaults de permisos de proveedores; ToS.
 - **2026-10-12 · cuota gastada sin permiso (error del agente):** la sesión arrancó con `SYMPHONY_LIVE=1` en el entorno y el `cargo xtask check` de baseline de P11.5 corrió los 6 tests live con CLIs reales (`live_benchmark`, `live_handoff`, `live_cost`, `live_resume`, `live_sessions`, `live` de la TUI; ~9 min, 557 pasaron). **Falló `symphony-tui::live live_journey_a_with_claude_code`** (47 s): no se investigó; no es un cambio de P11.5, pero conviene que Leo lo revise (¿Claude Code, auth o cambio de CLI?). Corrección: `unset SYMPHONY_LIVE` antes de todo comando de cargo. Leo: revisa tu terminal de lanzamiento (`echo $SYMPHONY_LIVE`) para que no vuelva a heredarse.
 - P15.5.S5 · Para usar lo nuevo: reinstalar y, en una carpeta de documentos, `symphony init --kind document --git-init`. Los profiles `@write/@media/@research` arrancan con puntajes derivados (editables en `profile_models`); dime si algún modelo te rinde distinto y los ajusto. Quedó fuera (ADR-0020 § Enmienda): check de formato propio, tipo por tarea y binarios grandes con puntero.
-- P15.5.S4 · Probar el harness: pon `[harness] mode = "symphony"` en `~/.symphony/config.toml`, `symphony daemon stop` y trabaja unos días. Si te convence, dime y cambio el defecto de `native` a `symphony` (es cambio de defaults: tuyo). Antigravity no lo admite. Pendiente: que `shell` pase por el daemon para la cola de comandos pesados (P08).
+- P15.5.S4 · El harness de Symphony es el defecto desde 2026-10-24 (tu decisión). Antigravity no lo admite y sigue con sus herramientas. Pendiente: que `shell` pase por el daemon para la cola de comandos pesados (P08). Para volver a lo de cada CLI: `[harness] mode = "native"`.
 - P15.5.S3 · Para usar el estado por proyecto: `symphony daemon stop`, reinstalar (`cargo install --path crates/cli --locked --force` y `crates/daemon`) y, en cada proyecto con historia, `symphony migrate split` una vez (apaga tu daemon global y reparte `~/.symphony/symphony.db`; no borra nada). Los worktrees viejos siguen en `~/.symphony/worktrees` y funcionan; los nuevos nacen en `<proyecto>/.symphony/worktrees`. Pendiente aparte: `symphony daemon stop --all` y la GUI con selector de proyecto probado en una ventana real.
 - P15.5.S2 · Para aplicar los permisos nuevos: `symphony daemon stop` y reinstalar. Si tu `~/.symphony/config.toml` tiene valores explícitos en `[providers.permissions]`, mandan sobre los nuevos defaults. Verificado en vivo solo con Codex (pnpm, red y lectura de `~/.symphony` OK con `danger-full-access`); Claude, Copilot y Antigravity cambian por config sin prueba live.
-- P15.5.S1 · Copilot no tiene comando para listar modelos: probar a mano `copilot` + `/model` y decirme cuáles ves (hoy solo `auto`). Antigravity también ofrece Claude Opus/Sonnet 5.5 y GPT-OSS; siguen fuera hasta decidir los ToS (¿los habilito?).
+- P15.5.S1 · Copilot solo ofrece `auto` (Leo, 2026-10-24): nada que hacer. Antigravity: habilitados sus modelos Claude y GPT-OSS, con el proveedor en el nombre.
 - P15.S4 · Revisión visual de la GUI en una ventana real (`cd apps/gui && pnpm tauri dev`, con `symphony`/`symphonyd` instalados) y con DevTools del WebView; no pude hacerla (extensión de Chrome desconectada). Los bundles de macOS/Linux solo se construyen en CI.
 - P08 · Live de plan por fases y bloque ```review con Claude/Codex (si S9 con OpenCode no basta).
 - P11.5.S3 · Capturar un fixture real del stream parcial de Claude (`--include-partial-messages`) y ver el texto avanzar en una terminal real (gasta cuota: ⛔).
@@ -78,6 +98,12 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 - P11.5.S9.2 · Handoff entre modelos a media tarea en los cuatro modos de contexto con proveedores reales (Claude/Codex): con OpenCode gratuito dio 429 en 3 corridas. Comando: `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_handoff` (ya existe para otros pares).
 
 ## Handoff para el siguiente agente
+- **Antes de tocar nada:** `git status` y `git log --oneline 441dfd6..HEAD` en `phase/p13-endurecimiento`. Hay 8 commits locales sin pushear desde la noche anterior.
+- **Agentes vivos:** #51 y #52 corren en Kimi y escriben en sus worktrees (`.symphony/worktrees/…/agent-05N`). No integrar a ciegas: revisar `git log` y el diff de cada uno.
+- **Integrar con cherry-pick** (no con merge del worktree): el worktree de #51 salió de una base anterior a #50.
+- **Gate:** `unset SYMPHONY_LIVE` y luego `cargo xtask check`. Con varios cargo en paralelo usar `CARGO_TARGET_DIR` aparte (si no, `LNK1104` al enlazar `soak.exe`).
+- **Disco:** C: al 97 %. `target/` ~66 GB. `cargo clean` cuando no haya agentes compilando.
+- **Test inestable:** `project_files_stay_searchable_as_they_change` (daemon). Pasa solo, falla en corridas completas.
 - Empieza por PLAN § P11.5 y ADR-0014. Corre `cargo xtask check` en `main` antes de crear la rama.
 - La TUI está en `crates/tui`: `app.rs` estado y lógica pura, `ui.rs` render, `io.rs` IPC, `lib.rs` loop. Snapshots: `INSTA_UPDATE=always cargo nextest run -p symphony-tui` y revisar el diff.
 - Si un test deja un `symphonyd.exe` huérfano, el build falla con «Acceso denegado»: mátalo antes.

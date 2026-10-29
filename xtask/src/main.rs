@@ -1,6 +1,10 @@
 //! Tareas de desarrollo: `cargo xtask <tarea>` (STACK §4.2).
 
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+
+mod er;
+mod metrics;
 
 const CHECK: &[&[&str]] = &[
     &["fmt", "--all", "--check"],
@@ -18,11 +22,38 @@ const CHECK: &[&[&str]] = &[
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("check") => check(),
+        Some("metrics") => match metrics::run(&workspace_root(), std::env::args().skip(2)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("xtask: metrics: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("er") => {
+            let root = workspace_root();
+            match er::run(&root.join("migrations"), &root.join("docs/book/src/er.md")) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("xtask: er: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         _ => {
-            eprintln!("uso: cargo xtask check");
+            eprintln!("uso: cargo xtask <check|er|metrics>");
             ExitCode::from(2)
         }
     }
+}
+
+/// Raíz del workspace (xtask vive en `<workspace>/xtask`).
+fn workspace_root() -> PathBuf {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .nth(1)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| manifest_dir.to_path_buf())
 }
 
 fn check() -> ExitCode {

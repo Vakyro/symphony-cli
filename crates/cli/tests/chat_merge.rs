@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::symphonyd;
+use common::{DaemonGuard, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -44,6 +44,7 @@ fn chat_merge_explains_what_is_missing_and_never_merges_without_yes() {
     std::fs::write(repo.join("README.md"), "# demo\n").unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "init"]);
+    let _daemon = DaemonGuard::new(&home);
 
     // Sin chat todavía: el mensaje dice qué hacer, no hay merge.
     let (ok, _out, err) = symphony(&home, &repo, &["chat", "merge"]);
@@ -62,5 +63,5 @@ fn chat_merge_explains_what_is_missing_and_never_merges_without_yes() {
     let (ok, _, err) = symphony(&home, &repo, &["chat", "merge", "--review", "--yes"]);
     assert!(!ok);
     assert!(err.contains("cannot be used"), "{err}");
-    let _ = symphony(&home, &repo, &["daemon", "stop"]);
+    let _ = _daemon.stop();
 }

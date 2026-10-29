@@ -285,6 +285,50 @@ async fn exact_model_creates_everything_and_runs_the_executor() {
     e.writer.shutdown();
 }
 
+/// Un agente sin harness tampoco puede pasar inadvertido si toca el repo principal.
+#[tokio::test(flavor = "multi_thread")]
+async fn main_repo_changes_during_a_run_open_workspace_damaged_recovery() {
+    let script = r#"
+[[step]]
+kind = "run"
+command = ["git", "-C", "../../../../repo", "commit", "--allow-empty", "-q", "-m", "daño simulado"]
+
+[[step]]
+kind = "edit"
+path = "../../../../repo/dano.txt"
+content = "cambio sin seguimiento\n"
+"#;
+    let e = env(script, None).await;
+    let initial_head = git(&e.repo, &["rev-parse", "HEAD"]);
+    let _created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Simular una fuga al repo principal",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    assert_ne!(git(&e.repo, &["rev-parse", "HEAD"]), initial_head);
+    assert_eq!(count(&e, "recovery_items"), 1);
+    let recovery = one::<String>(&e, "SELECT kind || '|' || detail FROM recovery_items");
+    assert!(recovery.starts_with("WORKSPACE_DAMAGED|"), "{recovery}");
+    assert!(
+        recovery.contains("HEAD antes:") && recovery.contains("HEAD después:"),
+        "{recovery}"
+    );
+    assert!(recovery.contains("?? dano.txt"), "{recovery}");
+    assert_eq!(
+        one::<String>(&e, "SELECT state FROM agents"),
+        "COMPLETED",
+        "la guardia registra el daño sin borrar el resultado del agente"
+    );
+    e.writer.shutdown();
+}
+
 /// P08.S4: el árbol de procesos del run queda en `processes` y se cierra al terminar.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_process_tree_of_a_run_is_recorded_and_closed() {
@@ -347,6 +391,132 @@ async fn decide_later_creates_a_ready_agent_without_executor() {
     assert_eq!(count(&e, "checkpoints"), 1);
     assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "READY");
     e.writer.shutdown();
+}
+
+/// Disco (2026-10-24): cancelar un agente borra su worktree limpio y deja la rama; uno con
+/// cambios sin commitear se queda.
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_an_agent_frees_its_clean_worktree_and_keeps_the_branch() {
+    let e = env(WORK, None).await;
+    let clean = e
+        .runtime
+        .create_agent(req(&e, "Limpio", Execution::DecideLater))
+        .await
+        .unwrap();
+    let dirty = e
+        .runtime
+        .create_agent(req(&e, "Con cambios", Execution::DecideLater))
+        .await
+        .unwrap();
+    // Revisión de código de P13: un archivo nuevo sin seguimiento también es trabajo.
+    let new_file = e
+        .runtime
+        .create_agent(req(&e, "Archivo nuevo", Execution::DecideLater))
+        .await
+        .unwrap();
+    std::fs::write(dirty.worktree.join("README.md"), "a medias\n").unwrap();
+    std::fs::write(new_file.worktree.join("nuevo.txt"), "sin commitear\n").unwrap();
+    e.runtime.stop(clean.agent_id).await.unwrap();
+    e.runtime.stop(dirty.agent_id).await.unwrap();
+    e.runtime.stop(new_file.agent_id).await.unwrap();
+    e.writer.handle().flush().await.unwrap();
+
+    assert!(!clean.worktree.exists());
+    assert!(git(&e.repo, &["branch", "--list", &clean.branch]).contains(&clean.branch));
+    assert!(dirty.worktree.join("README.md").is_file());
+    assert!(
+        new_file.worktree.join("nuevo.txt").is_file(),
+        "un archivo nuevo sin commitear no se borra"
+    );
+    let status = |id: &symphony_core::AgentId| {
+        one::<String>(
+            &e,
+            &format!(
+                "SELECT w.status FROM worktrees w JOIN agents a ON a.worktree_id = w.id WHERE a.id = '{id}'"
+            ),
+        )
+    };
+    assert_eq!(status(&clean.agent_id), "REMOVED");
+    assert_ne!(status(&dirty.agent_id), "REMOVED");
+    e.writer.shutdown();
+}
+
+/// Disco: un agente completado que nadie integró libera su worktree a los 7 días, no antes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_completed_agent_keeps_its_worktree_for_a_week() {
+    let e = env(WORK, None).await;
+    let c = e
+        .runtime
+        .create_agent(req(&e, "Hecho", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    // El fake-agent deja `fix.txt` sin commitear; aquí el trabajo ya está en la rama.
+    if !git(&c.worktree, &["status", "--porcelain"]).is_empty() {
+        git(&c.worktree, &["add", "-A"]);
+        git(&c.worktree, &["commit", "-qm", "hecho"]);
+    }
+    e.runtime.reclaim_disk(false).await;
+    assert!(c.worktree.exists(), "recién completado: se queda");
+    let conn = rusqlite::Connection::open(&e.db).unwrap();
+    conn.execute(
+        "UPDATE agents SET updated_at = 0 WHERE id = ?1",
+        [c.agent_id.to_string()],
+    )
+    .unwrap();
+    e.runtime.reclaim_disk(false).await;
+    assert!(!c.worktree.exists(), "una semana después se borra");
+    e.writer.shutdown();
+}
+
+/// Disco: los agentes de un proyecto Rust comparten el `build-dir` de Cargo (y cada uno guarda
+/// sus binarios en su `target/`); el repo del usuario no.
+#[test]
+fn cargo_builds_of_agents_share_one_build_dir() {
+    let user_chose = std::env::var_os("CARGO_TARGET_DIR").is_some()
+        || std::env::var_os("CARGO_BUILD_BUILD_DIR").is_some();
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join(".symphony");
+    let wt = home.join("worktrees").join("p").join("agent-001");
+    std::fs::create_dir_all(&wt).unwrap();
+    assert!(
+        symphony_daemon::gc::cargo_env(&home, &wt).is_empty(),
+        "sin Cargo.toml"
+    );
+    std::fs::write(wt.join("Cargo.toml"), "").unwrap();
+    std::fs::write(d.path().join("Cargo.toml"), "").unwrap();
+    let env = symphony_daemon::gc::cargo_env(&home, &wt);
+    if !user_chose {
+        assert_eq!(
+            env,
+            [(
+                "CARGO_BUILD_BUILD_DIR".to_string(),
+                home.join("cache")
+                    .join("cargo-build")
+                    .join("1")
+                    .display()
+                    .to_string()
+            )]
+        );
+        // El agente siguiente cae en otra carpeta: no esperan el mismo candado de Cargo.
+        let next = home.join("worktrees").join("p").join("agent-002");
+        std::fs::create_dir_all(&next).unwrap();
+        std::fs::write(next.join("Cargo.toml"), "").unwrap();
+        assert_ne!(symphony_daemon::gc::cargo_env(&home, &next), env);
+    }
+    assert!(
+        symphony_daemon::gc::cargo_env(&home, d.path()).is_empty(),
+        "el repo del usuario"
+    );
+    if cfg!(windows) && !user_chose {
+        let upper = PathBuf::from(wt.to_string_lossy().to_uppercase());
+        assert_eq!(
+            symphony_daemon::gc::cargo_env(&home, &upper).len(),
+            1,
+            "mayúsculas"
+        );
+    }
 }
 
 /// P07.5.S4: crear el chat dos veces devuelve el mismo agente, en `symphony/chat`.
@@ -609,6 +779,81 @@ async fn workspace_failure_leaves_no_half_built_agent() {
         assert_eq!(count(&e, t), 0, "{t}");
     }
     assert!(dir_is_empty_tree(&e.home.join("worktrees")));
+    assert_eq!(
+        git(&e.repo, &["branch", "--list", "symphony/*"]).trim_start_matches(['*', '+', ' ']),
+        clash.branch,
+        "la rama preexistente no se borra ante una colisión"
+    );
+    e.writer.shutdown();
+}
+
+/// Auditoría P13.S5 (`server.md`, hallazgo 1): una colisión con un worktree o rama preexistentes
+/// devuelve error sin borrar el directorio (con trabajo sin commitear) ni la rama anterior.
+#[tokio::test(flavor = "multi_thread")]
+async fn workspace_collision_preserves_preexisting_worktree_and_branch() {
+    let e = env(WORK, None).await;
+    let clash = e
+        .runtime
+        .create_agent(req(&e, "Primero", Execution::DecideLater))
+        .await
+        .unwrap();
+    let uncommitted = clash.worktree.join("sin-commitear.txt");
+    std::fs::write(&uncommitted, "trabajo valioso\n").unwrap();
+    symphony_store::open(&e.db)
+        .unwrap()
+        .execute_batch(
+            "DELETE FROM checkpoints; DELETE FROM agents; DELETE FROM worktrees; DELETE FROM tasks;",
+        )
+        .unwrap();
+
+    // 1. Colisión de carpeta (`agent-001` sigue en disco con cambios sin commit) y de rama.
+    let err = e
+        .runtime
+        .create_agent(req(&e, "Segundo", Execution::DecideLater))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CreateError::Workspace { detail, .. } if detail.contains("ya existe")),
+        "{err:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&uncommitted).unwrap(),
+        "trabajo valioso\n",
+        "la carpeta preexistente y sus archivos sin commitear se conservan"
+    );
+    assert_eq!(
+        git(&e.repo, &["branch", "--list", "symphony/*"]).trim_start_matches(['*', '+', ' ']),
+        clash.branch,
+        "la rama preexistente se conserva"
+    );
+
+    // 2. Quitada la carpeta, queda solo la rama preexistente con un commit propio: tampoco se borra.
+    git(&clash.worktree, &["add", "-A"]);
+    git(&clash.worktree, &["commit", "-q", "-m", "commit previo"]);
+    let branch_tip = git(&e.repo, &["rev-parse", &clash.branch]);
+    git(
+        &e.repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &clash.worktree.display().to_string(),
+        ],
+    );
+    let err = e
+        .runtime
+        .create_agent(req(&e, "Tercero", Execution::DecideLater))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CreateError::Workspace { detail, .. } if detail.contains("ya existe")),
+        "{err:?}"
+    );
+    assert_eq!(
+        git(&e.repo, &["rev-parse", &clash.branch]),
+        branch_tip,
+        "el commit de la rama preexistente sigue intacto"
+    );
     e.writer.shutdown();
 }
 
@@ -703,6 +948,11 @@ async fn executor_crash_fails_the_agent_and_opens_recovery() {
         &format!("SELECT state || '|' || state_reason FROM agents WHERE id='{id}'"),
     );
     assert!(state.starts_with("FAILED|fake-agent terminó"), "{state}");
+    // La causa que dejó el CLI en stderr queda con el agente.
+    assert!(
+        state.contains("stderr: fake-agent: error fatal simulado"),
+        "{state}"
+    );
     assert_eq!(
         one::<String>(&e, "SELECT status || '|' || end_reason FROM agent_runs"),
         "FAILED|CRASH"
@@ -1163,6 +1413,142 @@ proptest::proptest! {
             .unwrap()
             .block_on(run_checkpoint_case(ops));
     }
+}
+
+// --- P13.S3: recuperación de checkpoints ------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_skips_missing_checkpoint_blobs_and_records_recovery_once() {
+    let e = env(
+        "[[step]]\nkind = \"edit\"\npath = \"README.md\"\ncontent = \"demo\\narreglado\\n\"\n",
+        None,
+    )
+    .await;
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(
+        e.repo.join(".symphony/project.toml"),
+        "[project]\nname = \"demo\"\ndefault_branch = \"main\"\n\n[merge]\ncommit_on_complete = false\n",
+    )
+    .unwrap();
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Recuperar auth",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    let hash: String = one(
+        &e,
+        "SELECT o.blob_hash FROM checkpoints c JOIN context_objects o ON o.id = c.diff_object_id
+         ORDER BY c.seq DESC LIMIT 1",
+    );
+    let previous: String = one(
+        &e,
+        &format!(
+            "SELECT c.id FROM checkpoints c LEFT JOIN context_objects o ON o.id = c.diff_object_id
+             WHERE o.blob_hash IS NULL OR o.blob_hash != '{hash}' ORDER BY c.seq DESC LIMIT 1"
+        ),
+    );
+    let broken: i64 = one(
+        &e,
+        &format!(
+            "SELECT COUNT(*) FROM checkpoints c JOIN context_objects o ON o.id = c.diff_object_id
+             WHERE o.blob_hash = '{hash}'"
+        ),
+    );
+    assert!(broken > 0);
+    std::fs::remove_file(e.home.join("objects").join(&hash[..2]).join(&hash)).unwrap();
+
+    for _ in 0..2 {
+        let h = e
+            .runtime
+            .prepare_handoff(created.agent_id, "Recuperación")
+            .await
+            .unwrap();
+        assert_eq!(
+            h.checkpoint_id.map(|id| id.to_string()),
+            Some(previous.clone())
+        );
+        assert!(h.prompt.contains("+arreglado"), "{}", h.prompt);
+        let invalid: i64 = one(&e, "SELECT COUNT(*) FROM checkpoints WHERE is_valid = 0");
+        assert_eq!(invalid, broken);
+        let items: i64 = one(
+            &e,
+            "SELECT COUNT(*) FROM recovery_items WHERE kind = 'CHECKPOINT_INVALID'
+             AND checkpoint_valid = 0 AND status = 'OPEN'",
+        );
+        assert_eq!(
+            items, broken,
+            "la segunda preparación no duplica incidencias"
+        );
+    }
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_uses_live_worktree_and_task_when_every_checkpoint_has_invalid_json() {
+    let e = env(
+        "[[step]]\nkind = \"say\"\ntext = \"Trabajo conservado\"\n",
+        None,
+    )
+    .await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Objetivo conservado",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let checkpoints = count(&e, "checkpoints");
+    assert!(checkpoints > 0);
+    // Simula corrupción persistida: el escritor normal rechaza JSON ilegible.
+    symphony_store::open(&e.db)
+        .unwrap()
+        .execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE checkpoints SET summary_json = '{incompleto';
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+        .unwrap();
+    std::fs::write(
+        created.worktree.join("rescatado.txt"),
+        "Trabajo sin checkpoint\n",
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let h = e
+            .runtime
+            .prepare_handoff(created.agent_id, "Recuperación")
+            .await
+            .unwrap();
+        assert_eq!(h.checkpoint_id, None);
+        assert!(
+            h.prompt.contains("## Objetivo\nObjetivo conservado"),
+            "{}",
+            h.prompt
+        );
+        assert!(h.prompt.contains("Trabajo sin checkpoint"), "{}", h.prompt);
+        assert!(h.prompt.contains("Trabajo conservado"), "{}", h.prompt);
+        let invalid: i64 = one(&e, "SELECT COUNT(*) FROM checkpoints WHERE is_valid = 0");
+        assert_eq!(invalid, checkpoints);
+        let items: i64 = one(
+            &e,
+            "SELECT COUNT(*) FROM recovery_items WHERE kind = 'CHECKPOINT_INVALID'
+             AND checkpoint_valid = 0 AND status = 'OPEN'",
+        );
+        assert_eq!(items, checkpoints);
+    }
+    e.writer.shutdown();
 }
 
 // --- P06.S4: handoff v1 ------------------------------------------------------
@@ -1715,6 +2101,120 @@ async fn chat_fails_over_on_quota_and_keeps_waiting_for_messages() {
     assert_eq!(
         git(&e.repo, &["log", "--format=%s", "-1", "symphony/chat"]),
         "chat: turno 1 (beta/fast)"
+    );
+    e.writer.shutdown();
+}
+
+/// Auditoría P13.S5, hallazgo 1: tras un hijo que gastó mucha CPU y terminó, un comando callado
+/// que sigue también late (la comparación es contra la muestra anterior, no contra el máximo).
+#[tokio::test(flavor = "multi_thread")]
+async fn cpu_keeps_beating_after_a_busy_child_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let child = dir.path().join("hijo.toml");
+    std::fs::write(&child, "[[step]]\nkind = \"busy\"\nms = 3000\n").unwrap();
+    let script = format!(
+        "[[step]]\nkind = \"run\"\ncommand = ['{}', 'run', '--script', '{}']\n\n[[step]]\nkind = \"busy\"\nms = 3000\n\n[[step]]\nkind = \"say\"\ntext = \"listo\"\n",
+        fake_agent().display(),
+        child.display()
+    );
+    let e = env_with_watchdog(
+        &[("fake", &script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+    e.runtime
+        .create_agent(req(
+            &e,
+            "compilar dos veces",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "COMPLETED"
+    );
+    e.writer.shutdown();
+}
+
+/// Auditoría P13.S5, hallazgo 7: un agente pausado (árbol congelado, sin salida ni CPU) no es un
+/// cuelgue: el watchdog no lo mata aunque pase más de `stale_after`, y `resume` sigue valiendo.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_executor_is_not_killed_by_the_watchdog() {
+    let script = "[[step]]\nkind = \"say\"\ntext = \"arranca\"\n\n[[step]]\nkind = \"hang\"\n";
+    let e = env_with_watchdog(
+        &[("fake", script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1000),
+    )
+    .await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "pausar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.writer.handle().flush().await.unwrap();
+    e.runtime.pause(created.agent_id).await.unwrap();
+    // Tres veces `stale_after` congelado: sin el arreglo, el watchdog ya lo habría cerrado.
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    assert!(
+        e.runtime.is_live(created.agent_id),
+        "el watchdog mató a un agente pausado"
+    );
+    e.runtime.resume(created.agent_id).await.unwrap();
+    e.runtime.stop(created.agent_id).await.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.shutdown();
+}
+
+/// Auditoría P13.S5, hallazgo 5: si la base deja de aceptar escrituras, el pump mata el árbol y
+/// termina en vez de esperar para siempre a un CLI que sigue vivo.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pump_that_cannot_publish_kills_the_cli_instead_of_hanging() {
+    let script = "[[step]]\nkind = \"sleep\"\nms = 800\n\n[[step]]\nkind = \"say\"\ntext = \"tarde\"\n\n[[step]]\nkind = \"hang\"\n";
+    let e = env(script, None).await;
+    e.runtime
+        .create_agent(req(&e, "sin base", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.writer.shutdown();
+    tokio::time::timeout(Duration::from_secs(20), e.runtime.wait_executors())
+        .await
+        .expect("el pump quedó colgado esperando al CLI");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_silent_executor_that_burns_cpu_is_not_taken_for_hung() {
+    let script = "[[step]]
+kind = \"busy\"
+ms = 4000
+
+[[step]]
+kind = \"say\"
+text = \"listo\"
+";
+    let e = env_with_watchdog(
+        &[("fake", script)],
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(1500),
+    )
+    .await;
+    e.runtime
+        .create_agent(req(&e, "compilar", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "COMPLETED",
+        "4 s callado pero con CPU: trabaja, no está colgado"
     );
     e.writer.shutdown();
 }
@@ -3326,6 +3826,23 @@ async fn project_files_stay_searchable_as_they_change() {
 
     std::fs::remove_file(e.repo.join("src/auth.ts")).unwrap();
     wait_for("rotarnuevo", false);
+
+    // Lo que entró antes de su regla en `.gitignore` sale al volver a arrancar: el recorrido
+    // inicial limpia lo que ya no corresponde.
+    std::fs::create_dir_all(e.repo.join("target")).unwrap();
+    std::fs::write(e.repo.join("target/output"), "artefactoviejo\n").unwrap();
+    wait_for("artefactoviejo", true);
+    std::fs::write(e.repo.join(".gitignore"), "build/\ntarget/\n").unwrap();
+    // El `Watchers` temporal se destruía al salir de `ensure` y cerraba su canal antes de que el
+    // `rescan` podara el índice; retenerlo durante la espera (agente #53, codex/gpt-6.1-sol).
+    let rescan = symphony_daemon::watcher::Watchers::default();
+    rescan.ensure(
+        &project,
+        &e.repo,
+        e.writer.handle(),
+        ObjectStore::new(e.home.join("objects")),
+    );
+    wait_for("artefactoviejo", false);
     e.writer.shutdown();
 }
 
@@ -4284,6 +4801,32 @@ async fn complete(
     (created, agent)
 }
 
+/// P13.S5 (auditoría de merge): un `project.toml` ilegible no abre la puerta: el preflight
+/// pide aprobación y no queda listo, en vez de usar la política por defecto.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_project_toml_blocks_the_merge_instead_of_skipping_checks() {
+    let e = env_with(&[("alpha", &writes("a.txt", "desde A"))], None).await;
+    make_chat(&e).await;
+    let (a, _) = complete(&e, "Agregar a.txt", "alpha/fast").await;
+    std::fs::create_dir_all(e.repo.join(".symphony")).unwrap();
+    std::fs::write(e.repo.join(".symphony/project.toml"), "esto [[[ no es toml").unwrap();
+
+    let pre = e.runtime.merge_prepare(a.agent_id, false).await.unwrap();
+    assert!(
+        pre.requires_approval,
+        "sin config legible se pide aprobación"
+    );
+    assert!(!pre.ready(), "{:?}", pre.checks);
+    assert!(
+        pre.checks
+            .iter()
+            .any(|c| c.name == "validation" && c.status == "FAIL"),
+        "{:?}",
+        pre.checks
+    );
+    e.writer.shutdown();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_finished_agent_integrates_into_the_chat_branch_only_with_approval_and_never_into_main() {
     let e = env_with(&[("alpha", &writes("a.txt", "desde A"))], None).await;
@@ -4603,7 +5146,22 @@ async fn a_batch_creates_agents_with_dependencies_and_integrates_what_finished()
     // B espera a A; con tope 1, C (misma ola que A) espera a A también.
     assert_eq!(by_id["B"].depends_on, vec![by_id["A"].task_code.clone()]);
     assert_eq!(by_id["C"].depends_on, vec![by_id["A"].task_code.clone()]);
-    assert_eq!(by_id["B"].state, AgentState::WaitingDependency);
+    // Con la máquina cargada, A (1,5 s) puede terminar antes de que nazca B: entonces B nace
+    // liberado. Si no, espera.
+    if by_id["B"].state != AgentState::WaitingDependency {
+        let a_state: String = one(
+            &e,
+            &format!(
+                "SELECT state FROM agents WHERE id = '{}'",
+                by_id["A"].agent_id
+            ),
+        );
+        assert_eq!(
+            a_state, "COMPLETED",
+            "B no esperó a A: {:?}",
+            by_id["B"].state
+        );
+    }
     assert_ne!(by_id["A"].state, AgentState::WaitingDependency);
 
     // El chat sabe lo que delegó.

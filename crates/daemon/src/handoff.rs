@@ -17,6 +17,9 @@ use symphony_store::repo;
 
 /// Archivos nuevos más grandes que esto se nombran pero no se incluyen.
 const NEW_FILE_MAX_BYTES: u64 = 1024 * 1024;
+/// Tope agregado de bytes de archivos nuevos por handoff: pasado el tope se nombran sin
+/// contenido, aunque cada uno quepa por separado (P13.S5).
+const NEW_FILES_TOTAL_MAX: usize = 8 * 1024 * 1024;
 
 /// Prompt listo para lanzar un executor nuevo, con lo que va a `handoffs`.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,11 +47,26 @@ struct LiveGit {
     new_files: Vec<NewFile>,
 }
 
+/// Lee un archivo nuevo si cabe en el tope por archivo y en el presupuesto de la tanda. Pasado
+/// el tope total entra como «sin contenido»: no se lee ni se reserva (P13.S5).
+fn read_new_file(worktree: &Path, path: &str, budget: &mut usize) -> Option<String> {
+    let full = worktree.join(path);
+    let meta = std::fs::metadata(&full).ok()?;
+    let len = usize::try_from(meta.len()).ok()?;
+    if !meta.is_file() || meta.len() > NEW_FILE_MAX_BYTES || len > *budget {
+        return None;
+    }
+    let text = String::from_utf8(std::fs::read(&full).ok()?).ok()?;
+    *budget -= len;
+    Some(redact(&text).into_owned())
+}
+
 fn live_git(worktree: &Path, base: &str) -> Result<LiveGit, symphony_git::GitError> {
     let repo = Repo::at(worktree);
     let entries = repo.status()?;
     let mut status = String::new();
     let mut new_files = Vec::new();
+    let mut budget = NEW_FILES_TOTAL_MAX;
     for e in &entries {
         match e {
             FileStatus::Changed { xy, path, .. } | FileStatus::Unmerged { xy, path } => {
@@ -56,13 +74,7 @@ fn live_git(worktree: &Path, base: &str) -> Result<LiveGit, symphony_git::GitErr
             }
             FileStatus::Untracked { path } => {
                 status.push_str(&format!("?? {path}\n"));
-                let full = worktree.join(path);
-                let content = std::fs::metadata(&full)
-                    .ok()
-                    .filter(|m| m.len() <= NEW_FILE_MAX_BYTES)
-                    .and_then(|_| std::fs::read(&full).ok())
-                    .and_then(|b| String::from_utf8(b).ok())
-                    .map(|s| redact(&s).into_owned());
+                let content = read_new_file(worktree, path, &mut budget);
                 new_files.push(NewFile {
                     path: path.clone(),
                     content,
@@ -110,78 +122,222 @@ pub(crate) fn message_text(
     )
 }
 
+/// De dónde sale el texto de un mensaje.
+enum SourceText {
+    /// El mensaje corto ya trae su texto en la fila.
+    Inline(String),
+    /// El mensaje largo vive en el object store: se lee después, sin el cerrojo del lector.
+    Blob(String),
+}
+
+/// Un mensaje ya filtrado, pendiente de resolver su texto.
+struct MessageSource {
+    speaker: Speaker,
+    run: Option<String>,
+    text: SourceText,
+}
+
+/// Bajo el cerrojo del lector: solo filas y hashes, ninguna lectura del object store (P13.S5).
+fn message_sources(
+    conn: &rusqlite::Connection,
+    agent: AgentId,
+) -> Result<(Vec<MessageSource>, HashSet<String>), String> {
+    let handoff_runs: HashSet<String> = repo::handoff_run_ids(conn, agent)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|run| run.to_string())
+        .collect();
+    let mut stmt = conn
+        .prepare(
+            // Los últimos `MESSAGES_MAX`, en orden: un chat de meses no se carga entero
+            // (revisión de P13).
+            &format!(
+                "SELECT run_id, role, content, blob_hash FROM (
+                     SELECT m.run_id, m.role, m.content, co.blob_hash, m.created_at, m.id
+                     FROM messages m
+                     LEFT JOIN context_objects co ON co.id = m.content_object_id
+                     WHERE m.agent_id = ?1
+                     ORDER BY m.created_at DESC, m.id DESC LIMIT {}
+                 ) ORDER BY created_at ASC, id ASC",
+                repo::MESSAGES_MAX
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([agent.to_string()], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (run, role, content, hash) in rows {
+        let speaker = match role.as_str() {
+            "USER" => Speaker::User,
+            "ASSISTANT" => Speaker::Assistant,
+            _ => continue,
+        };
+        let text = match (content, hash) {
+            (Some(content), _) => SourceText::Inline(content),
+            (None, Some(hash)) => SourceText::Blob(hash),
+            (None, None) => continue,
+        };
+        out.push(MessageSource { speaker, run, text });
+    }
+    Ok((out, handoff_runs))
+}
+
 /// Lo dicho hasta ahora: mensajes del usuario y del asistente, en orden. No entran las
 /// herramientas, los separadores de cambio de executor ni los prompts de handoff (el
 /// primer mensaje de un run que arrancó desde un checkpoint), que ya contienen esta misma
 /// conversación. Los fragmentos seguidos del asistente se juntan en un mensaje.
 fn conversation(
-    conn: &rusqlite::Connection,
+    sources: Vec<MessageSource>,
+    handoff_runs: HashSet<String>,
     objects: &ObjectStore,
-    agent: AgentId,
-) -> Result<Vec<ChatMessage>, String> {
-    let handoff_runs: HashSet<_> = repo::handoff_run_ids(conn, agent)
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .collect();
+) -> Vec<ChatMessage> {
     let mut seen_first_user = HashSet::new();
     let mut out: Vec<ChatMessage> = Vec::new();
-    for m in repo::agent_messages(conn, agent, None).map_err(|e| e.to_string())? {
-        let speaker = match m.role.as_str() {
-            "USER" => Speaker::User,
-            "ASSISTANT" => Speaker::Assistant,
-            _ => continue,
-        };
-        if speaker == Speaker::User
-            && let Some(run) = m.run_id
+    for source in sources {
+        if source.speaker == Speaker::User
+            && let Some(run) = source.run
             && handoff_runs.contains(&run)
             && seen_first_user.insert(run)
         {
             continue;
         }
-        let text = redact(&message_text(conn, objects, &m)).into_owned();
+        let raw = match source.text {
+            SourceText::Inline(text) => text,
+            SourceText::Blob(hash) => objects.get(&hash).map_or_else(
+                |_| "(objeto no disponible)".into(),
+                |b| String::from_utf8_lossy(&b).into_owned(),
+            ),
+        };
+        let text = redact(&raw).into_owned();
         if text.trim().is_empty() {
             continue;
         }
         match out.last_mut() {
-            Some(last) if speaker == Speaker::Assistant && last.speaker == Speaker::Assistant => {
+            Some(last)
+                if source.speaker == Speaker::Assistant && last.speaker == Speaker::Assistant =>
+            {
                 last.text.push_str("\n\n");
                 last.text.push_str(&text);
             }
-            _ => out.push(ChatMessage { speaker, text }),
+            _ => out.push(ChatMessage {
+                speaker: source.speaker,
+                text,
+            }),
         }
     }
-    Ok(out)
+    out
+}
+
+/// Descarta checkpoints ilegibles antes de usarlos; errores de E/S transitorios se propagan.
+pub(crate) async fn validated_checkpoint(
+    reader: &Mutex<rusqlite::Connection>,
+    writer: &symphony_store::WriterHandle,
+    objects: &ObjectStore,
+    agent: AgentId,
+) -> Result<Option<repo::LatestCheckpoint>, String> {
+    loop {
+        let checkpoint = {
+            let conn = reader
+                .lock()
+                .map_err(|_| "lector de la base no disponible")?;
+            repo::latest_checkpoint(&conn, agent).map_err(|e| e.to_string())?
+        };
+        let Some(checkpoint) = checkpoint else {
+            return Ok(None);
+        };
+        let objects = objects.clone();
+        let candidate = checkpoint.clone();
+        let invalid = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+            if let Some(summary) = &candidate.summary_json
+                && serde_json::from_str::<Value>(summary).is_err()
+            {
+                return Ok(Some("JSON de resumen ilegible".to_string()));
+            }
+            if candidate.diff_object_id.is_some() {
+                let Some(hash) = &candidate.diff_blob_hash else {
+                    return Ok(Some("referencia de diff sin blob".to_string()));
+                };
+                match objects.get(hash) {
+                    Ok(_) => {}
+                    Err(
+                        e @ (symphony_object_store::ObjectError::NotFound(_)
+                        | symphony_object_store::ObjectError::Corrupt { .. }
+                        | symphony_object_store::ObjectError::InvalidHash(_)),
+                    ) => {
+                        return Ok(Some(e.to_string()));
+                    }
+                    // Un error pasajero (un antivirus, un lock) no es corrupción ni puede tumbar
+                    // el handoff justo cuando cae un proveedor: se usa el checkpoint igual
+                    // (revisión de P13).
+                    Err(e) => {
+                        tracing::warn!(error = %e, "no se pudo leer el diff del checkpoint; se usa igual");
+                    }
+                }
+            }
+            Ok(None)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let Some(detail) = invalid else {
+            return Ok(Some(checkpoint));
+        };
+        let id = checkpoint.id;
+        let detail = format!("Checkpoint {id}: {detail}");
+        writer
+            .write(Box::new(move |tx| {
+                repo::invalidate_checkpoint(tx, id, &detail, crate::runtime::now_ms())
+            }))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 }
 
 /// Arma el handoff del agente. `reason`: por qué entra un executor nuevo, en una frase.
 pub async fn prepare(
     reader: &Mutex<rusqlite::Connection>,
     objects: &ObjectStore,
+    writer: &symphony_store::WriterHandle,
     agent: AgentId,
     reason: &str,
 ) -> Result<PreparedHandoff, String> {
     let started = Instant::now();
-    let (a, wt, checkpoint, conversation, facts, stale) = {
+    let checkpoint = validated_checkpoint(reader, writer, objects, agent).await?;
+    let (a, wt, objective, sources, handoff_runs, facts, stale) = {
         let conn = reader
             .lock()
             .map_err(|_| "lector de la base no disponible")?;
         let a = repo::get_agent(&conn, agent).map_err(|e| e.to_string())?;
         let wt_id = a.worktree_id.ok_or("el agente no tiene worktree")?;
         let wt = repo::get_worktree(&conn, wt_id).map_err(|e| e.to_string())?;
-        let checkpoint = repo::latest_checkpoint(&conn, agent)
-            .map_err(|e| e.to_string())?
-            .ok_or("el agente no tiene un checkpoint válido")?;
+        let task = repo::get_task(&conn, a.task_id).map_err(|e| e.to_string())?;
+        let objective = match task.description {
+            Some(d) if !d.trim().is_empty() => format!("{}\n\n{}", task.title, d.trim()),
+            _ => task.title,
+        };
         // Los eventos que piden checkpoint (ver `checkpoint::Progress::apply`): si hay uno más
         // nuevo que el checkpoint, el checkpoint no lo alcanzó.
         let stale: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM events WHERE agent_id = ?1 AND occurred_at > ?2
                    AND type IN ('TurnFinished','ToolFinished','CommandFinished','FileModified'))",
-                rusqlite::params![agent.to_string(), checkpoint.created_at],
+                rusqlite::params![
+                    agent.to_string(),
+                    checkpoint.as_ref().map_or(0, |c| c.created_at)
+                ],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let conversation = conversation(&conn, objects, agent)?;
+        let (sources, handoff_runs) = message_sources(&conn, agent)?;
         let facts = symphony_store::context::get_current_facts(&conn, &a.project_id.to_string())
             .map_err(|e| e.to_string())?
             .into_iter()
@@ -191,8 +347,10 @@ pub async fn prepare(
                 kind: f.kind,
             })
             .collect();
-        (a, wt, checkpoint, conversation, facts, stale)
+        (a, wt, objective, sources, handoff_runs, facts, stale)
     };
+    // Ya sin el cerrojo del lector: los blobs del object store y la redacción (P13.S5).
+    let conversation = conversation(sources, handoff_runs, objects);
     let (path, base) = (wt.path.clone(), wt.base_ref.clone());
     let git = tokio::task::spawn_blocking(move || live_git(Path::new(&path), &base))
         .await
@@ -200,8 +358,8 @@ pub async fn prepare(
         .map_err(|e| format!("no se pudo leer el worktree: {e}"))?;
 
     let summary: Value = checkpoint
-        .summary_json
-        .as_deref()
+        .as_ref()
+        .and_then(|c| c.summary_json.as_deref())
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(Value::Null);
     let last_command = summary["last_command"]["command"]
@@ -223,20 +381,25 @@ pub async fn prepare(
         })
         .unwrap_or_default();
 
-    let (checkpoint_seq, checkpoint_created_at) = (checkpoint.seq, checkpoint.created_at);
+    let checkpoint_id = checkpoint.as_ref().map(|c| c.id);
+    let (checkpoint_seq, checkpoint_created_at) = checkpoint
+        .as_ref()
+        .map_or((0, 0), |c| (c.seq, c.created_at));
     let input = HandoffInput {
-        objective: checkpoint.objective,
+        objective: checkpoint
+            .as_ref()
+            .map_or(objective, |c| c.objective.clone()),
         reason: reason.to_string(),
-        plan_tail: checkpoint.plan_tail,
-        current_step: checkpoint.current_step,
-        next_step: checkpoint.next_step,
+        plan_tail: checkpoint.as_ref().and_then(|c| c.plan_tail.clone()),
+        current_step: checkpoint.as_ref().and_then(|c| c.current_step.clone()),
+        next_step: checkpoint.as_ref().and_then(|c| c.next_step.clone()),
         last_command,
         failures,
         files_touched: git.files,
         git_status: git.status,
         diff: git.diff,
         // ponytail: el diff vivo no se guarda aparte; si se recorta, se apunta al del checkpoint.
-        diff_uri: checkpoint.diff_uri,
+        diff_uri: checkpoint.as_ref().and_then(|c| c.diff_uri.clone()),
         new_files: git.new_files,
         conversation,
         facts,
@@ -245,7 +408,7 @@ pub async fn prepare(
     let raw = handoff::assemble(&input, ContextMode::Raw).tokens_sent;
     Ok(PreparedHandoff {
         prompt: built.prompt,
-        checkpoint_id: Some(checkpoint.id),
+        checkpoint_id,
         checkpoint_seq,
         checkpoint_created_at,
         stale,
@@ -264,4 +427,41 @@ pub async fn prepare(
             })
             .collect(),
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn untracked_files_share_one_total_budget() {
+        // Dos archivos que caben por separado pero no juntos: el segundo se nombra sin
+        // contenido, sin leerlo ni reservarlo (P13.S5).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("uno.txt"), "abcdef").unwrap();
+        std::fs::write(root.join("dos.txt"), "ghijkl").unwrap();
+        let mut budget = 8;
+        assert_eq!(
+            read_new_file(root, "uno.txt", &mut budget).as_deref(),
+            Some("abcdef")
+        );
+        assert_eq!(budget, 2);
+        assert_eq!(read_new_file(root, "dos.txt", &mut budget), None);
+        assert_eq!(budget, 2, "no se descuenta lo que no se leyó");
+        // Un archivo que no existe tampoco toca el presupuesto.
+        assert!(read_new_file(root, "no-existe.txt", &mut budget).is_none());
+        assert_eq!(budget, 2);
+    }
+
+    #[test]
+    fn a_huge_new_file_never_enters_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("grande.bin"), vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        let mut budget = NEW_FILES_TOTAL_MAX;
+        assert!(read_new_file(root, "grande.bin", &mut budget).is_none());
+        assert_eq!(budget, NEW_FILES_TOTAL_MAX);
+    }
 }

@@ -136,6 +136,16 @@ pub fn upsert_file(
     }
 }
 
+/// Las URIs de los archivos indexados del proyecto.
+pub fn file_uris(conn: &Connection, project: &str) -> Result<Vec<String>, RepoError> {
+    let mut stmt =
+        conn.prepare("SELECT uri FROM context_objects WHERE project_id = ?1 AND kind = 'FILE'")?;
+    let uris = stmt
+        .query_map([project], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(uris)
+}
+
 /// Borra el archivo `uri` del proyecto con sus chunks y recuperaciones. Devuelve su blob.
 pub fn delete_file(
     conn: &Connection,
@@ -160,6 +170,25 @@ pub fn delete_file(
     )?;
     conn.execute("DELETE FROM context_objects WHERE id = ?1", [&id])?;
     Ok(Some(hash))
+}
+
+/// Borra del índice los archivos cuya URI empieza por `prefix` (un directorio que desapareció)
+/// y devuelve los blobs a soltar. Un `rm -rf` de un directorio llega como un solo evento, así
+/// que sin esto sus archivos seguirían indexados hasta el próximo arranque (P13.S5).
+pub fn delete_file_prefix(
+    conn: &Connection,
+    project: &str,
+    prefix: &str,
+) -> Result<Vec<String>, RepoError> {
+    let mut released = Vec::new();
+    for uri in file_uris(conn, project)? {
+        if uri.starts_with(prefix)
+            && let Some(hash) = delete_file(conn, project, &uri)?
+        {
+            released.push(hash);
+        }
+    }
+    Ok(released)
 }
 
 pub fn object_by_id(conn: &Connection, id: &str) -> Result<Option<ObjectRow>, RepoError> {

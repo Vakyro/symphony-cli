@@ -255,7 +255,7 @@ impl Runtime {
             }),
         };
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(rt.clone().watchdog());
+            handle.spawn(Runtime::watchdog(Arc::downgrade(&rt.inner)));
         }
         rt
     }
@@ -271,6 +271,7 @@ impl Runtime {
         &self,
         project_root: &str,
         wt_path: &Path,
+        agent: AgentId,
         number: i64,
     ) -> Result<(), String> {
         let Some(cfg) = symphony_core::load_project(Path::new(project_root))
@@ -287,6 +288,7 @@ impl Runtime {
             let (exec, _, _) = self
                 .run_scheduled(
                     key,
+                    agent,
                     format!("Agent #{number}"),
                     command,
                     wt_path,
@@ -390,42 +392,56 @@ impl Runtime {
 
     /// Persiste el latido de los runs vivos y cierra como `NO_HEARTBEAT` los
     /// que llevan más de `stale_after` sin emitir nada (FLOW §16, IDEA §5.10).
-    async fn watchdog(self) {
-        let mut tick = tokio::time::interval(self.heartbeat_every);
+    /// Débil: un clon fuerte mantendría vivo el runtime (y su base) para siempre.
+    async fn watchdog(weak: std::sync::Weak<Inner>) {
+        let Some(every) = weak.upgrade().map(|i| i.heartbeat_every) else {
+            return;
+        };
+        let mut tick = tokio::time::interval(every);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
-            let live: Vec<(AgentId, RunId)> = self
+            let Some(inner) = weak.upgrade() else { return };
+            let this = Runtime { inner };
+            let live: Vec<(AgentId, RunId)> = this
                 .live
                 .lock()
                 .map(|l| l.iter().map(|(a, r)| (*a, r.run_id)).collect())
                 .unwrap_or_default();
             for (agent, run) in live {
-                let silent = self
-                    .activity
-                    .lock()
-                    .ok()
-                    .and_then(|a| a.get(&run).copied())
-                    .is_none_or(|t| t.elapsed() > self.stale_after);
-                let now = now_ms();
-                let _ = self
-                    .writer
-                    .write(Box::new(move |t| {
-                        repo::heartbeat(t, run, now)?;
-                        Ok(())
-                    }))
-                    .await;
-                if silent {
-                    tracing::warn!(
-                        agent = %agent,
-                        run = %run,
-                        "executor sin latido: se cierra como NO_HEARTBEAT y se abre recuperación"
-                    );
-                    let _ = self
-                        .control(agent, |done| Control::NoHeartbeat { done })
-                        .await;
-                }
+                this.watchdog_step(agent, run).await;
             }
+        }
+    }
+
+    /// Evalúa un `(agent, run)` observado por el watchdog: persiste su latido y, si superó
+    /// `stale_after`, envía `NoHeartbeat` condicionado a que `agent` siga en ese `run`.
+    pub(crate) async fn watchdog_step(&self, agent: AgentId, run: RunId) {
+        let silent = self
+            .activity
+            .lock()
+            .ok()
+            .and_then(|a| a.get(&run).copied())
+            .is_none_or(|t| t.elapsed() > self.stale_after);
+        let now = now_ms();
+        let _ = self
+            .writer
+            .write(Box::new(move |t| {
+                repo::heartbeat(t, run, now)?;
+                Ok(())
+            }))
+            .await;
+        if silent
+            && self
+                .control_if(agent, Some(run), |done| Control::NoHeartbeat { done })
+                .await
+                .is_some()
+        {
+            tracing::warn!(
+                agent = %agent,
+                run = %run,
+                "executor sin latido: se cierra como NO_HEARTBEAT y se abre recuperación"
+            );
         }
     }
 
@@ -456,7 +472,8 @@ impl Runtime {
         let objects = symphony_object_store::ObjectStore::new(
             symphony_core::SymphonyHome::at(&self.home).objects_dir(),
         );
-        let mut prepared = crate::handoff::prepare(&self.reader, &objects, agent, reason).await?;
+        let mut prepared =
+            crate::handoff::prepare(&self.reader, &objects, &self.writer, agent, reason).await?;
         // Context transformers de plugin (ADR-0015): un fallo nunca bloquea el handoff.
         prepared.prompt = self.transform_handoff(agent, prepared.prompt).await;
         Ok(prepared)
@@ -711,7 +728,8 @@ impl Runtime {
             .join(project_id.to_string())
             .join(dir);
 
-        // 4. Worktree. Si falla, no se creó nada en la base.
+        // 4. Worktree. Si falla, no se creó nada en la base (y `prepare_worktree` ya revirtió
+        // solo lo que llegó a crear este intento, sin tocar recursos preexistentes).
         let plan = {
             let (repo_root, wt_path, branch, wt_base) = (
                 repo_root.clone(),
@@ -724,21 +742,15 @@ impl Runtime {
             })
             .await
             .map_err(store_err)?
-        };
-        let plan = match plan {
-            Ok(plan) => plan,
-            Err(detail) => {
-                self.undo_worktree(&repo_root, &wt_path, &branch).await;
-                return Err(CreateError::Workspace {
-                    detail,
-                    task: task_text,
-                });
-            }
-        };
+        }
+        .map_err(|detail| CreateError::Workspace {
+            detail,
+            task: task_text.clone(),
+        })?;
 
         // 4b. Preparación del worktree (`[worktree] prepare`): si falla, no se creó el agente.
         if let Err(detail) = self
-            .prepare_worktree_commands(&root_text, &wt_path, number)
+            .prepare_worktree_commands(&root_text, &wt_path, agent_id, number)
             .await
         {
             self.undo_worktree(&repo_root, &wt_path, &branch).await;
@@ -918,50 +930,89 @@ impl Runtime {
         Ok(created)
     }
 
-    /// Borra el worktree y la rama de un intento fallido (best effort).
+    /// Borra el worktree y la rama creados por este intento fallido.
     async fn undo_worktree(&self, repo_root: &Path, wt_path: &Path, branch: &str) {
         let (root, path, branch) = (
             repo_root.to_path_buf(),
             wt_path.to_path_buf(),
             branch.to_string(),
         );
-        let _ = tokio::task::spawn_blocking(move || {
-            let repo = Repo::at(&root);
-            if path.exists() {
-                let _ = repo.worktree_remove(&path, true);
-                let _ = std::fs::remove_dir_all(&path);
-            }
-            let _ = repo.worktree_prune();
-            let _ = repo.delete_branch(&branch, true);
-        })
-        .await;
+        let _ =
+            tokio::task::spawn_blocking(move || undo_worktree_sync(&root, &path, &branch)).await;
+    }
+}
+
+fn undo_worktree_sync(repo_root: &Path, wt_path: &Path, branch: &str) {
+    let repo = Repo::at(repo_root);
+    if (wt_path.exists() || wt_path.symlink_metadata().is_ok())
+        && let Err(e) = repo.worktree_remove(wt_path, true)
+    {
+        tracing::warn!(
+            path = %wt_path.display(),
+            error = %e,
+            "no se pudo quitar el worktree con git al revertir la creación"
+        );
+        if (wt_path.exists() || wt_path.symlink_metadata().is_ok())
+            && let Err(e) = std::fs::remove_dir_all(wt_path)
+        {
+            tracing::warn!(
+                path = %wt_path.display(),
+                error = %e,
+                "no se pudo borrar la carpeta del worktree al revertir la creación"
+            );
+        }
+    }
+    if let Err(e) = repo.worktree_prune() {
+        tracing::warn!(error = %e, "no se pudo podar worktrees al revertir la creación");
+    }
+    if repo.branch_exists(branch).unwrap_or(false)
+        && let Err(e) = repo.delete_branch(branch, true)
+    {
+        tracing::warn!(
+            branch,
+            error = %e,
+            "no se pudo borrar la rama al revertir la creación"
+        );
     }
 }
 
 /// Crea el worktree y aplica la estrategia de dependencias que no necesita el scheduler.
+/// Si hay colisión con una carpeta o rama preexistente, devuelve error sin borrar nada;
+/// si falla después de crear el worktree/rama en este intento, revierte solo lo creado.
 fn prepare_worktree(
     repo_root: &Path,
     wt_path: &Path,
     branch: &str,
     base: &str,
 ) -> Result<deps::DepsPlan, String> {
-    if wt_path.exists() {
+    if wt_path.exists() || wt_path.symlink_metadata().is_ok() {
         return Err(format!("{} ya existe", wt_path.display()));
     }
+    let repo = Repo::at(repo_root);
     // El plan por fases es temporal: no entra en `git add -A` ni en el diff (exclusión local).
-    let _ = Repo::at(repo_root).exclude_locally(crate::plan::PLAN_EXCLUDE);
+    let _ = repo.exclude_locally(crate::plan::PLAN_EXCLUDE);
     if let Some(parent) = wt_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    Repo::at(repo_root)
-        .worktree_add(wt_path, branch, base)
-        .map_err(|e| e.to_string())?;
-    let plan = deps::plan(wt_path, repo_root).map_err(|e| e.to_string())?;
-    // ponytail: INSTALL y PNPM_STORE son operaciones pesadas; las corre el scheduler (P08).
-    if plan.strategy == deps::DepsStrategy::Link {
-        deps::link_node_modules(wt_path, repo_root).map_err(|e| e.to_string())?;
+    if repo.branch_exists(branch).map_err(|e| e.to_string())? {
+        return Err(format!("la rama `{branch}` ya existe"));
     }
-    Ok(plan)
+    if let Err(e) = repo.worktree_add(wt_path, branch, base) {
+        undo_worktree_sync(repo_root, wt_path, branch);
+        return Err(e.to_string());
+    }
+    let setup = (|| {
+        let plan = deps::plan(wt_path, repo_root).map_err(|e| e.to_string())?;
+        // ponytail: INSTALL y PNPM_STORE son operaciones pesadas; las corre el scheduler (P08).
+        if plan.strategy == deps::DepsStrategy::Link {
+            deps::link_node_modules(wt_path, repo_root).map_err(|e| e.to_string())?;
+        }
+        Ok(plan)
+    })();
+    if setup.is_err() {
+        undo_worktree_sync(repo_root, wt_path, branch);
+    }
+    setup
 }
 
 /// Filas de la transacción de creación.
@@ -1031,4 +1082,76 @@ pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::executor::LiveRun;
+    use symphony_object_store::ObjectStore;
+    use symphony_store::Writer;
+    use symphony_testkit::FakeAdapter;
+    use tokio::sync::mpsc;
+
+    /// Auditoría P13.S5 (`server.md`, hallazgo 8): si el watchdog observó que `run_a` estaba
+    /// inactivo pero, mientras esperaba al escritor, el agente cambió a `run_b`, el envío de
+    /// `NoHeartbeat` condicionado a `run_a` se descarta y no mata a `run_b`.
+    #[tokio::test]
+    async fn watchdog_discards_no_heartbeat_for_replaced_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let writer = Writer::start(&home.join("symphony.db")).unwrap();
+        let bus = EventBus::new(writer.handle(), 16, ObjectStore::new(home.join("objects")));
+        let rt = Runtime::new_with_watchdog(
+            &home,
+            writer.handle(),
+            writer.reader().unwrap(),
+            bus,
+            Vec::new(),
+            None,
+            WatchdogTiming {
+                heartbeat_every: Duration::from_secs(3600),
+                stale_after: Duration::from_millis(50),
+            },
+        );
+        let agent = AgentId::new();
+        let run_a = RunId::new();
+        let run_b = RunId::new();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        let adapter: Arc<dyn ProviderAdapter> =
+            Arc::new(FakeAdapter::new(PathBuf::from("fake"), dir.path()));
+        rt.live.lock().unwrap().insert(
+            agent,
+            LiveRun {
+                run_id: run_b,
+                adapter,
+                project_id: ProjectId::new(),
+                control: tx_b,
+            },
+        );
+
+        // `run_a` ya no tiene actividad reciente (fue reemplazado por `run_b`): el paso del
+        // watchdog con la instantánea vieja `(agent, run_a)` no debe enviar `NoHeartbeat` a `run_b`.
+        rt.watchdog_step(agent, run_a).await;
+        assert!(
+            rx_b.try_recv().is_err(),
+            "el watchdog no debe cerrar el run nuevo por la inactividad del run anterior"
+        );
+
+        // Cuando es el propio `run_b` el que supera `stale_after`, sí recibe `NoHeartbeat`.
+        let responder = tokio::spawn(async move {
+            match rx_b.recv().await {
+                Some(Control::NoHeartbeat { done }) => {
+                    let _ = done.send(());
+                    true
+                }
+                _ => false,
+            }
+        });
+        rt.watchdog_step(agent, run_b).await;
+        assert!(responder.await.unwrap());
+        writer.shutdown();
+    }
 }

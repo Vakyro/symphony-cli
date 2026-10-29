@@ -206,7 +206,7 @@ struct GrepArgs {
     glob: Option<String>,
     /// Case-insensitive search. Default false.
     ignore_case: Option<bool>,
-    /// Maximum number of matching lines. Default 100.
+    /// Maximum number of matching lines. Default 100, maximum 1000.
     max_results: Option<usize>,
 }
 

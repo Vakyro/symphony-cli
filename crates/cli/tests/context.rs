@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::{path_with_fake_claude, symphonyd};
+use common::{DaemonGuard, path_with_fake_claude, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -38,6 +38,7 @@ fn symphony(home: &Path, cwd: &Path, args: &[&str]) -> (bool, String, String) {
 fn context_commands_on_a_fresh_project() {
     let dir = tempfile::tempdir().unwrap();
     let (home, repo) = (dir.path().join("home"), dir.path().join("repo"));
+    let daemon = DaemonGuard::new(&home);
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "test@test.local"]);
@@ -68,5 +69,5 @@ fn context_commands_on_a_fresh_project() {
     );
     assert!(!ok && !err.is_empty(), "{err}");
 
-    symphony(&home, &repo, &["daemon", "stop"]);
+    let _ = daemon.stop();
 }

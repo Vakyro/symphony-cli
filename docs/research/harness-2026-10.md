@@ -1,6 +1,6 @@
 # Harness de Symphony por proveedor (verificado en vivo, 2026-10-23)
 
-ADR-0019: todos los modelos trabajan con las mismas herramientas (`read`, `write`, `edit`, `glob`, `grep`, `shell` + `context_*`), que expone el broker `symphony mcp serve` cuando el agente corre con `SYMPHONY_HARNESS=1`. Se activa con `[harness] mode = "symphony"` en `~/.symphony/config.toml` (por defecto `native`).
+ADR-0019: todos los modelos trabajan con las mismas herramientas (`read`, `write`, `edit`, `glob`, `grep`, `shell` + `context_*`), que expone el broker `symphony mcp serve` cuando el agente corre con `SYMPHONY_HARNESS=1`. Se activa con `[harness] mode = "symphony"` en `~/.symphony/config.toml` (por defecto `symphony`; `native` deja las herramientas de cada CLI).
 
 Prueba: en una carpeta vacía, «crea `hola.txt` con la palabra PRUEBA y léelo». 1 a 2 mensajes por proveedor, dentro del tope que autorizó Leo.
 
@@ -19,4 +19,4 @@ Prueba: en una carpeta vacía, «crea `hola.txt` con la palabra PRUEBA y léelo�
 - El permiso de OpenCode `external_directory` del worktree sigue; no afecta al broker (es un proceso aparte).
 
 ## Decisión
-El modo por defecto sigue siendo `native`: cambiarlo es de Leo (STATUS § Para Leo). Con `mode = "symphony"` Claude, Codex, OpenCode, Copilot y Kimi comparten interfaz; Antigravity queda como excepción documentada.
+El modo por defecto pasó a `symphony` el 2026-10-24 por decisión de Leo. Con `mode = "symphony"` Claude, Codex, OpenCode, Copilot y Kimi comparten interfaz; Antigravity queda como excepción documentada.

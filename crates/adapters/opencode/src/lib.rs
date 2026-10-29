@@ -74,8 +74,9 @@ pub fn parse_models(text: &str) -> Vec<String> {
 }
 
 fn tool_kind(name: &str) -> ToolKind {
-    match name {
-        "bash" => ToolKind::Command,
+    // `shell` es la del harness de Symphony: sin esto su comando no quedaba registrado.
+    match symphony_adapter_common::hooks::harness_tool_name(name) {
+        "bash" | "shell" => ToolKind::Command,
         "write" | "edit" | "multiedit" | "patch" | "apply_patch" => ToolKind::Edit,
         _ => ToolKind::Other,
     }
@@ -229,7 +230,9 @@ impl OpenCodeAdapter {
             spec = spec.args(["-m", &req.model]);
         }
         for (k, v) in &req.env {
-            spec = spec.env(k, v);
+            if !symphony_adapter_common::is_internal_env(k) {
+                spec = spec.env(k, v);
+            }
         }
         spec = spec.env("OPENCODE_CONFIG_CONTENT", run_config(req).to_string());
         Ok(spec)
@@ -241,20 +244,23 @@ fn find_opencode() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         if cfg!(windows) && dir.join("opencode.cmd").is_file() {
-            let native = dir.join("node_modules/opencode-ai/bin/opencode.exe");
-            if native.is_file() {
-                return Some(native);
+            // El paquete se llamaba `opencode-ai`; desde 2026-10 es `@opencode/cli`.
+            for pkg in ["@opencode/cli", "opencode-ai"] {
+                let native = dir.join("node_modules").join(pkg).join("bin/opencode.exe");
+                if native.is_file() {
+                    return Some(native);
+                }
             }
         }
     }
     find_on_path("opencode")
 }
 
-/// La versión del paquete npm (`.../opencode-ai/bin/opencode.exe` → `../package.json`).
+/// La versión del paquete npm (`.../@opencode/cli/bin/opencode.exe` → `../package.json`).
 pub fn version_from_package(binary: &Path) -> Option<String> {
     let pkg = binary.parent()?.parent()?.join("package.json");
     let json: Value = serde_json::from_str(&std::fs::read_to_string(pkg).ok()?).ok()?;
-    (json["name"] == "opencode-ai")
+    (json["name"] == "opencode-ai" || json["name"] == "@opencode/cli")
         .then(|| json["version"].as_str().map(str::to_string))
         .flatten()
         .filter(|v| !v.is_empty())
@@ -470,13 +476,33 @@ impl ProviderAdapter for OpenCodeAdapter {
             }
             Some("error") => {
                 let e = &v["error"];
-                let mut text = e["data"]["message"].as_str().unwrap_or("").to_string();
-                for key in ["statusCode", "responseBody"] {
-                    if let Some(x) = e["data"].get(key).filter(|x| !x.is_null()) {
+                // 1.x: `{name, data: {message, statusCode, responseBody}}`; 2.x: `{type, message,
+                // status, retryAfterMs}` (visto con opencode 2.1.4 al agotarse el uso gratuito).
+                let mut text = e["data"]["message"]
+                    .as_str()
+                    .or_else(|| e["message"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                for (key, x) in [
+                    ("statusCode", &e["data"]["statusCode"]),
+                    ("responseBody", &e["data"]["responseBody"]),
+                    ("status", &e["status"]),
+                ] {
+                    if !x.is_null() {
                         text.push_str(&format!(" {key}={}", x.to_string().trim_matches('"')));
                     }
                 }
-                self.error_event(e["name"].as_str().unwrap_or(""), &text)
+                let name = e["name"]
+                    .as_str()
+                    .or_else(|| e["type"].as_str())
+                    .unwrap_or("");
+                let mut events = self.error_event(name, &text);
+                if let (Some(AgentEvent::ProviderError(pe)), Some(ms)) =
+                    (events.first_mut(), e["retryAfterMs"].as_u64())
+                {
+                    pe.retry_after_ms = pe.retry_after_ms.or(Some(ms));
+                }
+                events
             }
             _ => Vec::new(),
         }
@@ -503,9 +529,9 @@ impl ProviderAdapter for OpenCodeAdapter {
         let (failure_type, code, transient) =
             if lower.contains("modelnotfound") || lower.contains("model not found") {
                 (FailureType::ModelUnavailable, "model_not_found", false)
-            } else if lower.contains("insufficient")
-                || lower.contains("quota")
+            } else if lower.contains("quota exceeded")
                 || lower.contains("usage limit")
+                || lower.contains("insufficient")
                 || lower.contains("credit balance")
             {
                 (FailureType::DailyQuota, "quota", false)
@@ -515,6 +541,8 @@ impl ProviderAdapter for OpenCodeAdapter {
                 || lower.contains("too many requests")
             {
                 (FailureType::TempRateLimit, "rate_limit", true)
+            } else if lower.contains("quota") {
+                (FailureType::DailyQuota, "quota", false)
             } else if has_token(&lower, "401")
                 || lower.contains("providerautherror")
                 || lower.contains("unauthorized")
@@ -539,4 +567,35 @@ impl ProviderAdapter for OpenCodeAdapter {
 
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/providers/opencode")
+}
+
+#[cfg(test)]
+mod tests {
+    /// Dogfooding 2026-10-27: las llamadas `shell` del harness se guardaban sin el comando.
+    #[test]
+    fn the_harness_shell_keeps_its_command() {
+        for tool in ["shell", "symphony-context_shell"] {
+            let part = serde_json::json!({
+                "tool": tool, "callID": "c1",
+                "state": {"status": "completed", "input": {"command": "git status"}}
+            });
+            let ev = tool_events(&part);
+            assert!(
+                matches!(&ev[0], AgentEvent::ToolRequested { command: Some(c), kind: ToolKind::Command, .. } if c == "git status"),
+                "{tool}: {ev:?}"
+            );
+        }
+    }
+
+    use super::*;
+
+    #[test]
+    fn rate_limit_with_quota_text_is_classified_as_transient() {
+        let adapter = OpenCodeAdapter::default();
+        let err = adapter
+            .parse_error("rate limit: too many requests, quota per minute")
+            .expect("debe clasificar el error");
+        assert_eq!(err.failure_type, FailureType::TempRateLimit);
+        assert!(err.transient);
+    }
 }

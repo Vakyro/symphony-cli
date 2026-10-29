@@ -22,8 +22,24 @@ use tokio_util::task::TaskTracker;
 
 /// Tiempo máximo para atender un request (STACK §47, §49).
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Margen sobre la retención del scheduler en `hook.emit`: el `deny` tiene que salir antes
+/// de que el cliente (`symphony hook emit`) venza, `client_secs` = `hold_secs` + 10 s
+/// (`HoldTimes`, ADR-0003).
+const HOOK_TIMEOUT_MARGIN: Duration = Duration::from_secs(5);
 /// Tiempo que se espera a las conexiones abiertas al apagar.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Plazo para atender un request. `hook.emit` puede retener una operación pesada hasta el
+/// `hold_for` del proveedor: el plazo del IPC tiene que cubrir esa espera (auditoría
+/// P13.S5). Si la cortara antes, se saltaría el cierre (registro de la herramienta, estado
+/// del agente, respuesta `deny`) y el hook leería el corte como «sin veto».
+fn request_deadline(state: &State, req: &Request) -> Duration {
+    if req.method == "hook.emit" {
+        let provider = req.params.get("provider").and_then(Value::as_str);
+        return state.scheduling.hold_for(provider) + HOOK_TIMEOUT_MARGIN;
+    }
+    REQUEST_TIMEOUT
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -31,6 +47,8 @@ pub enum DaemonError {
     AlreadyRunning { home: PathBuf, pid: Option<u32> },
     #[error("base de datos: {0}")]
     Store(#[from] symphony_store::StoreError),
+    #[error("configuración inválida o ilegible: {0}")]
+    Config(Box<symphony_core::ConfigError>),
     #[error("{context}: {source}")]
     Io {
         context: String,
@@ -109,15 +127,11 @@ struct State {
     scheduling: Arc<crate::scheduling::Scheduling>,
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+use crate::runtime::now_ms;
 
 /// Recuperación al arrancar (P03.S5): con el lock tomado, toda sesión `ACTIVE`
 /// quedó de un daemon que murió. Se marca `INTERRUPTED` y va al Recovery Center.
-async fn recover(writer: &Writer) -> Result<(), DaemonError> {
+async fn recover(writer: &Writer, home: &Path) -> Result<(), DaemonError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     writer
         .handle()
@@ -128,10 +142,93 @@ async fn recover(writer: &Writer) -> Result<(), DaemonError> {
         }))
         .await?;
     let recovered = rx.await.unwrap_or(0);
+    let reader = Mutex::new(writer.reader()?);
+    // Best effort: una fila que no se puede leer no impide arrancar (la validación de
+    // checkpoints vuelve a correr en cada handoff).
+    let agents = match reader.lock() {
+        Ok(conn) => repo::list_agents_rows(&conn, None, false).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "no se pudieron listar los agentes para validar sus checkpoints");
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
+    };
+    let objects = symphony_object_store::ObjectStore::new(
+        symphony_core::SymphonyHome::at(home).objects_dir(),
+    );
+    // Checkpoints corruptos de agentes vivos (P13.S3): se marcan y van al Recovery Center.
+    // Best effort: un error de lectura pasajero no impide arrancar; el handoff vuelve a validar.
+    for agent in agents.into_iter().filter(|a| !a.state.is_terminal()) {
+        if let Err(e) = crate::handoff::validated_checkpoint(
+            &reader,
+            &writer.handle(),
+            &objects,
+            agent.agent_id,
+        )
+        .await
+        {
+            tracing::warn!(agente = %agent.agent_id, error = %e, "no se pudo validar el checkpoint al arrancar");
+        }
+    }
     if recovered > 0 {
         tracing::warn!(
             sesiones = recovered,
             "sesiones interrumpidas por un cierre inesperado; ver Recovery Center"
+        );
+    }
+    // Retención (P13.S4, DB §8): purga lo viejo al arrancar. Best effort: si la config
+    // no se puede leer o el purge falla, el daemon arranca igual y se reintenta la próxima vez.
+    match symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home)) {
+        Ok(config) => {
+            if let Err(e) = purge_retention(writer, &config).await {
+                tracing::warn!(error = %e, "retención: no se pudo purgar; se reintenta al próximo arranque");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "no se pudo leer la config; se salta la retención"),
+    }
+    Ok(())
+}
+
+/// Cada `write` del escritor es una transacción: `RETENTION_BATCH` filas como máximo por
+/// ciclo, para no frenar al escritor con una purga grande.
+const RETENTION_BATCH: i64 = 5000;
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Retención al arrancar (P13.S4, DB §8): purga en lotes eventos de agentes terminados
+/// o archivados más viejos que `[retention].events_days` y muestras de recursos más
+/// viejas que `[retention].samples_days`. Checkpoints y runs no se tocan. Sin hilos
+/// nuevos: los lotes van por el writer único.
+async fn purge_retention(
+    writer: &Writer,
+    config: &symphony_core::Config,
+) -> Result<(), DaemonError> {
+    let now = now_ms();
+    let events_cutoff = now - i64::from(config.retention.events_days) * DAY_MS;
+    let samples_cutoff = now - i64::from(config.retention.samples_days) * DAY_MS;
+    let mut total_events = 0u64;
+    let mut total_samples = 0u64;
+    loop {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        writer
+            .handle()
+            .write(Box::new(move |t| {
+                let events = repo::purge_old_events(t, events_cutoff, RETENTION_BATCH)?;
+                let samples = repo::purge_old_resource_samples(t, samples_cutoff, RETENTION_BATCH)?;
+                let _ = tx.send((events, samples));
+                Ok(())
+            }))
+            .await?;
+        let (events, samples) = rx.await.unwrap_or((0, 0));
+        total_events += events as u64;
+        total_samples += samples as u64;
+        if events < RETENTION_BATCH as usize && samples < RETENTION_BATCH as usize {
+            break;
+        }
+    }
+    if total_events > 0 || total_samples > 0 {
+        tracing::info!(
+            eventos = total_events,
+            muestras = total_samples,
+            "retención: datos viejos purgados"
         );
     }
     Ok(())
@@ -178,7 +275,7 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     ignore_state_in_git(home);
     let db_path = symphony_core::SymphonyHome::at(home).db_path();
     let writer = Writer::start(&db_path)?;
-    recover(&writer).await?;
+    recover(&writer, home).await?;
     if let Err(e) = refresh_providers(&writer.handle()).await {
         tracing::warn!(error = %e, "no se pudo registrar a los proveedores");
     }
@@ -223,12 +320,12 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         }
     });
     // La config se lee antes que el runtime: los permisos de los proveedores (`[providers.
-    // permissions]`) se fijan al crear los adapters. Una config inválida deja los predeterminados.
-    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home));
-    let permissions = config
-        .as_ref()
-        .map(|c| c.providers.permissions.clone())
-        .unwrap_or_default();
+    // permissions]`) se fijan al crear los adapters. Una config ilegible o inválida detiene
+    // el arranque: caer a `ProviderPermissions::default()` dejaría a los CLIs con más acceso
+    // del que el usuario eligió (auditoría P13.S5).
+    let config = symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(home))
+        .map_err(|e| DaemonError::Config(Box::new(e)))?;
+    let permissions = config.providers.permissions.clone();
     let runtime = crate::runtime::Runtime::new(
         home,
         writer.handle(),
@@ -238,6 +335,8 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         hook_cmd,
     );
     runtime.watch_active_projects();
+    let reclaim = runtime.clone();
+    tokio::spawn(async move { reclaim.reclaim_disk(true).await });
 
     crate::dependencies::spawn(runtime.clone(), shutdown.clone());
     crate::suggestions::spawn(runtime.clone(), shutdown.clone());
@@ -247,36 +346,28 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
     runtime.set_scheduling(scheduling.clone());
     scheduling.spawn(writer.handle(), shutdown.clone());
 
-    match config {
-        Ok(config) => {
-            bus.set_health_config(crate::health::HealthConfig::from_config(&config));
-            scheduling.set_limits(symphony_scheduler::Limits::from_config(&config.performance));
-            scheduling.set_hold_cap(config.performance.hold_max_secs);
-            let pressure = scheduling.clone();
-            crate::resources::spawn(
-                writer.handle(),
-                config.performance.profile,
-                crate::resources::SAMPLE_EVERY,
-                shutdown.clone(),
-                move |cpu, ram| pressure.set_pressure(cpu, ram),
-            );
-            // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
-            if config.routing.default_profile.starts_with('@') {
-                // Un proyecto de documentos o multimedia (ADR-0020) parte de su propio profile,
-                // salvo que el usuario haya elegido otro por defecto.
-                let by_kind = project_kind_profile(home)
-                    .filter(|_| config.routing.default_profile == "@code");
-                runtime.set_default_profile(by_kind.unwrap_or(&config.routing.default_profile));
-            }
-            runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
+    {
+        bus.set_health_config(crate::health::HealthConfig::from_config(&config));
+        scheduling.set_limits(symphony_scheduler::Limits::from_config(&config.performance));
+        scheduling.set_hold_cap(config.performance.hold_max_secs);
+        let pressure = scheduling.clone();
+        crate::resources::spawn(
+            writer.handle(),
+            home.to_path_buf(),
+            config.performance.profile,
+            crate::resources::SAMPLE_EVERY,
+            shutdown.clone(),
+            move |cpu, ram| pressure.set_pressure(cpu, ram),
+        );
+        // `routing.default_profile` puede ser un profile (`@code`) o un modelo exacto.
+        if config.routing.default_profile.starts_with('@') {
+            // Un proyecto de documentos o multimedia (ADR-0020) parte de su propio profile,
+            // salvo que el usuario haya elegido otro por defecto.
+            let by_kind =
+                project_kind_profile(home).filter(|_| config.routing.default_profile == "@code");
+            runtime.set_default_profile(by_kind.unwrap_or(&config.routing.default_profile));
         }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "config.toml no se pudo leer: permisos de proveedores predeterminados y el chat \
-                 no cambia por umbral"
-            )
-        }
+        runtime.set_chat_switch_tokens(config.chat.switch_at_tokens)
     }
 
     let state = Arc::new(State {
@@ -326,7 +417,8 @@ async fn handle(stream: LocalStream, state: Arc<State>) {
         let reply = match msg {
             Ok(Some(Message::Request(req))) => {
                 let id = req.id.clone();
-                match tokio::time::timeout(REQUEST_TIMEOUT, dispatch(req, &state)).await {
+                let deadline = request_deadline(&state, &req);
+                match tokio::time::timeout(deadline, dispatch(req, &state)).await {
                     Ok(resp) => resp,
                     Err(_) => Response::error(id, "timeout", "el daemon no respondió a tiempo"),
                 }
@@ -591,16 +683,34 @@ async fn agent_create(req: Request, state: &State) -> Response {
         Err(e) => return Response::error(req.id, "invalid_params", e),
     };
     let priority = p.get("priority").and_then(Value::as_i64).unwrap_or(0);
-    let depends_on: Vec<String> = p
-        .get("depends_on")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    // `depends_on` se valida entero: un elemento inválido no se descarta en silencio, porque
+    // eso quitaría una restricción de ejecución que el cliente pidió (auditoría P13.S5).
+    let depends_on: Vec<String> = match p.get("depends_on") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut deps = Vec::with_capacity(items.len());
+            for item in items {
+                match item.as_str() {
+                    Some(s) if !s.trim().is_empty() => deps.push(s.to_string()),
+                    _ => {
+                        return Response::error(
+                            req.id,
+                            "invalid_params",
+                            "`depends_on` solo admite referencias de texto no vacías",
+                        );
+                    }
+                }
+            }
+            deps
+        }
+        Some(_) => {
+            return Response::error(
+                req.id,
+                "invalid_params",
+                "`depends_on` debe ser un array de referencias de texto",
+            );
+        }
+    };
 
     let create_req = crate::runtime::CreateAgent {
         project_root,
@@ -1657,9 +1767,25 @@ async fn refresh_providers(
     crate::providers::save(writer, detected, now_ms()).await
 }
 
+/// Tope de `days` en `usage.get`: cubre cualquier historial razonable y, pasado a
+/// milisegundos, queda lejos del desbordamiento de `i64` (auditoría P13.S5).
+const USAGE_MAX_DAYS: i64 = 3650;
+
 /// Uso de tokens de los últimos `days` días (por defecto 7), informado y estimado por separado.
 fn usage_get(req: Request, state: &State) -> Response {
-    let days = req.params.get("days").and_then(Value::as_i64).unwrap_or(7);
+    let days = match req.params.get("days") {
+        None | Some(Value::Null) => 7,
+        Some(v) => match v.as_i64() {
+            Some(d) if (1..=USAGE_MAX_DAYS).contains(&d) => d,
+            _ => {
+                return Response::error(
+                    req.id,
+                    "invalid_params",
+                    format!("`days` debe ser un entero entre 1 y {USAGE_MAX_DAYS}"),
+                );
+            }
+        },
+    };
     let listed = state
         .reader
         .lock()
@@ -1849,8 +1975,9 @@ async fn gate_heavy_tool(
     };
     // La escritura de un cambio de estado nunca es crítica: si el agente ya no está en el
     // estado esperado (murió, lo pausaron), se deja como está.
-    let set_state = |from: AgentState, to: AgentState, why: Option<String>| {
-        let writer = state.writer.clone();
+    let state_writer = state.writer.clone();
+    let set_state = move |from: AgentState, to: AgentState, why: Option<String>| {
+        let writer = state_writer.clone();
         async move {
             let _ = writer
                 .write(Box::new(move |t| {
@@ -1899,24 +2026,40 @@ async fn gate_heavy_tool(
             set_state(AgentState::Running, AgentState::WaitingResource, Some(why)).await;
 
             let hold = state.scheduling.hold_for(provider);
-            let outcome = state.scheduling.wait(q, hold).await;
-            let denial = match &outcome {
-                Waited::Granted { .. } => None,
-                Waited::TimedOut { reason } => Some(denial_text(reason, hold)),
-            };
-            let (ended, text) = (now_ms(), denial.clone());
-            let _ = state
-                .writer
-                .write(Box::new(move |t| {
-                    match &text {
-                        None => repo::start_queued_tool_call(t, id, ended)?,
-                        Some(reason) => repo::deny_queued_tool_call(t, id, reason, ended)?,
-                    }
-                    Ok(())
-                }))
-                .await;
-            set_state(AgentState::WaitingResource, AgentState::Running, None).await;
-            denial
+            // La espera del turno y su cierre (arrancar o denegar la tool_call y devolver al
+            // agente a RUNNING) van en su propia tarea: si el request IPC venciera y soltara
+            // esta futura, el cierre ocurre igual y no queda nada QUEUED ni el agente en
+            // WAITING_RESOURCE (auditoría P13.S5).
+            let scheduling = state.scheduling.clone();
+            let writer = state.writer.clone();
+            let closing = tokio::spawn(async move {
+                let outcome = scheduling.wait(q, hold).await;
+                let denial = match &outcome {
+                    Waited::Granted { .. } => None,
+                    Waited::TimedOut { reason } => Some(denial_text(reason, hold)),
+                };
+                let (ended, text) = (now_ms(), denial.clone());
+                let _ = writer
+                    .write(Box::new(move |t| {
+                        match &text {
+                            None => repo::start_queued_tool_call(t, id, ended)?,
+                            Some(reason) => repo::deny_queued_tool_call(t, id, reason, ended)?,
+                        }
+                        Ok(())
+                    }))
+                    .await;
+                set_state(AgentState::WaitingResource, AgentState::Running, None).await;
+                denial
+            });
+            match closing.await {
+                Ok(denial) => denial,
+                Err(e) => {
+                    // La tarea no se cancela sola: un JoinError es un bug (panic) y el
+                    // hook no debe pagarlo con un veto falso.
+                    tracing::warn!(error = %e, "la espera del scheduler terminó sin cierre");
+                    None
+                }
+            }
         }
     }
 }

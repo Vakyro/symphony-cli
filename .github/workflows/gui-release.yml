@@ -1,0 +1,54 @@
+# P13.S7: bundles de la GUI de escritorio (P15.S5) como artefactos opcionales del release,
+# aparte del CLI. Solo corre cuando ya existe un release publicado (lo crea `release.yml`
+# al pushear un tag `v*`, decisión de Leo); en los push de fase los mismos bundles salen
+# como artefactos del job `gui bundle` de `ci.yml`.
+name: GUI release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: gui bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: apps/gui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias de WebKitGTK
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/gui/src-tauri
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/gui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tauri build -- --locked
+      - name: Adjuntar al release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s globstar nullglob
+          files=(src-tauri/target/release/bundle/**/*.{msi,exe,dmg,AppImage,deb,rpm})
+          [ ${#files[@]} -gt 0 ] || { echo "sin bundles"; exit 1; }
+          gh release upload "${{ github.event.release.tag_name }}" "${files[@]}" --clobber

@@ -528,6 +528,29 @@ pub fn get_worktree(conn: &Connection, id: WorktreeId) -> Result<Worktree, RepoE
     .ok_or_else(not_found("worktree", id))
 }
 
+/// Worktrees que ya no hacen falta: los de agentes cancelados, los de agentes completados cuyo
+/// trabajo ya se integró y los de completados sin tocar desde `stale_before` (integrados por fuera
+/// de Symphony o abandonados). La rama se queda; el directorio se puede borrar. `(id, ruta, raíz
+/// del repo)`.
+pub fn reclaimable_worktrees(
+    conn: &Connection,
+    stale_before: i64,
+) -> Result<Vec<(WorktreeId, String, String)>, RepoError> {
+    let mut stmt = conn.prepare(
+        "SELECT w.id, w.path, p.root_path FROM worktrees w
+         JOIN agents a ON a.worktree_id = w.id
+         JOIN projects p ON p.id = w.project_id
+         WHERE w.status <> 'REMOVED'
+           AND (a.state = 'CANCELLED'
+                OR (a.state = 'COMPLETED' AND (a.updated_at < ?1 OR EXISTS (
+                    SELECT 1 FROM merge_requests m WHERE m.agent_id = a.id AND m.status = 'MERGED'))))",
+    )?;
+    let rows = stmt
+        .query_map([stale_before], |r| Ok((col(r, 0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
 /// `status` se valida con el CHECK de la tabla (DB §3.C).
 pub fn set_worktree_status(
     conn: &Connection,
@@ -909,18 +932,22 @@ pub struct CheckpointBase {
 }
 
 /// `None` si el agente no existe, no tiene worktree o todavía no tiene checkpoint inicial.
+/// El objetivo y el paso siguiente salen del último checkpoint **válido** (uno corrupto no se
+/// arrastra, P13.S3); si no queda ninguno, el objetivo es el título de la tarea.
 pub fn checkpoint_base(
     conn: &Connection,
     agent: AgentId,
 ) -> Result<Option<CheckpointBase>, RepoError> {
     Ok(conn
         .query_row(
-            "SELECT a.project_id, w.path, w.base_ref, c.objective, c.next_step,
+            "SELECT a.project_id, w.path, w.base_ref, COALESCE(c.objective, t.title), c.next_step,
                     (SELECT r.id FROM agent_runs r WHERE r.agent_id = a.id AND r.ended_at IS NULL)
              FROM agents a
              JOIN worktrees w ON w.id = a.worktree_id
-             JOIN checkpoints c ON c.agent_id = a.id
-             WHERE a.id = ?1 ORDER BY c.seq DESC LIMIT 1",
+             JOIN tasks t ON t.id = a.task_id
+             LEFT JOIN checkpoints c ON c.id = (SELECT v.id FROM checkpoints v
+                 WHERE v.agent_id = a.id AND v.is_valid = 1 ORDER BY v.seq DESC LIMIT 1)
+             WHERE a.id = ?1 AND EXISTS (SELECT 1 FROM checkpoints x WHERE x.agent_id = a.id)",
             [agent.to_string()],
             |r| {
                 Ok(CheckpointBase {
@@ -1034,6 +1061,8 @@ pub struct LatestCheckpoint {
     pub summary_json: Option<String>,
     /// `ctx://…` del diff guardado en ese checkpoint.
     pub diff_uri: Option<String>,
+    pub diff_object_id: Option<String>,
+    pub diff_blob_hash: Option<String>,
 }
 
 pub fn latest_checkpoint(
@@ -1042,7 +1071,7 @@ pub fn latest_checkpoint(
 ) -> Result<Option<LatestCheckpoint>, RepoError> {
     Ok(conn
         .query_row(
-            "SELECT c.id, c.seq, c.objective, c.plan_tail, c.current_step, c.next_step, c.summary_json, o.uri, c.created_at
+            "SELECT c.id, c.seq, c.objective, c.plan_tail, c.current_step, c.next_step, c.summary_json, o.uri, c.created_at, c.diff_object_id, o.blob_hash
              FROM checkpoints c LEFT JOIN context_objects o ON o.id = c.diff_object_id
              WHERE c.agent_id = ?1 AND c.is_valid = 1 ORDER BY c.seq DESC LIMIT 1",
             [agent.to_string()],
@@ -1057,16 +1086,47 @@ pub fn latest_checkpoint(
                     summary_json: r.get(6)?,
                     diff_uri: r.get(7)?,
                     created_at: r.get(8)?,
+                    diff_object_id: r.get(9)?,
+                    diff_blob_hash: r.get(10)?,
                 })
             },
         )
         .optional()?)
 }
 
-/// Runs que arrancaron desde un checkpoint (handoff real, no el primer spawn).
+/// Invalida y registra la incidencia una sola vez dentro de la transacción del writer.
+pub fn invalidate_checkpoint(
+    tx: &rusqlite::Transaction<'_>,
+    checkpoint: symphony_core::CheckpointId,
+    detail: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    if tx.execute(
+        "UPDATE checkpoints SET is_valid = 0 WHERE id = ?1 AND is_valid = 1",
+        [checkpoint.to_string()],
+    )? > 0
+    {
+        tx.execute(
+            "INSERT INTO recovery_items
+             (id, project_id, agent_id, kind, detail, checkpoint_valid, status, created_at)
+             SELECT ?1, a.project_id, a.id, 'CHECKPOINT_INVALID', ?3, 0, 'OPEN', ?4
+             FROM checkpoints c JOIN agents a ON a.id = c.agent_id WHERE c.id = ?2",
+            params![
+                symphony_core::RecoveryItemId::new().to_string(),
+                checkpoint.to_string(),
+                detail,
+                now
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Runs con prompt de handoff, incluidos los reconstruidos sin checkpoint.
 pub fn handoff_run_ids(conn: &Connection, agent: AgentId) -> Result<Vec<RunId>, RepoError> {
     let mut stmt = conn.prepare(
-        "SELECT to_run_id FROM handoffs WHERE agent_id = ?1 AND checkpoint_id IS NOT NULL",
+        "SELECT h.to_run_id FROM handoffs h WHERE h.agent_id = ?1 AND
+         (h.checkpoint_id IS NOT NULL OR EXISTS (SELECT 1 FROM handoff_items i WHERE i.handoff_id = h.id))",
     )?;
     let rows = stmt.query_map([agent.to_string()], |r| col(r, 0))?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -1556,6 +1616,40 @@ pub fn interrupt_orphan_sessions(conn: &Connection, now: i64) -> Result<Vec<Stri
     Ok(orphans.into_iter().map(|(s, _, _)| s).collect())
 }
 
+/// Un lote de la retención (P13.S4, DB §8): borra hasta `batch` eventos de agentes en
+/// estado terminal (COMPLETED/FAILED/CANCELLED) o archivados con más de `cutoff_ms`.
+/// Devuelve cuántos borró. Se excluyen los referenciados por `checkpoints` o
+/// `project_facts` (FK a `events`) y los de agentes vivos o sin agente. Checkpoints y
+/// runs no se purgan nunca. El daemon lo llama en un ciclo de lotes al arrancar.
+pub fn purge_old_events(conn: &Connection, cutoff_ms: i64, batch: i64) -> Result<usize, RepoError> {
+    Ok(conn.execute(
+        "DELETE FROM events WHERE id IN (
+             SELECT e.id FROM events e JOIN agents a ON a.id = e.agent_id
+             WHERE e.occurred_at < ?1
+               AND (a.state IN ('COMPLETED','FAILED','CANCELLED') OR a.archived_at IS NOT NULL)
+               AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.trigger_event_id = e.id)
+               AND NOT EXISTS (SELECT 1 FROM project_facts f WHERE f.source_event_id = e.id)
+             LIMIT ?2
+         )",
+        params![cutoff_ms, batch],
+    )?)
+}
+
+/// Un lote de la retención (P13.S4, DB §8): borra hasta `batch` muestras de recursos
+/// agregadas antes de `cutoff_ms`. Devuelve cuántas borró.
+pub fn purge_old_resource_samples(
+    conn: &Connection,
+    cutoff_ms: i64,
+    batch: i64,
+) -> Result<usize, RepoError> {
+    Ok(conn.execute(
+        "DELETE FROM resource_samples WHERE id IN (
+             SELECT id FROM resource_samples WHERE sampled_at < ?1 LIMIT ?2
+         )",
+        params![cutoff_ms, batch],
+    )?)
+}
+
 /// Cantidad de problemas abiertos en el Recovery Center.
 pub fn open_recovery_count(conn: &Connection) -> Result<u64, RepoError> {
     let n: i64 = conn.query_row(
@@ -1694,13 +1788,18 @@ pub struct MessageRecord {
     pub created_at: i64,
 }
 
+/// Tope de mensajes que devuelve `agent_messages` cuando no se pide un límite.
+pub const MESSAGES_MAX: usize = 5_000;
+
 pub fn agent_messages(
     conn: &Connection,
     agent: AgentId,
     limit: Option<usize>,
 ) -> Result<Vec<MessageRecord>, RepoError> {
-    // Con límite: los últimos N, en orden cronológico.
-    let limit_clause = limit.map_or(String::new(), |l| format!("LIMIT {l}"));
+    // Los últimos N, en orden cronológico. Sin límite pedido, un tope igual: un chat de meses
+    // no se carga entero en memoria (auditoría del store, P13.S5).
+    // ponytail: tope fijo; paginar si algún día hace falta el historial completo.
+    let limit_clause = format!("LIMIT {}", limit.unwrap_or(MESSAGES_MAX));
     let sql = format!(
         "SELECT * FROM (
              SELECT id, agent_id, run_id, role, content, content_object_id, created_at

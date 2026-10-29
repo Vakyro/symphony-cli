@@ -238,6 +238,67 @@ async fn startup_recovers_sessions_left_active_by_a_dead_daemon() {
     assert!(wait_exit(&mut again).success());
 }
 
+#[tokio::test]
+async fn startup_invalidates_corrupt_checkpoints_without_duplicate_recovery_items() {
+    use symphony_core::{AgentId, CheckpointId, ProjectId, SessionId, SymphonyHome, TaskId};
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    let db = SymphonyHome::at(&home).db_path();
+    let project = ProjectId::new();
+    let session = SessionId::new();
+    let task = TaskId::new();
+    let agent = AgentId::new();
+    let checkpoint = CheckpointId::new();
+    {
+        let conn = symphony_store::open(&db).unwrap();
+        // Simula JSON dañado en disco, sin relajar restricciones del daemon.
+        conn.execute_batch(&format!(
+            "INSERT INTO projects (id, name, root_path, default_branch, created_at)
+                 VALUES ('{project}', 'demo', '/repo', 'main', 1);
+             INSERT INTO sessions (id, project_id, status, started_at, ended_at)
+                 VALUES ('{session}', '{project}', 'CLOSED', 1, 2);
+             INSERT INTO tasks (id, project_id, code, kind, title, status, created_at, updated_at)
+                 VALUES ('{task}', '{project}', 'T1', 'WORK', 'Continuar', 'READY', 1, 1);
+             INSERT INTO agents (id, project_id, session_id, task_id, number, state,
+                 execution_mode, failover_policy, context_mode, created_at, updated_at)
+                 VALUES ('{agent}', '{project}', '{session}', '{task}', 1, 'PAUSED',
+                         'DECIDE_LATER', 'ANY', 'BALANCED', 1, 1);
+             PRAGMA ignore_check_constraints = ON;
+             INSERT INTO checkpoints (id, agent_id, seq, objective, summary_json, created_at)
+                 VALUES ('{checkpoint}', '{agent}', 1, 'Continuar', '{{incompleto', 1);
+             PRAGMA ignore_check_constraints = OFF;"
+        ))
+        .unwrap();
+    }
+
+    for _ in 0..2 {
+        let mut daemon = KillOnDrop(spawn_daemon(&home));
+        wait_ready(&home, &mut daemon.0).await;
+        let Outcome::Ok(status) = call(&home, "status", json!({})).await else {
+            panic!("status falló")
+        };
+        assert_eq!(status["recovery_open"], json!(1));
+        let conn = symphony_store::open_reader(&db).unwrap();
+        let valid: bool = conn
+            .query_row("SELECT is_valid FROM checkpoints", [], |r| r.get(0))
+            .unwrap();
+        assert!(!valid);
+        let items: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM recovery_items WHERE agent_id = ?1
+                 AND kind = 'CHECKPOINT_INVALID' AND checkpoint_valid = 0 AND status = 'OPEN'",
+                [agent.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(items, 1);
+        drop(conn);
+        call(&home, "shutdown", json!({})).await;
+        assert!(wait_exit(&mut daemon.0).success());
+    }
+}
+
 /// Métodos de lectura y acciones de la TUI (P07): Recovery Center, proveedores y proyecto.
 #[tokio::test]
 async fn recovery_center_and_tui_views_over_ipc() {
@@ -385,6 +446,122 @@ async fn client_refuses_a_socket_served_by_another_process() {
     );
     call(&home, "shutdown", json!({})).await;
     assert!(wait_exit(&mut daemon).success());
+}
+
+/// P13.S5 (auditoría de server.rs): con una `config.toml` inválida, `serve` rechaza el
+/// arranque en vez de crear los adapters con los permisos predeterminados (más permisivos
+/// que los que el usuario eligió).
+#[tokio::test]
+#[allow(unsafe_code)]
+async fn invalid_config_refuses_to_start_instead_of_falling_back_to_default_permissions() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "permisos = [sin cerrar").unwrap();
+
+    // La config se busca en el home del usuario (`SYMPHONY_USER_HOME` si existe): se apunta
+    // al temporal para no leer la del usuario real y se restaura al terminar.
+    let prev_user_home = std::env::var_os("SYMPHONY_USER_HOME");
+    // SAFETY: una sola variable de proceso; nextest aísla cada test en su proceso y en este
+    // binario de test ningún otro test lee `SYMPHONY_USER_HOME` en-proceso.
+    unsafe {
+        std::env::set_var("SYMPHONY_USER_HOME", &home);
+    }
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let result = symphony_daemon::server::serve(&home, shutdown).await;
+    // SAFETY: restaurar el valor previo; mismo alcance que el `set_var` de arriba.
+    unsafe {
+        match prev_user_home {
+            Some(v) => std::env::set_var("SYMPHONY_USER_HOME", v),
+            None => std::env::remove_var("SYMPHONY_USER_HOME"),
+        }
+    }
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, symphony_daemon::server::DaemonError::Config(_)),
+        "{err}"
+    );
+}
+
+/// P13.S5 (auditoría de server.rs): un `depends_on` que no sea un array de textos se
+/// rechaza con `invalid_params` en vez de convertirse en silencio en una lista vacía.
+#[tokio::test]
+async fn agent_create_rejects_an_invalid_depends_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    let mut daemon = KillOnDrop(spawn_daemon(&home));
+    wait_ready(&home, &mut daemon.0).await;
+
+    let code = |o: Outcome| match o {
+        Outcome::Error(e) => e.code,
+        Outcome::Ok(v) => panic!("se esperaba un error: {v}"),
+    };
+    for depends_on in [json!("T-1"), json!([123]), json!([""]), json!(["  "])] {
+        let c = code(
+            call(
+                &home,
+                "agent.create",
+                json!({ "title": "tarea", "depends_on": depends_on }),
+            )
+            .await,
+        );
+        assert_eq!(c, "invalid_params", "depends_on: {depends_on}");
+    }
+
+    // Un array de textos sí pasa la validación de parámetros (falla después: no hay repo).
+    let suelto = dir.path().join("suelto");
+    std::fs::create_dir_all(&suelto).unwrap();
+    let c = code(
+        call(
+            &home,
+            "agent.create",
+            json!({
+                "title": "tarea",
+                "project_root": suelto,
+                "depends_on": ["T-1"],
+            }),
+        )
+        .await,
+    );
+    assert_eq!(c, "not_a_repo", "{c}");
+
+    call(&home, "shutdown", json!({})).await;
+    assert!(wait_exit(&mut daemon.0).success());
+}
+
+/// P13.S5 (auditoría de server.rs): `usage.get` valida `days` (máximo y mínimo) en vez de
+/// multiplicar cualquier `i64` por los milisegundos de un día, lo que podía desbordar.
+#[tokio::test]
+async fn usage_get_validates_days() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("h");
+    let mut daemon = KillOnDrop(spawn_daemon(&home));
+    wait_ready(&home, &mut daemon.0).await;
+
+    for days in [
+        json!(i64::MAX),
+        json!(0),
+        json!(-3),
+        json!(3651),
+        json!("siete"),
+    ] {
+        let Outcome::Error(e) = call(&home, "usage.get", json!({ "days": days })).await else {
+            panic!("days {days} tenía que fallar")
+        };
+        assert_eq!(e.code, "invalid_params", "days: {days}");
+    }
+
+    let Outcome::Ok(v) = call(&home, "usage.get", json!({ "days": 30 })).await else {
+        panic!("days 30 tenía que funcionar")
+    };
+    assert_eq!(v["days"], json!(30));
+    let Outcome::Ok(v) = call(&home, "usage.get", json!({})).await else {
+        panic!("sin days tenía que funcionar")
+    };
+    assert_eq!(v["days"], json!(7));
+
+    call(&home, "shutdown", json!({})).await;
+    assert!(wait_exit(&mut daemon.0).success());
 }
 
 struct KillOnDrop(Child);
