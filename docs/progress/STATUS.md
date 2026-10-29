@@ -1,11 +1,13 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-28 · por opencode-go/deepseek-v4-pro (orquestación con Symphony, solo opencode-go)
-**Fase actual:** P13 · Endurecimiento y pre-release — **cerrada y mergeada a `main`** (tag `p13-done`). P16.S0 adelantado en `phase/p16-validacion`.
-**Paso actual:** S3 ✅ (soak de 4 h aprobado) · S5 ✅ (`server.md` completo: A + #51 watchdog/colisiones + #52 plazos IPC) · S8 ✅ (gate 733 ✅ · `deny` ✅ · merge `--no-ff` · tag `p13-done` · push).
-**Estado del paso:** cerrado.
+**Fase actual:** P17 · TUI al día (rama `phase/p17-tui`). P13 **cerrada y mergeada** (`p13-done`); P16 en `phase/p16-validacion`, rebasada sobre `main` y a la espera de Leo (veredicto de uso) y de P17–P20 para los docs as-built.
+**Paso actual:** P17.S1 en curso (tema morado apagado + barra de estado). P16: S0–S1 ✅, S2/S3 medidos con el veredicto pendiente, S3 con el guard de disco ✅, S4 esperando la primera corrida de `install-check.yml`.
+**Estado del paso:** delegado a un agente (`beam-free`, porque la cuota de opencode-go está agotada hasta ~23:28 local).
 **En curso por:** opencode-go/deepseek-v4-pro (orquestador), con delegación a agentes Symphony sobre `opencode-go`.
-**Siguiente:** rebasar `phase/p16-validacion` sobre `main` → P16.S2–S7 → P17–P20 (delegado a agentes opencode-go). Pendientes menores: benchmark que declare disco libre, desviación de ADR-0021 (`PASS` en vez de `SKIPPED`).
+**Siguiente:** P17.S1 → P17.S2–S7 → P18 → P19 (⛔ S1: la alternativa ligera que indique Leo) → P20 → P16.S5/S7 → ⛔ P16.S6 release.
+
+**Hotfix del 2026-10-28 (después del merge de P13):** el CI de `main` quedó en rojo en `check (ubuntu/macos/windows)` y `coverage` por el mismo test, `agent_create_rejects_an_invalid_depends_on`: sin `model`/`profile` el daemon usa `DecideLater` y comprueba primero que haya proveedores, así que en un entorno sin CLIs de proveedor devolvía `no_eligible_provider` donde el test esperaba `not_a_repo`. El test ya acepta los dos fallos posteriores a la validación de parámetros (`9af3668`, gate 733 ✅, pusheado).
 
 **Cierre de la jornada (detalle en `docs/progress/CIERRE-2026-10-27.md`):** qué salió bien, qué falló, qué se arregló y qué falta. Resumen: integrados #48 (guardia de aislamiento), #49 (freno por disco), #50 (permisos, `depends_on`, `usage.get`). **2026-10-28:** integrados #51 y #52, arreglado el test inestable del watcher y los `LEAK` del CLI, verificado ADR-0021, gate y `deny` en verde, P13 mergeada a `main`.
 
@@ -14,9 +16,9 @@
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: ✅ **733 tests, 0 fallos, 0 leaky** (2026-10-28, rama de P13; el gate quita `SYMPHONY_LIVE`, nunca corre live).
-- `cargo deny check`: ✅ en la rama `phase/p13-endurecimiento` (tokio 1.54.1 por RUSTSEC-2026-0386); en `main` el job `deny` sigue en rojo hasta que esa rama se integre.
-- CI en `main`: 🔴 solo el job `deny` (aviso nuevo contra tokio 1.53.1, publicado después de P14); los demás ✅. Arreglo ya hecho en la rama de P13 (P13.S1), pendiente de integrar.
+- `cargo xtask check`: ✅ **733 tests, 0 fallos, 0 leaky** (2026-10-28, `main` con el merge de P13 y el hotfix del test de `depends_on`).
+- `cargo deny check`: ✅ `advisories, bans, licenses, sources ok` (rama de P13 y `main`).
+- CI en `main`: 🟡 el run del merge de P13 salió en rojo por un test dependiente de la máquina; el run del hotfix va en verde en `docs`, `deny`, `coverage`, `msrv`, `fuzz` y `gui`, con los tres `check` en curso al escribir esto.
 - Tests conocidos en rojo: ninguno.
 
 ## Cola de trabajo (en orden)
@@ -66,6 +68,8 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
+- **2026-10-28 · Cuota de opencode-go agotada.** El run del primer delegado de P17 devolvió `provider.quota: Go usage limit exceeded status=429`; el proveedor queda `EXHAUSTED` y el reinicio estimado fue 23:28 local. Mientras tanto se delegó a los modelos **free** de opencode-go (`beam-free`), que no gastan la cuota Go y funcionan. Dos cosas que conviene decidir: (1) los modelos free son más flojos, así que el trabajo se revisa más; (2) Symphony bloquea **todo** el proveedor cuando la cuota Go se agota, aunque los modelos free tengan su propia cuota — si quieres, se afina para que la salud sea por modelo en vez de por proveedor.
+- **2026-10-28 · `WAITING_PROVIDER` no se reanuda solo.** Cuando un agente se queda sin proveedor, Symphony abre un ítem de recuperación y espera; el estado `EXHAUSTED` sin hora de reinicio pasa a `PROBING` a los 30 min (`EXHAUSTED_PROBE_MS`), pero el agente no vuelve a intentarlo: hay que `symphony resume` o `switch`. `providers refresh` no limpia la salud. Si prefieres que se reintente solo, es un cambio pequeño en el scheduler.
 - **2026-10-27 · Backlog nuevo (P17–P20): respondido por Leo.** P17–P20 van antes de v1.0.0. Jev no se usa: se evaluará una versión ligera de código abierto que Leo describirá después. Móvil por Tailscale + SSH + tmux, sin app ni web (P20.S4).
 - **2026-10-28 · #51, #52 y ADR-0021: revisados e integrados** (Leo autorizó hacerlo en vez de dejarlo en documento). #51 (`5e46112`, `fe4ec5d`) y #52 (`1840654`) están en `main`. ADR-0021 coincide con su implementación; única desviación menor y no bloqueante: sin archivos que revisar el check devuelve `PASS` con resumen, no `SKIPPED` como decía el ADR. Si prefieres `SKIPPED`, es un cambio de dos líneas en `files_check.rs`.
 - **2026-10-27 · Noche de dogfooding:** reporte completo en `docs/progress/REPORTE-2026-10-27.md`.
