@@ -22,8 +22,24 @@ use tokio_util::task::TaskTracker;
 
 /// Tiempo máximo para atender un request (STACK §47, §49).
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Margen sobre la retención del scheduler en `hook.emit`: el `deny` tiene que salir antes
+/// de que el cliente (`symphony hook emit`) venza, `client_secs` = `hold_secs` + 10 s
+/// (`HoldTimes`, ADR-0003).
+const HOOK_TIMEOUT_MARGIN: Duration = Duration::from_secs(5);
 /// Tiempo que se espera a las conexiones abiertas al apagar.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Plazo para atender un request. `hook.emit` puede retener una operación pesada hasta el
+/// `hold_for` del proveedor: el plazo del IPC tiene que cubrir esa espera (auditoría
+/// P13.S5). Si la cortara antes, se saltaría el cierre (registro de la herramienta, estado
+/// del agente, respuesta `deny`) y el hook leería el corte como «sin veto».
+fn request_deadline(state: &State, req: &Request) -> Duration {
+    if req.method == "hook.emit" {
+        let provider = req.params.get("provider").and_then(Value::as_str);
+        return state.scheduling.hold_for(provider) + HOOK_TIMEOUT_MARGIN;
+    }
+    REQUEST_TIMEOUT
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -401,7 +417,8 @@ async fn handle(stream: LocalStream, state: Arc<State>) {
         let reply = match msg {
             Ok(Some(Message::Request(req))) => {
                 let id = req.id.clone();
-                match tokio::time::timeout(REQUEST_TIMEOUT, dispatch(req, &state)).await {
+                let deadline = request_deadline(&state, &req);
+                match tokio::time::timeout(deadline, dispatch(req, &state)).await {
                     Ok(resp) => resp,
                     Err(_) => Response::error(id, "timeout", "el daemon no respondió a tiempo"),
                 }
@@ -1958,8 +1975,9 @@ async fn gate_heavy_tool(
     };
     // La escritura de un cambio de estado nunca es crítica: si el agente ya no está en el
     // estado esperado (murió, lo pausaron), se deja como está.
-    let set_state = |from: AgentState, to: AgentState, why: Option<String>| {
-        let writer = state.writer.clone();
+    let state_writer = state.writer.clone();
+    let set_state = move |from: AgentState, to: AgentState, why: Option<String>| {
+        let writer = state_writer.clone();
         async move {
             let _ = writer
                 .write(Box::new(move |t| {
@@ -2008,24 +2026,40 @@ async fn gate_heavy_tool(
             set_state(AgentState::Running, AgentState::WaitingResource, Some(why)).await;
 
             let hold = state.scheduling.hold_for(provider);
-            let outcome = state.scheduling.wait(q, hold).await;
-            let denial = match &outcome {
-                Waited::Granted { .. } => None,
-                Waited::TimedOut { reason } => Some(denial_text(reason, hold)),
-            };
-            let (ended, text) = (now_ms(), denial.clone());
-            let _ = state
-                .writer
-                .write(Box::new(move |t| {
-                    match &text {
-                        None => repo::start_queued_tool_call(t, id, ended)?,
-                        Some(reason) => repo::deny_queued_tool_call(t, id, reason, ended)?,
-                    }
-                    Ok(())
-                }))
-                .await;
-            set_state(AgentState::WaitingResource, AgentState::Running, None).await;
-            denial
+            // La espera del turno y su cierre (arrancar o denegar la tool_call y devolver al
+            // agente a RUNNING) van en su propia tarea: si el request IPC venciera y soltara
+            // esta futura, el cierre ocurre igual y no queda nada QUEUED ni el agente en
+            // WAITING_RESOURCE (auditoría P13.S5).
+            let scheduling = state.scheduling.clone();
+            let writer = state.writer.clone();
+            let closing = tokio::spawn(async move {
+                let outcome = scheduling.wait(q, hold).await;
+                let denial = match &outcome {
+                    Waited::Granted { .. } => None,
+                    Waited::TimedOut { reason } => Some(denial_text(reason, hold)),
+                };
+                let (ended, text) = (now_ms(), denial.clone());
+                let _ = writer
+                    .write(Box::new(move |t| {
+                        match &text {
+                            None => repo::start_queued_tool_call(t, id, ended)?,
+                            Some(reason) => repo::deny_queued_tool_call(t, id, reason, ended)?,
+                        }
+                        Ok(())
+                    }))
+                    .await;
+                set_state(AgentState::WaitingResource, AgentState::Running, None).await;
+                denial
+            });
+            match closing.await {
+                Ok(denial) => denial,
+                Err(e) => {
+                    // La tarea no se cancela sola: un JoinError es un bug (panic) y el
+                    // hook no debe pagarlo con un veto falso.
+                    tracing::warn!(error = %e, "la espera del scheduler terminó sin cierre");
+                    None
+                }
+            }
         }
     }
 }
