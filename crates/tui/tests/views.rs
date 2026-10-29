@@ -5,9 +5,12 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::Color;
 use serde_json::{Value, json};
 use symphony_tui::app::{App, Call, Exec, Failure, Msg, Notice, Req, Screen, Tab};
+use symphony_tui::theme::Theme;
 use symphony_tui::ui;
 
 const NOW: i64 = 1_800_000_000_000;
@@ -35,9 +38,18 @@ fn methods(calls: &[Call]) -> Vec<&str> {
 }
 
 fn draw(app: &App) -> String {
-    let mut t = Terminal::new(TestBackend::new(96, 28)).unwrap();
+    terminal(app, 96, 28).backend().to_string()
+}
+
+fn terminal(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
+    let mut t = Terminal::new(TestBackend::new(width, height)).unwrap();
     t.draw(|f| ui::render(app, f)).unwrap();
-    t.backend().to_string()
+    t
+}
+
+/// El buffer crudo, con estilos. `to_string()` solo da el texto: el color no se ve ahí.
+fn buffer(app: &App) -> Buffer {
+    terminal(app, 96, 28).backend().buffer().clone()
 }
 
 fn status(initialized: bool, recovery: i64) -> Value {
@@ -1755,4 +1767,63 @@ fn chat_shows_the_model_suggestion_and_resolves_it_with_three_keys() {
         json!({ "status": "ACCEPTED" }),
     );
     assert!(matches!(&app.notice, Some(Notice::Info(m)) if m.contains("modelo sugerido")));
+}
+
+// --- tema (P17.S1) -----------------------------------------------------------
+
+/// El color tiene que llegar al buffer: los snapshots de texto no lo probarían.
+#[test]
+fn the_brand_paints_the_header() {
+    let mut app = home_app();
+    app.theme = Theme::default();
+    let buf = buffer(&app);
+    let title = buf.cell((1, 0)).unwrap();
+    assert_eq!(title.symbol(), "S", "la cabecera empieza por « SYMPHONY »");
+    assert_eq!(title.fg, Color::Rgb(140, 120, 180), "morado de marca");
+}
+
+/// Ninguna celda puede salirse de la paleta: nada de cian ni colores chillones.
+#[test]
+fn no_cell_escapes_the_brand_palette() {
+    let mut app = home_app();
+    app.theme = Theme::default();
+    let t = Theme::default();
+    let palette: Vec<Color> = [t.brand, t.accent, t.ok, t.warn, t.error, t.muted, t.border]
+        .into_iter()
+        .flatten()
+        .collect();
+    let outside: Vec<(String, Color)> = buffer(&app)
+        .content
+        .iter()
+        .filter(|c| c.fg != Color::Reset && !palette.contains(&c.fg))
+        .map(|c| (c.symbol().to_string(), c.fg))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "colores fuera de la paleta: {outside:?}"
+    );
+}
+
+/// `NO_COLOR`: la misma información, sin pintar nada.
+#[test]
+fn no_color_keeps_the_view_without_paint() {
+    let mut app = home_app();
+    app.theme = Theme::no_color();
+    let buf = buffer(&app);
+    assert!(
+        buf.content.iter().all(|c| c.fg == Color::Reset),
+        "con NO_COLOR no se pinta ninguna celda"
+    );
+    assert!(buf.content.iter().any(|c| c.symbol() == "S"));
+}
+
+/// La barra se ve entera a 80 columnas, y a 160 no se estira ni se rompe.
+#[test]
+fn view_01_home_80_columns() {
+    insta::assert_snapshot!(terminal(&home_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_01_home_160_columns() {
+    insta::assert_snapshot!(terminal(&home_app(), 160, 28).backend().to_string());
 }

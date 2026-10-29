@@ -1,5 +1,7 @@
 //! Render de las vistas (FLOW §18: 01–09, 12, 13, 22, 24, 30). Funciones puras de `&App`.
 
+use std::cell::RefCell;
+
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -12,19 +14,42 @@ use crate::app::{
     AgentView, App, Exec, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab,
     ago, state_phrase,
 };
+use crate::theme::Theme;
 
-const ACCENT: Color = Color::Cyan;
+thread_local! {
+    static THEME: RefCell<Option<Theme>> = const { RefCell::new(None) };
+}
+
+fn current_theme() -> Theme {
+    THEME.with(|c| c.borrow().clone().unwrap_or_default())
+}
+
+fn theme_fg(color: Option<Color>) -> Style {
+    let mut s = Style::default();
+    if let Some(c) = color {
+        s = s.fg(c);
+    }
+    s
+}
 
 fn bold(s: impl Into<String>) -> Span<'static> {
     Span::styled(s.into(), Style::default().add_modifier(Modifier::BOLD))
 }
 
 fn dim(s: impl Into<String>) -> Span<'static> {
-    Span::styled(s.into(), Style::default().fg(Color::DarkGray))
+    let mut st = Style::default();
+    if let Some(c) = current_theme().muted {
+        st = st.fg(c);
+    }
+    Span::styled(s.into(), st)
 }
 
-fn colored(s: impl Into<String>, c: Color) -> Span<'static> {
-    Span::styled(s.into(), Style::default().fg(c))
+fn colored(s: impl Into<String>, c: Option<Color>) -> Span<'static> {
+    let mut st = Style::default();
+    if let Some(c) = c {
+        st = st.fg(c);
+    }
+    Span::styled(s.into(), st)
 }
 
 fn text(v: &Value) -> String {
@@ -37,29 +62,31 @@ fn num(v: &Value) -> String {
         .map_or_else(|| "—".to_string(), |n| n.to_string())
 }
 
-fn state_color(state: &str) -> Color {
+fn state_color(state: &str) -> Option<Color> {
+    let t = current_theme();
     match state {
-        "RUNNING" | "TESTING" | "READY" | "COMPLETED" => Color::Green,
-        "FAILED" | "BLOCKED" | "ERROR" | "NOT_FOUND" => Color::Red,
-        "CANCELLED" => Color::DarkGray,
-        _ => Color::Yellow,
+        "RUNNING" | "TESTING" | "READY" | "COMPLETED" => t.ok,
+        "FAILED" | "BLOCKED" | "ERROR" | "NOT_FOUND" => t.error,
+        "CANCELLED" => t.muted,
+        _ => t.warn,
     }
 }
 
 /// Marca de la fila elegida en una lista.
 fn marker(selected: bool) -> Span<'static> {
     if selected {
-        colored("▸ ", ACCENT)
+        colored("▸ ", current_theme().brand)
     } else {
         Span::raw("  ")
     }
 }
 
 fn section(title: &str) -> Line<'static> {
-    Line::from(colored(title.to_string(), ACCENT).add_modifier(Modifier::BOLD))
+    Line::from(colored(title.to_string(), current_theme().brand).add_modifier(Modifier::BOLD))
 }
 
 pub fn render(app: &App, f: &mut Frame) {
+    THEME.with(|c| *c.borrow_mut() = Some(app.theme.clone()));
     let bottom = if app.command.is_some() { 2 } else { 1 };
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -97,7 +124,7 @@ pub fn render(app: &App, f: &mut Frame) {
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            colored(" SYMPHONY ", ACCENT).add_modifier(Modifier::BOLD),
+            colored(" SYMPHONY ", current_theme().brand).add_modifier(Modifier::BOLD),
             bold(app.project_name().to_string()),
             Span::raw(" "),
             dim(title),
@@ -134,6 +161,7 @@ pub fn render(app: &App, f: &mut Frame) {
     }
 
     footer_line(app, f, footer);
+    THEME.with(|c| *c.borrow_mut() = None);
 }
 
 fn hints(app: &App) -> &'static str {
@@ -197,23 +225,27 @@ fn footer_line(app: &App, f: &mut Frame, area: Rect) {
     let mut lines = Vec::new();
     if let Some(cmd) = &app.command {
         lines.push(Line::from(vec![
-            colored("> ", ACCENT),
+            colored("> ", current_theme().brand),
             Span::raw(cmd.clone()),
             Span::raw("▏"),
         ]));
     }
     lines.push(match &app.notice {
-        Some(Notice::Error(e)) => Line::from(colored(format!(" {e}"), Color::Red)),
-        Some(Notice::Info(i)) => Line::from(colored(format!(" {i}"), Color::Green)),
+        Some(Notice::Error(e)) => Line::from(colored(format!(" {e}"), current_theme().error)),
+        Some(Notice::Info(i)) => Line::from(colored(format!(" {i}"), current_theme().ok)),
         None => Line::from(dim(format!(" {}", hints(app)))),
     });
     f.render_widget(Paragraph::new(lines), area);
 }
 
 fn boxed(title: &str) -> Block<'static> {
+    let mut st = Style::default();
+    if let Some(c) = current_theme().border {
+        st = st.fg(c);
+    }
     Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(st)
         .title(Span::styled(
             format!(" {title} "),
             Style::default().add_modifier(Modifier::BOLD),
@@ -234,7 +266,7 @@ fn paragraph(f: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) 
 fn launch(app: &App, f: &mut Frame, area: Rect) {
     let check = |done: bool| {
         if done {
-            colored("listo", Color::Green)
+            colored("listo", current_theme().ok)
         } else {
             dim("…")
         }
@@ -317,7 +349,7 @@ fn choice(options: &[&str], chosen: usize) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, o) in options.iter().enumerate() {
         if i == chosen {
-            spans.push(colored(format!("(•) {o}  "), ACCENT));
+            spans.push(colored(format!("(•) {o}  "), current_theme().brand));
         } else {
             spans.push(dim(format!("( ) {o}  ")));
         }
@@ -363,14 +395,14 @@ fn first_run(app: &App, f: &mut Frame, area: Rect) {
     if ready == 0 {
         lines.push(Line::from(colored(
             "  Ningún proveedor listo: podrás configurarlos en el siguiente paso.",
-            Color::Yellow,
+            current_theme().warn,
         )));
     }
     lines.push(Line::raw(""));
     lines.push(field(
         "",
         Line::from(if fr.field == 3 {
-            colored("[ Entrar a Symphony ]", ACCENT).add_modifier(Modifier::BOLD)
+            colored("[ Entrar a Symphony ]", current_theme().brand).add_modifier(Modifier::BOLD)
         } else {
             Span::raw("[ Entrar a Symphony ]")
         }),
@@ -396,12 +428,13 @@ fn provider_advice(state: &str, name: &str) -> String {
 }
 
 /// Color de un estado de salud (FLOW §12.2).
-fn health_color(state: &str) -> Color {
+fn health_color(state: &str) -> Option<Color> {
+    let t = current_theme();
     match state {
-        "HEALTHY" => Color::Green,
-        "EXHAUSTED" | "AUTH_ERROR" | "OFFLINE" => Color::Red,
-        "UNKNOWN" => Color::DarkGray,
-        _ => Color::Yellow,
+        "HEALTHY" => t.ok,
+        "EXHAUSTED" | "AUTH_ERROR" | "OFFLINE" => t.error,
+        "UNKNOWN" => t.muted,
+        _ => t.warn,
     }
 }
 
@@ -517,7 +550,7 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
                 if enabled {
                     state_color(&state)
                 } else {
-                    Color::DarkGray
+                    current_theme().muted
                 },
             ),
             colored(
@@ -525,7 +558,7 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
                 if enabled && state == "READY" {
                     health_color(&health_state)
                 } else {
-                    Color::DarkGray
+                    current_theme().muted
                 },
             ),
             dim(format!("{:<21} ", quota_text(health))),
@@ -622,9 +655,9 @@ fn explain_route(app: &App, f: &mut Frame, area: Rect) {
                 colored(
                     format!("{:<10} ", if eligible { "elegible" } else { "descartado" }),
                     if eligible {
-                        Color::Green
+                        current_theme().ok
                     } else {
-                        Color::DarkGray
+                        current_theme().muted
                     },
                 ),
                 Span::raw(format!(
@@ -704,15 +737,15 @@ fn message_lines(m: &Value, width: usize) -> Vec<Line<'static>> {
     match m["role"].as_str().unwrap_or("") {
         "EXECUTOR_CHANGE" => {
             for l in wrap(content, width) {
-                lines.push(Line::from(colored(l, Color::Magenta)));
+                lines.push(Line::from(colored(l, current_theme().accent)));
             }
         }
         "USER" if content.starts_with(HANDOFF_PROMPT) => return lines,
         role => {
             let (who, color) = match role {
-                "USER" => ("tú", ACCENT),
-                "ASSISTANT" => ("agente", Color::Green),
-                _ => ("sistema", Color::DarkGray),
+                "USER" => ("tú", current_theme().brand),
+                "ASSISTANT" => ("agente", current_theme().ok),
+                _ => ("sistema", current_theme().muted),
             };
             for (i, l) in wrap(content, width.saturating_sub(9))
                 .into_iter()
@@ -734,9 +767,9 @@ fn message_lines(m: &Value, width: usize) -> Vec<Line<'static>> {
 /// Una herramienta que usó el agente, en una línea tenue.
 fn tool_line(t: &Value, width: usize) -> Line<'static> {
     let (mark, color) = match t["status"].as_str().unwrap_or("") {
-        "DONE" => ("✓", Color::Green),
-        "FAILED" | "DENIED" => ("✗", Color::Red),
-        _ => ("…", Color::Yellow),
+        "DONE" => ("✓", current_theme().ok),
+        "FAILED" | "DENIED" => ("✗", current_theme().error),
+        _ => ("…", current_theme().warn),
     };
     let cmd = t["command"].as_str().unwrap_or("").replace('\n', " ");
     let tool = t["tool"].as_str().unwrap_or("?");
@@ -787,7 +820,7 @@ fn suggestion_lines(s: Option<&Value>, keys: &str, width: usize) -> Vec<Line<'st
             } else {
                 format!("  {l}")
             },
-            Color::Cyan,
+            current_theme().accent,
         )));
     }
     out.push(Line::from(dim(format!("  {keys}"))));
@@ -824,7 +857,7 @@ fn working_line(app: &App, view: &AgentView) -> Line<'static> {
     Line::from(vec![
         colored(
             format!("{} ", SPINNER[app.frame as usize % SPINNER.len()]),
-            Color::Yellow,
+            current_theme().warn,
         ),
         dim(format!("{what}… {secs} s")),
     ])
@@ -847,11 +880,11 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
     match (&app.chat_model, current) {
         (Some(next), Some(cur)) if next != cur => {
             model.push(dim("  →  "));
-            model.push(colored(next.clone(), ACCENT).add_modifier(Modifier::BOLD));
+            model.push(colored(next.clone(), current_theme().brand).add_modifier(Modifier::BOLD));
             model.push(dim("  (cambia al enviar)"));
         }
         (Some(next), None) => {
-            model.push(colored(next.clone(), ACCENT).add_modifier(Modifier::BOLD));
+            model.push(colored(next.clone(), current_theme().brand).add_modifier(Modifier::BOLD));
             model.push(dim("  (primer mensaje)"));
         }
         _ => {}
@@ -979,7 +1012,7 @@ fn skill_popup(app: &App, f: &mut Frame, body: Rect) {
                 dim(text(&m["description"])),
             ]);
             if selected {
-                row.style(Style::default().fg(ACCENT))
+                row.style(theme_fg(current_theme().brand))
             } else {
                 row
             }
@@ -1019,14 +1052,14 @@ fn home(app: &App, f: &mut Frame, area: Rect) {
             format!(
                 "⚠ {recovery} problema(s) por recuperar: pulsa r para abrir el Recovery Center."
             ),
-            Color::Yellow,
+            current_theme().warn,
         )));
     }
     let attention = app.providers_needing_attention();
     if attention > 0 {
         lines.push(Line::from(colored(
             format!("⚠ {attention} proveedor(es) necesitan atención: pulsa p."),
-            Color::Yellow,
+            current_theme().warn,
         )));
     }
     if !app.initialized() && app.loaded() {
@@ -1101,7 +1134,7 @@ fn home(app: &App, f: &mut Frame, area: Rect) {
             if waiting > 0 {
                 lines.push(Line::from(colored(
                     format!("  {waiting} operación(es) esperando turno: s para ver por qué."),
-                    Color::Yellow,
+                    current_theme().warn,
                 )));
             }
         }
@@ -1117,7 +1150,7 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
     let na = &app.new_agent;
     let pick = |on: bool, label: String| {
         if on {
-            colored(format!("(•) {label}"), ACCENT)
+            colored(format!("(•) {label}"), current_theme().brand)
         } else {
             dim(format!("( ) {label}"))
         }
@@ -1162,7 +1195,7 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
         field(
             "",
             Line::from(if na.field == 4 {
-                colored("[ Crear agente ]", ACCENT).add_modifier(Modifier::BOLD)
+                colored("[ Crear agente ]", current_theme().brand).add_modifier(Modifier::BOLD)
             } else {
                 Span::raw("[ Crear agente ]")
             }),
@@ -1173,12 +1206,12 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
 }
 
 /// FLOW §8.1: el estado que se ve junto a cada modelo.
-fn model_status(m: &Value) -> (String, Color) {
+fn model_status(m: &Value) -> (String, Option<Color>) {
     if !m["available"].as_bool().unwrap_or(false) {
-        return (text(&m["setup_state"]), Color::Yellow);
+        return (text(&m["setup_state"]), current_theme().warn);
     }
     match m["health"].as_str().unwrap_or("UNKNOWN") {
-        "HEALTHY" | "UNKNOWN" | "PROBING" => ("DISPONIBLE".into(), Color::Green),
+        "HEALTHY" | "UNKNOWN" | "PROBING" => ("DISPONIBLE".into(), current_theme().ok),
         other => (other.to_string(), health_color(other)),
     }
 }
@@ -1288,7 +1321,7 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
                 .map(|(i, t)| format!("{} {}", i + 1, t.title())),
         )
         .select(Tab::ALL.iter().position(|t| *t == a.tab))
-        .highlight_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        .highlight_style(theme_fg(current_theme().brand).add_modifier(Modifier::BOLD)),
         tabs,
     );
     match a.tab {
@@ -1308,7 +1341,7 @@ fn overview(app: &App, f: &mut Frame, area: Rect) {
     if a.state() == "READY" && a.inspect["runs_count"].as_i64() == Some(0) {
         lines.push(Line::from(colored(
             "Este agente todavía no tiene executor: pulsa s para elegir un modelo y arrancarlo.",
-            Color::Yellow,
+            current_theme().warn,
         )));
         lines.push(Line::raw(""));
     }
@@ -1388,15 +1421,15 @@ fn activity(app: &App, f: &mut Frame, area: Rect) {
         if it["kind"] == "checkpoint" {
             lines.push(Line::from(vec![
                 when,
-                colored(format!("checkpoint #{}", it["seq"]), Color::Magenta),
+                colored(format!("checkpoint #{}", it["seq"]), current_theme().accent),
                 dim(format!("  {}", it["current_step"].as_str().unwrap_or(""))),
             ]));
         } else {
             let status = it["status"].as_str().unwrap_or("");
             let (mark, color) = match status {
-                "DONE" => ("✓", Color::Green),
-                "FAILED" | "DENIED" => ("✗", Color::Red),
-                _ => ("…", Color::Yellow),
+                "DONE" => ("✓", current_theme().ok),
+                "FAILED" | "DENIED" => ("✗", current_theme().error),
+                _ => ("…", current_theme().warn),
             };
             let exit = it["exit_code"]
                 .as_i64()
@@ -1429,15 +1462,15 @@ fn changes(app: &App, f: &mut Frame, area: Rect) {
         .lines()
         .map(|l| {
             let color = if l.starts_with("+++") || l.starts_with("---") {
-                Color::White
+                Some(Color::White)
             } else if l.starts_with('+') {
-                Color::Green
+                current_theme().ok
             } else if l.starts_with('-') {
-                Color::Red
+                current_theme().error
             } else if l.starts_with("@@") {
-                ACCENT
+                current_theme().accent
             } else {
-                Color::Reset
+                Some(Color::Reset)
             };
             Line::from(colored(l.to_string(), color))
         })
@@ -1491,7 +1524,7 @@ fn history(app: &App, f: &mut Frame, area: Rect) {
                 text(&c["from_model"]),
                 c["to_model"].as_str().unwrap_or("(esperando proveedor)")
             ),
-            Color::Magenta,
+            current_theme().accent,
         )));
         lines.push(Line::from(dim(format!(
             "     Motivo: {why} · {age} · hace {}",
@@ -1515,7 +1548,10 @@ fn history(app: &App, f: &mut Frame, area: Rect) {
 fn recovery(app: &App, f: &mut Frame, area: Rect) {
     let mut lines = Vec::new();
     if app.recovery.is_empty() {
-        lines.push(Line::from(colored("Nada que recuperar.", Color::Green)));
+        lines.push(Line::from(colored(
+            "Nada que recuperar.",
+            current_theme().ok,
+        )));
         lines.push(Line::from(dim("Esc para volver al inicio.")));
     }
     for (i, it) in app.recovery.iter().enumerate() {
@@ -1524,7 +1560,7 @@ fn recovery(app: &App, f: &mut Frame, area: Rect) {
             .map_or_else(|| "proyecto".to_string(), |n| format!("agente #{n}"));
         lines.push(Line::from(vec![
             marker(i == app.selected),
-            colored(format!("{:<20} ", text(&it["kind"])), Color::Yellow),
+            colored(format!("{:<20} ", text(&it["kind"])), current_theme().warn),
             bold(format!("{who:<11}")),
             dim(format!(
                 " hace {}",
@@ -1647,7 +1683,7 @@ fn context_object(app: &App, f: &mut Frame, area: Rect) {
 
 fn switch_span(item: &Value) -> Span<'static> {
     if item["enabled"].as_bool() == Some(true) {
-        colored("[on ] ", Color::Green)
+        colored("[on ] ", current_theme().ok)
     } else {
         dim("[off] ")
     }
@@ -1713,7 +1749,10 @@ fn shared_mcp(app: &App, f: &mut Frame, area: Rect) {
         }
     }
     for w in &app.shared_warnings {
-        lines.push(Line::from(colored(format!("aviso: {w}"), Color::Yellow)));
+        lines.push(Line::from(colored(
+            format!("aviso: {w}"),
+            current_theme().warn,
+        )));
     }
     lines.push(Line::raw(""));
     lines.push(Line::from(dim(
@@ -1880,12 +1919,13 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn status_color(status: &str) -> Color {
+fn status_color(status: &str) -> Option<Color> {
+    let t = current_theme();
     match status {
-        "DONE" | "PASS" | "APPROVED" | "MERGED" | "READY" => Color::Green,
-        "FAILED" | "FAIL" | "BLOCKED" | "CANCELLED" | "ABORTED" | "REJECT" => Color::Red,
-        "RUNNING" | "OPEN" | "TESTING" => Color::Cyan,
-        _ => Color::Yellow,
+        "DONE" | "PASS" | "APPROVED" | "MERGED" | "READY" => t.ok,
+        "FAILED" | "FAIL" | "BLOCKED" | "CANCELLED" | "ABORTED" | "REJECT" => t.error,
+        "RUNNING" | "OPEN" | "TESTING" => t.accent,
+        _ => t.warn,
     }
 }
 
@@ -2065,7 +2105,14 @@ fn system(app: &App, f: &mut Frame, area: Rect) {
                 let over = target.is_some_and(|t| v > t);
                 Line::from(vec![
                     Span::raw(format!("  {name:<5} ")),
-                    colored(bar(v, 20), if over { Color::Red } else { Color::Green }),
+                    colored(
+                        bar(v, 20),
+                        if over {
+                            current_theme().error
+                        } else {
+                            current_theme().ok
+                        },
+                    ),
                     Span::raw(format!(" {v:>3.0}%")),
                     dim(target.map_or(String::new(), |t| format!(" / objetivo {t:.0}%"))),
                 ])
@@ -2144,7 +2191,7 @@ fn performance_profile(app: &App, f: &mut Frame, area: Rect) {
         lines.push(Line::from(vec![
             marker(i == app.perf_sel),
             if i == app.perf_sel {
-                colored(format!("{mark} {name}"), ACCENT)
+                colored(format!("{mark} {name}"), current_theme().brand)
             } else {
                 Span::raw(format!("{mark} {name}"))
             },
@@ -2292,7 +2339,7 @@ fn merge_preflight(app: &App, f: &mut Frame, area: Rect) {
     if conflicts > 0 {
         lines.push(Line::from(colored(
             format!("  {conflicts} archivo(s) en conflicto: c para revisarlos."),
-            Color::Red,
+            current_theme().error,
         )));
     }
     if let Some(r) = m["reviews"].as_array().and_then(|r| r.first()) {
@@ -2323,7 +2370,7 @@ fn conflict_review(app: &App, f: &mut Frame, area: Rect) {
     } else {
         lines.push(Line::from(colored(
             "La tarea no entra limpia en la rama del chat.",
-            Color::Red,
+            current_theme().error,
         )));
         lines.push(Line::raw(""));
         lines.push(Line::from(dim(format!(
@@ -2395,7 +2442,7 @@ fn review_result(app: &App, f: &mut Frame, area: Rect) {
             )));
         }
         if let Some(e) = r["findings"]["error"].as_str() {
-            lines.push(Line::from(colored(format!("  {e}"), Color::Red)));
+            lines.push(Line::from(colored(format!("  {e}"), current_theme().error)));
         }
         lines.push(Line::raw(""));
     }

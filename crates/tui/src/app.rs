@@ -5,6 +5,8 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
+use crate::theme::Theme;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     /// 00 Chat: la vista inicial (P07.5.S7).
@@ -466,6 +468,8 @@ pub struct App {
     pub now_ms: i64,
     pub connected: bool,
     pub quit: bool,
+    /// Tema de la TUI (paleta de marca).
+    pub theme: Theme,
     dirty: bool,
     inflight: usize,
     ticks: u64,
@@ -546,6 +550,7 @@ impl App {
             now_ms: 0,
             connected: true,
             quit: false,
+            theme: Theme::from_env(),
             dirty: false,
             inflight: 0,
             ticks: 0,

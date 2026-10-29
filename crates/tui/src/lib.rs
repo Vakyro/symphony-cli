@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod io;
+pub mod theme;
 pub mod ui;
 
 use std::collections::VecDeque;
