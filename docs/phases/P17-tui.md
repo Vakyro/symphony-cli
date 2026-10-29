@@ -61,7 +61,12 @@
 - **Verificado:** `cargo nextest run -p symphony-tui` → 94 ✅; `clippy --all-targets -D warnings` ✅;
   `cargo fmt --all -- --check` ✅.
 
-### P17.S2 · Chat estilo Claude Code — ✅ (`00e3bd1`)
+### P17.S3 · Arranque — ✅ (`388f532`, `af30a90`)
+- **Objetivo:** arte ASCII de sinfonía a pantalla completa, «para empezar» en proyectos nuevos, recuadro de versión/anuncios (solo local) y `?` abre atajos.
+- **S3a (`388f532`):** `LAUNCH_ART` (8 líneas, 17 columnas) en `ui.rs`, centrado con `current_theme().brand`; degrada a la palabra `SYMPHONY` cuando el cuerpo tiene menos de 66 columnas o 20 filas. Debajo de las opciones `[i]/[o]/[q]` se pinta `PARA EMPEZAR` con las teclas reales (`i`, `o`, `:`, `q`) y su explicación. No se inventaron comandos no implementados (`/init`, `/usage`, `/status`, `/permissions`, `/harness`).
+- **S3b (`af30a90`):** `?` abre `Screen::Help` (recuerda la pantalla de origen para volver con `Esc` o `q`) en todas las pantallas salvo el agente (donde `?` ya explica el routing), `FirstRun`/`NewAgent`/`ProviderSetup` (entrada de texto) y la barra de comandos. El recuadro muestra la versión del crate (`env!("CARGO_PKG_VERSION")`) y, si existe, `.symphony/anuncios.md` (hasta 8 líneas), leído una sola vez al arrancar y sin red ni telemetría.
+- **Pruebas:** dos nuevas en `views.rs` (el arte cabe y se oculta en un terminal pequeño; el bloque «PARA EMPEZAR» sale en el proyecto no inicializado y no en el inicializado). Los snapshots `view_01_launch_*` solo cambian en el arte y el bloque nuevo.
+- **Verificado:** `cargo nextest run -p symphony-tui` → 103 ✅; `clippy --all-targets -D warnings` ✅; `fmt` ✅.
 - **Objetivo:** streaming de la respuesta, pensamientos, ediciones con `+N −M` y archivos tocados.
 - **Verificación:** test L2 con `fake-agent` que emite deltas y diffs.
 - **Agente:** opencode-go/beam-free (delegado) + revisión del orquestador.
