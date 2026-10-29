@@ -3,8 +3,8 @@
 
 //! Helpers compartidos por los tests del CLI.
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use std::sync::OnceLock;
 
 /// `symphonyd` al día. Vive en otro paquete, así que cargo no lo reconstruye
@@ -24,6 +24,90 @@ pub fn symphonyd() -> PathBuf {
             )
         })
         .clone()
+}
+
+/// Detiene el daemon del home y espera a que su proceso termine, incluso si el test falla.
+///
+/// `daemon stop` espera a que se libere el lock de instancia, pero en Windows el proceso puede
+/// seguir destruyendo su runtime durante unos instantes. Nextest examina los hijos justo al salir
+/// del test, así que ese intervalo se marca como `LEAK`.
+pub struct DaemonGuard {
+    home: PathBuf,
+}
+
+impl DaemonGuard {
+    pub fn new(home: &Path) -> Self {
+        Self {
+            home: home.to_path_buf(),
+        }
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_symphony"));
+        command
+            .env("SYMPHONY_HOME", &self.home)
+            .env("SYMPHONYD", symphonyd());
+        command
+    }
+
+    fn pid(&self) -> Option<u32> {
+        let output = self.command().args(["daemon", "status"]).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("pid:"))
+            .and_then(|pid| pid.trim().parse().ok())
+    }
+
+    /// Para el daemon y no devuelve el control hasta que el proceso ya no exista.
+    pub fn stop(&self) -> std::io::Result<Output> {
+        let pid = self.pid();
+        let output = self.command().args(["daemon", "stop"]).output();
+        wait_for_process_exit(pid);
+        output
+    }
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_process_exit(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        // `stop` ya intentó el apagado ordenado. Si el ejecutable sigue vivo, terminamos todo su
+        // árbol y esperamos a que taskkill regrese antes de dejar terminar el test.
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_for_process_exit(pid: Option<u32>) {
+    let Some(pid) = pid else {
+        return;
+    };
+    let pid = pid.to_string();
+    let alive = || {
+        Command::new("kill")
+            .args(["-0", &pid])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while alive() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    if alive() {
+        let _ = Command::new("kill").args(["-9", &pid]).status();
+    }
 }
 
 /// `fake-agent` al día (paquete testkit), para simular CLIs en el PATH.

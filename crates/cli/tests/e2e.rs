@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::symphonyd;
+use common::{DaemonGuard, symphonyd};
 
 fn symphony(home: &Path, args: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_symphony"))
@@ -55,6 +55,7 @@ fn kill_hard(pid: u32) {
 fn cli_restarts_a_daemon_that_died_without_cleanup() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
+    let daemon = DaemonGuard::new(&home);
 
     // En frío: `status` arranca el daemon.
     let first = pid_of(&symphony(&home, &["status"]));
@@ -76,5 +77,7 @@ fn cli_restarts_a_daemon_that_died_without_cleanup() {
     assert_ne!(first, second);
     assert!(symphony(&home, &["daemon", "status"]).contains("corriendo"));
 
-    assert!(symphony(&home, &["daemon", "stop"]).contains("detenido"));
+    let stopped = daemon.stop().unwrap();
+    assert!(stopped.status.success());
+    assert!(String::from_utf8_lossy(&stopped.stdout).contains("detenido"));
 }

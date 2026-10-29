@@ -3,11 +3,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
-use common::symphonyd;
+use common::{DaemonGuard, symphonyd};
 
 #[test]
 fn cli_commands() {
     let home = tempfile::tempdir().unwrap();
+    let _daemon = DaemonGuard::new(&home.path().join("home"));
     trycmd::TestCases::new()
         .env(
             "SYMPHONY_HOME",
