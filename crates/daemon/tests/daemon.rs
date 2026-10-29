@@ -508,7 +508,12 @@ async fn agent_create_rejects_an_invalid_depends_on() {
         assert_eq!(c, "invalid_params", "depends_on: {depends_on}");
     }
 
-    // Un array de textos sí pasa la validación de parámetros (falla después: no hay repo).
+    // Un array de textos sí pasa la validación de parámetros y el daemon sigue adelante hasta
+    // el siguiente control. Cuál de los dos falla primero depende de la máquina: sin
+    // `model`/`profile` el executor se decide después, así que una máquina sin CLIs de
+    // proveedor en el PATH se corta antes (`no_eligible_provider`) y una con proveedores
+    // llega a mirar el repo (`not_a_repo`). Lo que prueba este paso es que `depends_on` no
+    // rechaza un array de textos; ninguno de los dos es `invalid_params`.
     let suelto = dir.path().join("suelto");
     std::fs::create_dir_all(&suelto).unwrap();
     let c = code(
@@ -523,7 +528,10 @@ async fn agent_create_rejects_an_invalid_depends_on() {
         )
         .await,
     );
-    assert_eq!(c, "not_a_repo", "{c}");
+    assert!(
+        matches!(c.as_str(), "not_a_repo" | "no_eligible_provider"),
+        "el array de textos no debe fallar la validación de parámetros: {c}"
+    );
 
     call(&home, "shutdown", json!({})).await;
     assert!(wait_exit(&mut daemon.0).success());
