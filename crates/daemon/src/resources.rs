@@ -49,7 +49,10 @@ pub fn mount_for<'a>(path: &Path, mounts: &'a [PathBuf]) -> Option<&'a PathBuf> 
 }
 
 /// Bytes libres del disco donde está `path`.
-fn disk_free(path: &Path) -> Option<u64> {
+///
+/// Público para que los benchmarks puedan decir cuánto necesitan antes de fallar a medias
+/// (STACK §25.2: el E2E crea worktrees y logs, y con el disco lleno el fallo es confuso).
+pub fn disk_free(path: &Path) -> Option<u64> {
     let disks = sysinfo::Disks::new_with_refreshed_list();
     let mounts: Vec<PathBuf> = disks
         .iter()

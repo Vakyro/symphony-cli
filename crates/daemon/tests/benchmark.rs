@@ -989,6 +989,17 @@ fn print(reports: &[Report]) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn main_benchmark_three_agents_and_one_heavy_test_at_a_time() {
+    // El E2E crea worktrees, logs y 110k eventos: con el disco lleno falla a medias sin decir
+    // por qué (pasó con 1,8 GB libres). Decirlo antes, con la cifra y qué hacer.
+    const MIN_FREE_GB: u64 = 5;
+    if let Some(free) = symphony_daemon::resources::disk_free(std::path::Path::new(".")) {
+        assert!(
+            free >= MIN_FREE_GB * 1024 * 1024 * 1024,
+            "el benchmark E2E necesita ≥ {MIN_FREE_GB} GB libres (STACK §25.2) y hay {:.1} GB. \
+             Libera espacio (`cargo clean`, borrar worktrees terminados) o córrelo en otra máquina.",
+            free as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
+    }
     let reports = vec![
         scenario("1 agente", 1, false).await,
         scenario("3 agentes / 3 worktrees", 3, false).await,
