@@ -230,6 +230,172 @@ pub fn ctx_file_uri(path: &str) -> String {
     format!("ctx://file/{esc}")
 }
 
+/// Líneas sumadas y quitadas de un archivo en el diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStat {
+    pub path: String,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// Líneas `+N −M` por archivo de un diff unificado (`git diff`), en el orden en que salen.
+///
+/// `+++`/`---` son cabecera solo mientras no haya empezado el hunk (`@@`); dentro del hunk son
+/// contenido como cualquier otra línea: quitar un comentario `-- x` de un `.sql` se ve `--- x`
+/// en el diff y también cuenta.
+pub fn diff_stats(diff: &str) -> Vec<FileStat> {
+    let lines: Vec<&str> = diff.lines().collect();
+    let mut stats: Vec<FileStat> = Vec::new();
+    let mut current: Option<(String, usize, usize)> = None;
+    let mut plus_minus: Option<String> = None;
+    let mut in_hunk = false;
+
+    for line in &lines {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            record(&mut stats, current.take());
+            plus_minus = None;
+            in_hunk = false;
+            current = git_diff_path(rest).map(|p| (p, 0, 0));
+            continue;
+        }
+
+        if let Some(body) = line
+            .strip_prefix("Binary files ")
+            .and_then(|b| b.strip_suffix(" differ"))
+        {
+            if current.is_none() {
+                current = binary_path(body).map(|p| (p, 0, 0));
+            }
+            continue;
+        }
+
+        if line.starts_with("@@") {
+            in_hunk = true;
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("--- ")
+            && !in_hunk
+        {
+            // Cabecera del lado `a/`; solo sirve si el `+++` es `/dev/null` (borrado).
+            if current.is_none() {
+                plus_minus = side_path(rest, "a/");
+            }
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("+++ ")
+            && !in_hunk
+        {
+            if current.is_none() {
+                current = side_path(rest, "b/")
+                    .or_else(|| plus_minus.take())
+                    .map(|p| (p, 0, 0));
+            }
+            continue;
+        }
+
+        if line.starts_with('\\') {
+            continue;
+        }
+
+        if let Some((_, added, removed)) = current.as_mut() {
+            if line.starts_with('+') {
+                *added += 1;
+            } else if line.starts_with('-') {
+                *removed += 1;
+            }
+        }
+    }
+
+    record(&mut stats, current.take());
+    stats
+}
+
+/// Suma un archivo al resumen; si el path ya salió (dos bloques del mismo archivo), acumula.
+fn record(stats: &mut Vec<FileStat>, file: Option<(String, usize, usize)>) {
+    let Some((path, added, removed)) = file else {
+        return;
+    };
+    match stats.iter_mut().find(|f| f.path == path) {
+        Some(f) => {
+            f.added += added;
+            f.removed += removed;
+        }
+        None => stats.push(FileStat {
+            path,
+            added,
+            removed,
+        }),
+    }
+}
+
+/// Ruta del lado `b/` de `diff --git a/x b/y`. Git entrecomilla y escapa las rutas raras, y en
+/// ese caso la forma es `"a/x" "b/y"`.
+fn git_diff_path(rest: &str) -> Option<String> {
+    let raw = match rest.rfind("\" \"") {
+        Some(i) => rest[i + 2..].trim(),
+        None => &rest[rest.rfind(" b/")? + 1..],
+    };
+    side_path(raw, "b/")
+}
+
+/// Ruta del lado `b/` de un `Binary files a/x and b/y differ` (0/0 en el resumen).
+fn binary_path(body: &str) -> Option<String> {
+    let i = body.rfind(" and ")?;
+    side_path(body[i + 5..].trim(), "b/")
+}
+
+/// Ruta de una cabecera `--- a/x` / `+++ b/x`: quita el prefijo del lado y las comillas de git.
+/// `/dev/null` no es un archivo, así que devuelve `None` y el nombre sale del otro lado.
+fn side_path(raw: &str, prefix: &str) -> Option<String> {
+    let raw = raw.split('\t').next().unwrap_or(raw).trim();
+    let path = unquote(raw);
+    let path = path.strip_prefix(prefix).unwrap_or(&path);
+    (!path.is_empty() && path != "/dev/null").then(|| path.to_string())
+}
+
+/// Deshace el entrecomillado C de git: `"b/caf\303\251"` → `b/café`.
+fn unquote(path: &str) -> String {
+    let Some(inner) = path.strip_prefix('"').and_then(|p| p.strip_suffix('"')) else {
+        return path.to_string();
+    };
+    let bytes = inner.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let Some(&c) = bytes.get(i) else { break };
+        match c {
+            b'n' => out.push(b'\n'),
+            b't' => out.push(b'\t'),
+            b'r' => out.push(b'\r'),
+            b'0'..=b'7' => {
+                // Octal de hasta tres cifras (`\303\251` = é en UTF-8).
+                let mut v = 0u32;
+                let mut n = 0;
+                while n < 3
+                    && let Some(&d @ b'0'..=b'7') = bytes.get(i)
+                {
+                    v = v * 8 + u32::from(d - b'0');
+                    i += 1;
+                    n += 1;
+                }
+                out.push(v as u8);
+                continue;
+            }
+            _ => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Cuánto dura un aviso del pie (ms).
 const NOTICE_TTL_MS: i64 = 8_000;
 

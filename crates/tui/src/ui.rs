@@ -1675,7 +1675,9 @@ fn activity(app: &App, f: &mut Frame, area: Rect) {
 
 fn changes(app: &App, f: &mut Frame, area: Rect) {
     let Some(a) = &app.agent else { return };
-    let mut lines: Vec<Line> = a
+    let stats = crate::app::diff_stats(&a.diff);
+
+    let diff_lines: Vec<Line<'static>> = a
         .diff
         .lines()
         .map(|l| {
@@ -1693,12 +1695,43 @@ fn changes(app: &App, f: &mut Frame, area: Rect) {
             Line::from(colored(l.to_string(), color))
         })
         .collect();
-    if lines.is_empty() {
-        lines.push(Line::from(dim("Sin cambios contra la base.")));
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if !stats.is_empty() {
+        for s in &stats {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::raw(s.path.clone()),
+                Span::raw("  "),
+                colored(format!("+{}", s.added), current_theme().ok),
+                Span::raw(" "),
+                colored(format!("\u{2212}{}", s.removed), current_theme().error),
+            ]));
+        }
+        lines.push(Line::raw(""));
     }
+    if diff_lines.is_empty() && stats.is_empty() {
+        lines.push(Line::from(dim("Sin cambios contra la base.")));
+    } else {
+        lines.extend(diff_lines);
+    }
+
+    let title = if stats.is_empty() {
+        "Cambios".to_string()
+    } else {
+        let n = stats.len();
+        let total_added: usize = stats.iter().map(|s| s.added).sum();
+        let total_removed: usize = stats.iter().map(|s| s.removed).sum();
+        let archivo = if n == 1 { "archivo" } else { "archivos" };
+        format!(
+            "Cambios · {} {} +{} \u{2212}{}",
+            n, archivo, total_added, total_removed
+        )
+    };
+
     f.render_widget(
         Paragraph::new(lines)
-            .block(boxed("Cambios"))
+            .block(boxed(&title))
             .scroll((a.scroll, 0)),
         area,
     );

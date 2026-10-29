@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 use serde_json::{Value, json};
-use symphony_tui::app::{App, Call, Exec, Failure, Msg, Notice, Req, Screen, Tab};
+use symphony_tui::app::{App, Call, Exec, Failure, Msg, Notice, Req, Screen, Tab, diff_stats};
 use symphony_tui::theme::Theme;
 use symphony_tui::ui;
 
@@ -1939,4 +1939,122 @@ fn the_status_bar_shows_a_dash_when_it_has_no_data() {
     assert!(narrow.starts_with("modelo —"), "{narrow}");
     assert!(narrow.contains("cuota —"), "{narrow}");
     assert!(narrow.chars().count() <= 40, "{narrow}");
+}
+
+// --- P17.S2: resumen de ediciones y streaming --------------------------------
+
+#[test]
+fn diff_stats_counts_two_files_and_ignores_headers() {
+    let diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,3 @@\n context\n-old line\n+new line\n+added line\n\\ No newline at end of file\n\ndiff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-removed line\n+changed line\n";
+    let stats = diff_stats(diff);
+    assert_eq!(stats.len(), 2, "{stats:?}");
+    assert_eq!(stats[0].path, "a.txt");
+    assert_eq!(stats[0].added, 2);
+    assert_eq!(stats[0].removed, 1);
+    assert_eq!(stats[1].path, "b.txt");
+    assert_eq!(stats[1].added, 1);
+    assert_eq!(stats[1].removed, 1);
+}
+
+/// Dentro de un hunk, una línea que empieza por `--- `/`+++ ` es contenido: quitar un comentario
+/// `-- x` de un `.sql` se ve `--- x` en el diff y tiene que contar.
+#[test]
+fn diff_stats_counts_content_that_looks_like_a_file_header() {
+    let diff = "diff --git a/x.sql b/x.sql\n--- a/x.sql\n+++ b/x.sql\n@@ -1,3 +1,3 @@\n--- comentario viejo\n+++ comentario nuevo\n SELECT 1;\n";
+    let stats = diff_stats(diff);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "x.sql");
+    assert_eq!(stats[0].added, 1, "`+++ comentario nuevo` es contenido");
+    assert_eq!(stats[0].removed, 1, "`--- comentario viejo` es contenido");
+}
+
+/// Trozo suelto sin `diff --git`: el nombre sale del `+++` o, en un borrado, del `---`.
+#[test]
+fn diff_stats_reads_a_fragment_without_a_git_header() {
+    let fragment = "--- a/src/x.rs\n+++ b/src/x.rs\n@@ -1 +1,2 @@\n-old\n+new\n+extra\n";
+    let stats = diff_stats(fragment);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "src/x.rs");
+    assert_eq!((stats[0].added, stats[0].removed), (2, 1));
+
+    let deletion = "--- a/viejo.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-borrado\n";
+    let stats = diff_stats(deletion);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "viejo.txt");
+    assert_eq!((stats[0].added, stats[0].removed), (0, 1));
+}
+
+/// Git entrecomilla y escapa las rutas raras; y el mismo archivo puede venir en dos bloques.
+#[test]
+fn diff_stats_unquotes_paths_and_sums_repeated_files() {
+    let quoted =
+        "diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"\n@@ -1 +1 @@\n-uno\n+dos\n";
+    let stats = diff_stats(quoted);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "caf\u{e9}.txt");
+    assert_eq!((stats[0].added, stats[0].removed), (1, 1));
+
+    let repeated = "diff --git a/x.txt b/x.txt\n@@ -1 +1 @@\n-uno\n+dos\ndiff --git a/x.txt b/x.txt\n@@ -9 +9 @@\n-tres\n+cuatro\n+cinco\n";
+    let stats = diff_stats(repeated);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "x.txt");
+    assert_eq!((stats[0].added, stats[0].removed), (3, 2));
+
+    let binary =
+        "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n";
+    let stats = diff_stats(binary);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "logo.png");
+    assert_eq!((stats[0].added, stats[0].removed), (0, 0));
+}
+
+#[test]
+fn view_09_agent_changes_shows_edit_summary() {
+    let app = agent_app(Tab::Changes);
+    let screen = draw(&app);
+    assert!(screen.contains("Cambios · 1 archivo +2 −1"), "{screen}");
+    assert!(
+        screen
+            .lines()
+            .any(|l| { l.contains("src/auth.ts") && l.contains("+2") && l.contains("−1") }),
+        "{screen}"
+    );
+}
+
+#[test]
+fn view_09_agent_changes_without_diff_shows_empty_message() {
+    let mut app = agent_app(Tab::Changes);
+    app.agent.as_mut().unwrap().diff = String::new();
+    let screen = draw(&app);
+    assert!(screen.contains("Sin cambios contra la base."), "{screen}");
+    assert!(!screen.contains("archivo"), "{screen}");
+}
+
+#[test]
+fn chat_streams_partial_response_without_duplicates() {
+    let mut app = chat_app();
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    ok(&mut app, Req::Inspect, inspect());
+    ok(
+        &mut app,
+        Req::Logs,
+        json!({ "messages": [ { "role": "USER", "content": "hola" } ], "partial": "Voy a" }),
+    );
+    let screen = draw(&app);
+    assert!(screen.contains("Voy a▍"), "{screen}");
+    ok(
+        &mut app,
+        Req::Logs,
+        json!({
+            "messages": [
+                { "role": "USER", "content": "hola" },
+                { "role": "ASSISTANT", "content": "Voy a mirar el bug" }
+            ],
+            "partial": ""
+        }),
+    );
+    let screen = draw(&app);
+    assert!(screen.contains("Voy a mirar el bug"), "{screen}");
+    assert!(!screen.contains("▍"), "{screen}");
+    assert_eq!(screen.matches("Voy a mirar el bug").count(), 1, "{screen}");
 }
