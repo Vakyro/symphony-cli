@@ -76,6 +76,15 @@ impl Drop for DaemonGuard {
     }
 }
 
+/// Para el daemon de `home` y espera a que su proceso muera del todo.
+///
+/// Para los tests que paran el daemon al final con `symphony daemon stop`: la orden devuelve el
+/// control cuando el daemon suelta el lock, no cuando el proceso sale, y nextest mira justo en ese
+/// hueco. El PID se lee antes de parar, que es el único momento en que existe.
+pub fn stop_daemon(home: &Path) -> Output {
+    DaemonGuard::new(home).stop().expect("daemon stop")
+}
+
 #[cfg(windows)]
 fn wait_for_process_exit(pid: Option<u32>) {
     if let Some(pid) = pid {

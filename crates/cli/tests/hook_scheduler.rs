@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod common;
-use common::symphonyd;
+use common::{stop_daemon, symphonyd};
 
 /// Id (ULID) del proyecto sembrado: el daemon parsea los ids de verdad.
 fn project() -> &'static str {
@@ -217,13 +217,7 @@ fn heavy_tool_waits_for_its_turn_and_is_denied_with_a_reason() {
     assert_eq!(agent_state(&db, &a2), "RUNNING");
     assert_eq!(call_of(&db, "pnpm build").0, "DONE");
 
-    assert!(
-        symphony(&home)
-            .args(["daemon", "stop"])
-            .status()
-            .unwrap()
-            .success()
-    );
+    assert!(stop_daemon(&home).status.success(), "daemon stop");
 }
 
 fn dump_logs(home: &Path) {

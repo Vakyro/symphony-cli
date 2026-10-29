@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 mod common;
-use common::{DaemonGuard, fake_agent, symphonyd};
+use common::{DaemonGuard, fake_agent, stop_daemon, symphonyd};
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -233,6 +233,8 @@ fn a_plain_folder_becomes_a_document_project() {
     );
     assert!(ok, "spawn con @write: {out}");
     assert!(out.contains("agente #1 creado"), "{out}");
-    let (ok, out) = symphony(&user, &folder, &["daemon", "stop"]);
-    assert!(ok, "daemon stop: {out}");
+    assert!(
+        stop_daemon(&folder.join(".symphony")).status.success(),
+        "daemon stop"
+    );
 }
