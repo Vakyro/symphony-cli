@@ -1,11 +1,11 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-27 (cierre de la jornada) · por claude-code/haiku-5.5 (orquestación: claude-code/sonnet-5.5)
+**Actualizado:** 2026-10-28 · por opencode-go/deepseek-v4-pro (orquestación con Symphony, solo opencode-go)
 **Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, local, **sin pushear**). P16.S0 adelantado en `phase/p16-validacion`.
-**Paso actual:** S3 ✅ (soak de 4 h aprobado: 963 tandas, 470 reinicios, RSS 25 → 27 MB) · S5 🟡 (`server.md`: parte A integrada; #51 y #52 en curso) · S8 🟡 (falta gate completo, merge a `main`, tag `p13-done`).
-**Estado del paso:** en curso (2 agentes en Kimi) · pausado al cierre de la jornada.
-**En curso por:** agentes #51 (`k3.1-pro`) y #52 (`k3-256k`); sin revisar.
-**Siguiente:** (#51 y #52 parados por Leo; se revisan más adelante, en documento) revisar e integrar lo que Leo indique → `cargo xtask check` completo → `cargo deny check` → merge `--no-ff` a `main` y tag `p13-done` (permiso vigente) → rebasar `phase/p16-validacion` → P16.S2–S7.
+**Paso actual:** S3 ✅ (soak de 4 h aprobado) · S5 ✅ (`server.md` completo: A + #51 watchdog/colisiones + #52 plazos IPC, integrados) · S8 🟡 (gate completo → deny → merge a `main` → tag `p13-done` pendientes).
+**Estado del paso:** integrando y verificando (gate en curso).
+**En curso por:** opencode-go/deepseek-v4-pro (orquestador), con delegación a agentes Symphony sobre `opencode-go`.
+**Siguiente:** gate completo `cargo xtask check` → `cargo deny check` → merge `--no-ff` a `main` y tag `p13-done` (permiso vigente) → rebasar `phase/p16-validacion` → P16.S2–S7 → P17–P20 (delegado a agentes opencode-go). Pendientes a delegar: test inestable `project_files_stay_searchable_as_they_change`, benchmark que declare disco libre, verificación de ADR-0021.
 
 **Cierre de la jornada (detalle en `docs/progress/CIERRE-2026-10-27.md`):** qué salió bien, qué falló, qué se arregló y qué falta. Resumen: integrados #48 (guardia de aislamiento), #49 (freno por disco), #50 (permisos, `depends_on`, `usage.get`). Falta: test inestable `project_files_stay_searchable_as_they_change`, gate completo, disco al 97 %.
 
@@ -14,7 +14,7 @@
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: ✅ 666 tests (2026-10-24, rama de P13; el gate quita `SYMPHONY_LIVE`, nunca corre live).
+- `cargo xtask check`: 🟡 733 tests pasan (0 fallos), pero **8 tests "leaky"** en `symphony-cli` (chat_merge, e2e, cli_commands, hook_emit, providers, projects) dejan `symphonyd` vivo en Windows y hacen que nextest salga con error. Preexistentes (no de #48–#52); ocultos porque el gate completo no se corría desde el 24/10. En delegación para arreglarlos.
 - `cargo deny check`: ✅ en la rama `phase/p13-endurecimiento` (tokio 1.54.1 por RUSTSEC-2026-0386); en `main` el job `deny` sigue en rojo hasta que esa rama se integre.
 - CI en `main`: 🔴 solo el job `deny` (aviso nuevo contra tokio 1.53.1, publicado después de P14); los demás ✅. Arreglo ya hecho en la rama de P13 (P13.S1), pendiente de integrar.
 - Tests conocidos en rojo: ninguno.
