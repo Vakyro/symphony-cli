@@ -140,3 +140,10 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P15 | ✅ (revisión visual → Para Leo) | p15-done |
 | P15.5 | ✅ (ADR-0018, 0019, 0020) | p155-done |
 | P13, P16 | ⏳ en ese orden (ADR-0014) | |
+
+## Ola 0 — decisiones del 2026-10-29
+
+- P17.S4 queda definido como un mini piano de una octava; no incluye fuegos artificiales.
+- P20.S3, la vista Habbo, sale del plan y queda registrada como idea futura.
+- P19 usa Laya por defecto, con backend enchufable; Symphony no trae Python.
+- Antigravity está sin cuota durante aproximadamente 48 horas desde el 2026-10-29.

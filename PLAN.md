@@ -1536,3 +1536,10 @@ coordina varios CLIs de IA (Claude Code, Codex, Antigravity, Kimi, Copilot).
 ## Identidad
 Firma como `herramienta/modelo` (ej. `claude-code/opus`, `codex/gpt-5.x`).
 ```
+
+## Enmiendas de Ola 0 (2026-10-29)
+
+- P17.S4: mini piano de una octava; no fuegos artificiales.
+- P20.S3: la vista Habbo sale del plan y queda como idea futura.
+- P19: Laya es el backend predeterminado y el backend es enchufable; Symphony no trae Python.
+- Antigravity está sin cuota durante aproximadamente 48 horas desde el 2026-10-29.
