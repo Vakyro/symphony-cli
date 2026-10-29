@@ -3,7 +3,7 @@
 | Campo | Valor |
 |---|---|
 | Estado | EN CURSO |
-| Rama | phase/p16-validacion (sale de `phase/p13-endurecimiento` antes de su merge; se rebasa sobre `main` al cerrar P13) |
+| Rama | phase/p16-validacion (rebasada sobre `main` el 2026-10-28, después del merge de P13) |
 | Inicio / cierre | 2026-10-27 / — |
 | Agentes que trabajaron | claude-code/opus-5.5 (S0) |
 | Tag | — |
@@ -39,10 +39,34 @@
   de merge, recuperación tras reinicio del daemon y soak de 4 h) corre en CI en los tres
   sistemas dentro de `cargo xtask check`. Falta la sesión live de Leo con los proveedores reales.
 
-### P16.S3 · Benchmark final — ⏳
+### P16.S3 · Benchmark final — 🟡 (medido; falta el veredicto de Leo)
 - El harness E2E de STACK §25.2 quedó completo en P13.S4 (`crates/daemon/tests/benchmark.rs`).
-  Falta correrlo con la máquina sin otros agentes y compararlo con la línea base de P08, y el
-  veredicto de Leo sobre la usabilidad.
+  **Corrida final del 2026-10-28** (`cargo nextest run -p symphony-daemon --test benchmark
+  --no-capture`, 41 s, sin otros agentes, 112 GB libres):
+
+| Escenario | Agentes | Tiempo | RAM daemon | Arranque | Cola p95 | Evento p95 | Evento p99 | Checkpoint p95 |
+|---|---|---|---|---|---|---|---|---|
+| 1 agente | 1 | 1 827 ms | 31 MB | 625 ms | — | 20 ms | 20 ms | 788 ms |
+| 3 agentes / 3 worktrees | 3 | 2 707 ms | 32 MB | 1 522 ms | — | 8 ms | 10 ms | 976 ms |
+| 3 agentes + prueba pesada | 3 | 8 572 ms | 33 MB | 1 574 ms | 3 691 ms | 10 ms | 52 ms | 671 ms |
+| failover forzado | 1 | 2 783 ms | 34 MB | 684 ms | — | 13 ms | 25 ms | 1 271 ms |
+| reinicio del daemon | 2 | 4 850 ms | 34 MB | 23 ms | — | 2 ms | 34 ms | 1 309 ms |
+| logs grandes (4 MB) | 1 | 4 530 ms | 57 MB | 689 ms | — | 275 ms | 313 ms | 777 ms |
+| 10k eventos | 1 | 419 ms | 38 MB | — | 9 ms | 0,08 ms | 0,08 ms | — |
+| 100k eventos | 1 | 4 176 ms | 53 MB | — | 12 ms | 0,06 ms | 0,08 ms | — |
+
+  Handoff 441–823 ms; el failover forzado tarda 207 ms. Todos los topes del propio benchmark se
+  cumplen (RAM < 100 MB, ninguna prueba pesada solapada, ningún escenario > 2 min).
+- **Contra la línea base de P08** (`docs/phases/P08-multiagente.md`): el daemon bajo carga sigue en
+  **32 MB** (idéntico) y el evento p95 sigue entre 8 y 20 ms; 100k eventos se escriben y se leen en
+  4,2 s con p99 de 0,08 ms. Lo que creció es lo esperado por lo añadido después de P08 (índice de
+  contexto, checkpoints, validación): `logs grandes` es el escenario más caro en RAM (57 MB) por el
+  pipeline de salida.
+- **Añadido en esta vuelta:** el benchmark declara antes de arrancar que necesita **≥ 5 GB libres**
+  (`resources::disk_free`, ahora público) y falla con la cifra y qué hacer, en vez de morir a medias
+  como pasó con 1,8 GB el 2026-10-27.
+- **Falta:** el veredicto de Leo sobre la usabilidad (⛔): la corrida L3 con los seis proveedores
+  reales de P08 no se repitió aquí a propósito (gasta cuota y solo Leo la autoriza).
 
 ### P16.S4 · Instalación limpia — 🟡 (falta su primera corrida en CI)
 - **Agente:** claude-code/opus-5.5 · **Fecha:** 2026-10-27
