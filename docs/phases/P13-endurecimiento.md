@@ -155,3 +155,32 @@ large logs (4 MB)              1   9582ms    569MB      59MB     94%     95%    
 - **Queda para después:** guardia de aislamiento (agentes que escriben fuera de su worktree), tope
   absoluto del watchdog con CPU, arreglos de `server.md` (agente #39, sin integrar), hallazgos
   diferidos de las auditorías.
+
+## S8 (bis) · Cierre de verdad (2026-10-28, orquestación con Symphony sobre opencode-go)
+- **`server.md` completo.** Integrado lo que faltaba de la auditoría, revisado antes de integrar:
+  - **#51** (`5e46112`, `fe4ec5d`): el watchdog comprueba bajo el lock de `live` que el agente siga en
+    el run observado antes de mandar `NoHeartbeat` (ya no cierra un run nuevo instalado durante la
+    espera), y `prepare_worktree`/`undo_worktree` solo revierten el worktree y la rama que creó este
+    intento (una colisión con trabajo sin commitear ya no lo borra). Con tests de regresión.
+  - **#52** (`1840654`): `hook.emit` usa `hold_for` + 5 s como deadline del IPC, y la espera del
+    turno y su cierre (arrancar/denegar la `tool_call`, devolver el agente a `RUNNING`) corren en su
+    propia tarea, así que un timeout del request ya no cancela el cierre ni deja el agente en
+    `WAITING_RESOURCE`.
+  - #51 se integró con cherry-pick (su base era anterior a #50); #52 venía sin commitear y se aplicó
+    como patch. Ambos compilan sin conflictos.
+- **ADR-0021 verificado** contra la implementación (`files_check.rs`, migración 009, `enums.rs`,
+  `config.rs`, `validation.rs`): coincide. Única desviación menor, anotada y no bloqueante: sin
+  archivos que revisar el check devuelve `PASS` con resumen, no `SKIPPED` como decía el ADR.
+- **Test inestable `project_files_stay_searchable_as_they_change` arreglado** (`3c342fd`): el
+  `Watchers::default()` temporal se destruía al salir de `ensure` y cerraba su canal antes de que el
+  `rescan` podara el índice. Diagnóstico del agente #53; el arreglo es retenerlo durante la espera.
+- **8 tests `LEAK` del CLI arreglados** (`e779de4`): el gate marcaba `733 passed` y aun así salía en
+  rojo porque `daemon stop` espera al lock, no al proceso, y en Windows el proceso sigue un instante
+  vivo cuando nextest inspecciona. `DaemonGuard` compartido en `crates/cli/tests/common/mod.rs`
+  captura el PID mientras el daemon está vivo, para, espera y, si sigue, hace `taskkill /F /T` (en
+  Unix `kill -0` + `kill -9` con deadline); corre también en el `Drop`, así que cubre las aserciones
+  que fallan. Conectado a los 8 tests y a `context_commands_on_a_fresh_project`, que fugaba en el
+  gate completo. Trabajo del agente #54, que murió con `NO_HEARTBEAT` a los 59 min dejándolo sin
+  commitear: se revisó, se aplicó y se verificó (`cargo nextest run -p symphony-cli` → 50 passed,
+  0 leaky).
+- **Gate completo** `cargo xtask check` + `cargo deny check` antes del merge a `main`.

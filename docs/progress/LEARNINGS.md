@@ -170,3 +170,10 @@ Una sola sesión cubrió P11.S2–S6, P10 completa y P09.S1–S10, con una compa
 - **Un agente que cae por cuota no pierde el trabajo:** `symphony switch` lo pasó de Antigravity a Kimi. Usarlo antes de rehacer.
 - **Un benchmark que necesita disco libre debe decirlo:** falló con 1,8 GB sin mensaje útil; pasó con 16 GB.
 - **Un run marcado `FAILED` puede traer código bueno:** #48 quedó `FAILED` con su commit sin hacer. Revisar el worktree antes de descartar.
+
+## Orquestación con Symphony (2026-10-28)
+- **Una sesión de agente no aguanta el gate completo:** #54 murió a los 59 min con `NO_HEARTBEAT` (exit 1) después de encadenar varias corridas de `nextest --workspace`. El agente arregla y verifica **como mucho el crate afectado** (`-p <crate>`); el gate completo lo corre el orquestador. Si un agente tiene que correr el gate, que sea su última acción y con el trabajo ya commiteado.
+- **Los `SYMPHONY_*` heredados contaminan los tests del CLI:** si el orquestador corre los tests desde dentro de un agente, `hook_emit`, `hook_scheduler` y MCP leen el home / el socket de la sesión y fallan (0 eventos frente a 20). Limpiar `SYMPHONY_*` (y `CARGO_BUILD_BUILD_DIR`) antes de `cargo xtask check`; si no, hay que depurar fallos que no existen.
+- **`daemon stop` no espera al proceso, solo al lock:** en Windows el proceso sigue destruyendo su runtime un instante y nextest lo ve vivo → `LEAK`. Un guard que capture el PID, pare, espere y haga `taskkill /F /T` lo cierra; hay que correr también en el `Drop` para que cubra las aserciones que fallan.
+- **`nextest` marca `LEAK` sin fallar ningún test:** el resumen puede decir `733 passed` y el gate salir en rojo. El motivo está en las líneas `LEAK` del log, no en el resumen.
+- **El gate no corre con el daemon del repo vivo:** `symphonyd.exe` en ejecución ocupa `target/debug/symphonyd.exe` y clippy falla con `failed to remove file`. Parar el daemon del proyecto (`symphony daemon stop`) antes de `cargo xtask check`, no después.

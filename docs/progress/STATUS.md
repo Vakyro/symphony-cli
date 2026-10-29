@@ -1,20 +1,20 @@
 # STATUS — Symphony CLI
 
 **Actualizado:** 2026-10-28 · por opencode-go/deepseek-v4-pro (orquestación con Symphony, solo opencode-go)
-**Fase actual:** P13 · Endurecimiento y pre-release (rama `phase/p13-endurecimiento`, local, **sin pushear**). P16.S0 adelantado en `phase/p16-validacion`.
-**Paso actual:** S3 ✅ (soak de 4 h aprobado) · S5 ✅ (`server.md` completo: A + #51 watchdog/colisiones + #52 plazos IPC, integrados) · S8 🟡 (gate completo → deny → merge a `main` → tag `p13-done` pendientes).
-**Estado del paso:** integrando y verificando (gate en curso).
+**Fase actual:** P13 · Endurecimiento y pre-release — **cerrada y mergeada a `main`** (tag `p13-done`). P16.S0 adelantado en `phase/p16-validacion`.
+**Paso actual:** S3 ✅ (soak de 4 h aprobado) · S5 ✅ (`server.md` completo: A + #51 watchdog/colisiones + #52 plazos IPC) · S8 ✅ (gate 733 ✅ · `deny` ✅ · merge `--no-ff` · tag `p13-done` · push).
+**Estado del paso:** cerrado.
 **En curso por:** opencode-go/deepseek-v4-pro (orquestador), con delegación a agentes Symphony sobre `opencode-go`.
-**Siguiente:** gate completo `cargo xtask check` → `cargo deny check` → merge `--no-ff` a `main` y tag `p13-done` (permiso vigente) → rebasar `phase/p16-validacion` → P16.S2–S7 → P17–P20 (delegado a agentes opencode-go). Pendientes a delegar: test inestable `project_files_stay_searchable_as_they_change`, benchmark que declare disco libre, verificación de ADR-0021.
+**Siguiente:** rebasar `phase/p16-validacion` sobre `main` → P16.S2–S7 → P17–P20 (delegado a agentes opencode-go). Pendientes menores: benchmark que declare disco libre, desviación de ADR-0021 (`PASS` en vez de `SKIPPED`).
 
-**Cierre de la jornada (detalle en `docs/progress/CIERRE-2026-10-27.md`):** qué salió bien, qué falló, qué se arregló y qué falta. Resumen: integrados #48 (guardia de aislamiento), #49 (freno por disco), #50 (permisos, `depends_on`, `usage.get`). Falta: test inestable `project_files_stay_searchable_as_they_change`, gate completo, disco al 97 %.
+**Cierre de la jornada (detalle en `docs/progress/CIERRE-2026-10-27.md`):** qué salió bien, qué falló, qué se arregló y qué falta. Resumen: integrados #48 (guardia de aislamiento), #49 (freno por disco), #50 (permisos, `depends_on`, `usage.get`). **2026-10-28:** integrados #51 y #52, arreglado el test inestable del watcher y los `LEAK` del CLI, verificado ADR-0021, gate y `deny` en verde, P13 mergeada a `main`.
 
-**Lo que falta para v1.0 (2026-10-27):** (1) P13: integrar #51 y #52, gate completo, merge a `main`, tag `p13-done`. (2) Rebasar `phase/p16-validacion` sobre `main`. (3) P16.S2 E2E con fake-agents, S3 benchmark, S4 `install-check.yml`, S5 docs as-built, S7 retrospectiva. (4) ⛔ S6 release v1.0.0 y v0.9.0 (tu OK para pushear tags `v*`). Antes de v1.0.0, P17–P20 (decidido por Leo; ver abajo).
+**Lo que falta para v1.0 (2026-10-28):** (1) Rebasar `phase/p16-validacion` sobre `main`. (2) P16.S2 E2E con fake-agents, S3 benchmark, S4 `install-check.yml`, S5 docs as-built, S7 retrospectiva. (3) ⛔ S6 release v1.0.0 y v0.9.0 (tu OK para pushear tags `v*`). Antes de v1.0.0, P17–P20 (decidido por Leo; ver abajo).
 
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: 🟡 733 tests pasan (0 fallos), pero **8 tests "leaky"** en `symphony-cli` (chat_merge, e2e, cli_commands, hook_emit, providers, projects) dejan `symphonyd` vivo en Windows y hacen que nextest salga con error. Preexistentes (no de #48–#52); ocultos porque el gate completo no se corría desde el 24/10. En delegación para arreglarlos.
+- `cargo xtask check`: ✅ **733 tests, 0 fallos, 0 leaky** (2026-10-28, rama de P13; el gate quita `SYMPHONY_LIVE`, nunca corre live).
 - `cargo deny check`: ✅ en la rama `phase/p13-endurecimiento` (tokio 1.54.1 por RUSTSEC-2026-0386); en `main` el job `deny` sigue en rojo hasta que esa rama se integre.
 - CI en `main`: 🔴 solo el job `deny` (aviso nuevo contra tokio 1.53.1, publicado después de P14); los demás ✅. Arreglo ya hecho en la rama de P13 (P13.S1), pendiente de integrar.
 - Tests conocidos en rojo: ninguno.
@@ -43,7 +43,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P15.5 · Cambios de rumbo** (`phase/p155-cambios-de-rumbo`, `docs/phases/P15.5-cambios-de-rumbo.md`; pedido de Leo 2026-10-23, va antes de P13): ✅ S0 ADRs 0018–0020 (aceptados 2026-10-23) · ✅ S1 modelos de las 6 suscripciones (`docs/research/modelos-2026-10.md`) · ✅ S2 Codex/Copilot/agy sin bloqueos de sandbox · ✅ S3 estado y daemon por proyecto (ADR-0018; `symphony migrate split`) · ✅ S4 harness de Symphony (ADR-0019; `[harness] mode`, 5 de 6 proveedores) · ✅ S5 más allá del código (ADR-0020; `symphony init --kind`, perfiles `@write/@media/@research`, migración 008) · ✅ S6 cierre (`p155-done`)
 
-**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos, ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · S8 cierre (`p13-done`; `v0.9.0` local)
+**P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos (incluidos #51 y #52 de `server.md`), ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · ✅ S8 cierre (`p13-done`, 2026-10-28: gate 733 ✅, `deny` ✅, merge a `main`; `v0.9.0` local)
 
 **P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasar sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · 🟡 S4 `install-check.yml` · 🟡 S5 anexo de desviaciones
 
@@ -66,12 +66,12 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
-- **2026-10-27 · Backlog nuevo (P17–P20): respondido por Leo.** P17–P20 van antes de v1.0.0. Jev no se usa: se evaluará una versión ligera de código abierto que Leo describirá después. Móvil por Tailscale + SSH + tmux, sin app ni web (P20.S4). ADR-0021 y los agentes #51/#52 se revisan más adelante, en documento.
+- **2026-10-27 · Backlog nuevo (P17–P20): respondido por Leo.** P17–P20 van antes de v1.0.0. Jev no se usa: se evaluará una versión ligera de código abierto que Leo describirá después. Móvil por Tailscale + SSH + tmux, sin app ni web (P20.S4).
+- **2026-10-28 · #51, #52 y ADR-0021: revisados e integrados** (Leo autorizó hacerlo en vez de dejarlo en documento). #51 (`5e46112`, `fe4ec5d`) y #52 (`1840654`) están en `main`. ADR-0021 coincide con su implementación; única desviación menor y no bloqueante: sin archivos que revisar el check devuelve `PASS` con resumen, no `SKIPPED` como decía el ADR. Si prefieres `SKIPPED`, es un cambio de dos líneas en `files_check.rs`.
 - **2026-10-27 · Noche de dogfooding:** reporte completo en `docs/progress/REPORTE-2026-10-27.md`.
-- **ADR-0021** (check `files` para documentos y medios) quedó aceptado por delegación: revísalo.
 - **Publicar v0.9.0 / v1.0.0:** el pipeline de cargo-dist está listo en dry run; pushear un tag `v*` publica (y para Homebrew hace falta crear el repo `Vakyro/homebrew-symphony`).
 - **Aislamiento:** dos modelos escribieron en el repo principal (DOGFOOD § Hallazgos). Antes de delegar sin supervisión hace falta una guardia en Symphony; mientras tanto, no dejar cambios sin commitear en el repo principal con agentes corriendo.
-- **Agente #39 (arreglos de `server.md`)** dejó 1154 líneas sin commitear en su worktree; no se integró. Retomarlo con un modelo fuerte o rehacerlo por partes.
+- **Agente #39 (arreglos de `server.md`)** dejó 1154 líneas sin commitear en su worktree; no se integró. Lo que faltaba de `server.md` se cubrió con #51 y #52 (integrados el 2026-10-28); lo que #39 traía de más ya no aplica.
 - **Watchdog:** la CPU ya no mantiene vivo un run que lleva 60 min sin escribir nada (tope fijo). Una corrida de Antigravity de más de una hora sin salida caería: si te pasa, se hace configurable.
 - **Disco:** `cargo clean` en el repo si vuelve a crecer (`target/` llegó a 104 GB); WSL creció por los clones del fuzzing (`wsl --shutdown` + compactar el vhdx si molesta).
 - **Basura en `~` de WSL:** clones `~/symphony-fuzz-*` y `~/symphony-linux-*` (se pueden borrar).
