@@ -60,3 +60,37 @@
   romper a 40). Los 36 snapshots cambian solo en la línea nueva.
 - **Verificado:** `cargo nextest run -p symphony-tui` → 94 ✅; `clippy --all-targets -D warnings` ✅;
   `cargo fmt --all -- --check` ✅.
+
+### P17.S2 · Chat estilo Claude Code — ✅ (`00e3bd1`)
+- **Objetivo:** streaming de la respuesta, pensamientos, ediciones con `+N −M` y archivos tocados.
+- **Verificación:** test L2 con `fake-agent` que emite deltas y diffs.
+- **Agente:** opencode-go/beam-free (delegado) + revisión del orquestador.
+- **Streaming: no había que hacerlo.** Los adaptadores ya emiten `AssistantDelta` desde P11.5.S3,
+  el bus lo guarda en memoria (`Bus::partial`, tope 64 KiB) y `agent.logs` devuelve `partial`, que
+  la TUI pinta con el cursor ▍ (`partial_lines`). Lo que faltaba era la prueba y la resolución: lo
+  que se percibe como «no streaming» es el tick de 1 s. La decisión y la opción 2 (publicar el
+  `AgentEvent` en `agent.event`) quedan en ADR-0022.
+- **Pensamientos: fuera de este paso.** Exigirían `AgentEvent::Thinking` y migrar el `CHECK` de
+  `events.type`; al backlog (ADR-0022).
+- **Ediciones:** `FileStat { path, added, removed }` y `pub fn diff_stats(&str) -> Vec<FileStat>`
+  en `app.rs`, función pura sobre el texto del diff. `ui::changes` pinta el título
+  «Cambios · N archivo(s) +A −R» (menos U+2212) y una línea por archivo con la ruta, `+A` en `ok` y
+  `−R` en `error`. Sin stats el título sigue siendo «Cambios» y con el diff vacío se mantiene
+  «Sin cambios contra la base.».
+- **Corrección en la revisión:** la primera versión tomaba `--- `/`+++ ` como cabecera por el
+  prefijo, así que una línea de contenido que empieza por `-- ` (comentario SQL) se perdía, y las
+  rutas entrecomilladas por git (`"b/caf\303\251"`) no se desescapaban. Ahora el parser lleva estado
+  de hunk: `diff --git` abre archivo, `@@` entra en el hunk y las cabeceras `---`/`+++` solo lo son
+  antes del primer `@@`; después cuentan como contenido. Se añaden `unquote` (escapes C y octal),
+  el nombre en trozos sin `diff --git` (del `+++`, o del `---` en un borrado a `/dev/null`), los
+  binarios como 0/0 y la suma de bloques repetidos del mismo path. El alta se centraliza en
+  `record`.
+- **Pruebas:** cuatro nuevas: dos archivos con cabeceras que no cuentan, contenido que parece
+  cabecera dentro de un hunk, trozo sin `diff --git` y borrado, y rutas entrecomilladas + bloques
+  repetidos + binario; más el resumen en la vista, el caso sin diff y el streaming (con
+  `partial: "Voy a"` se ve «Voy a▍»; al llegar el ASSISTANT completo el cursor desaparece y el
+  texto sale una sola vez).
+- **Snapshot:** solo cambia `view_09_agent_changes`, y solo el título y la línea de resumen (el
+  diff se desplaza dos líneas por el viewport fijo; el resto del frame es idéntico).
+- **Verificado:** `cargo nextest run -p symphony-tui` → 101 ✅; `clippy --all-targets -D warnings` ✅;
+  `cargo fmt --all -- --check` ✅.
