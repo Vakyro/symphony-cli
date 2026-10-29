@@ -3833,7 +3833,10 @@ async fn project_files_stay_searchable_as_they_change() {
     std::fs::write(e.repo.join("target/output"), "artefactoviejo\n").unwrap();
     wait_for("artefactoviejo", true);
     std::fs::write(e.repo.join(".gitignore"), "build/\ntarget/\n").unwrap();
-    symphony_daemon::watcher::Watchers::default().ensure(
+    // El `Watchers` temporal se destruía al salir de `ensure` y cerraba su canal antes de que el
+    // `rescan` podara el índice; retenerlo durante la espera (agente #53, codex/gpt-6.1-sol).
+    let rescan = symphony_daemon::watcher::Watchers::default();
+    rescan.ensure(
         &project,
         &e.repo,
         e.writer.handle(),
