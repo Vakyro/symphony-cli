@@ -99,3 +99,9 @@
   diff se desplaza dos líneas por el viewport fijo; el resto del frame es idéntico).
 - **Verificado:** `cargo nextest run -p symphony-tui` → 101 ✅; `clippy --all-targets -D warnings` ✅;
   `cargo fmt --all -- --check` ✅.
+
+## Backlog / ideas futuras de P17 (documentadas, no implementadas)
+
+- **S8 · Renderizado rico del chat (pendiente):** colores en las respuestas estilo OpenCode. Un MD temporal que vive solo durante la sesión, con colores asignados por importancia (info/warn/error). Dos opciones a decidir con ADR corto: (A) colorear todo el markdown del asistente (requiere parser como pulldown-cmark, justificar dependencia en STACK) o (B) solo bloques especiales marcados por el agente (protocolo documentado en el harness). Decidir si el color lo asigna el agente o la TUI por heurística, y si el MD se persiste en el transcript o solo en memoria. No confundir con el tema de la TUI (S1), ya implementado.
+- **Política configurable de Symphony/harness (pendiente, fuera de P17):** análogo a los permisos de Claude Code (allow/deny/ask, modos default/acceptEdits/plan/dontAsk/bypassPermissions, archivos ignorados estilo .claudeignore, política por proyecto en .symphony/policy.toml). Requiere ADR nuevo y decisión de alcance (solo archivos vs. también shell/git). Documentado en PLAN.md bajo "Ideas futuras (sin fase)".
+

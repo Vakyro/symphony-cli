@@ -47,7 +47,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos (incluidos #51 y #52 de `server.md`), ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · ✅ S8 cierre (`p13-done`, 2026-10-28: gate 733 ✅, `deny` ✅, merge a `main`; `v0.9.0` local)
 
-**P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ S1 tema y barra de estado · ✅ S2 chat estilo Claude Code · ✅ S3 arranque (arte, «para empezar», atajos con `?`, recuadro de versión local) · 🟡 S4 mascota · pendientes S5–S7
+**P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ S1 tema y barra de estado · ✅ S2 chat estilo Claude Code · ✅ S3 arranque (arte, «para empezar», atajos con `?`, recuadro de versión local) · 🟡 S4 mascota · pendientes S5–S7 · backlog documentado: S8 renderizado rico del chat (colores por importancia) y política configurable de Symphony/harness (fuera de P17, nueva fase).
 
 **P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasada sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · ✅ S3 benchmark medido con guard de disco · 🟡 S4 `install-check.yml` (espera estar en `main`; el trigger ya no se dispara desde `main`) · 🟡 S5 anexo de desviaciones
 

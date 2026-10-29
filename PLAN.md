@@ -1314,6 +1314,7 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **S5 Shell en curso:** lista de procesos del agente, abrir uno y ver su salida en vivo.
 - **S6 Vistas:** avance de agentes en un plan (rama, tarea/fase, %), ramas de git, pantalla `status` global (uso por modelo/sesión, proveedores, tips, heatmap mensual de uso; requiere ADR por ser datos entre proyectos, ver ADR-0018).
 - **S7 Cierre.**
+- **S8 Renderizado rico del chat (pendiente):** colores en las respuestas estilo OpenCode — un MD temporal que vive solo durante la sesión, con colores asignados por importancia (info/warn/error). Decidir entre colorear todo el markdown (Opción A, requiere parser como `pulldown-cmark`) o solo bloques especiales marcados por el agente (Opción B, protocolo documentado en el harness). Requiere ADR corto sobre el protocolo de marcadores. No confundir con el tema de la TUI (S1), que ya está.
 
 ### P18 · Contexto y ahorro de tokens (`phase/p18-contexto`)
 - **S1 Auditoría del router y del handoff:** medir tokens de contexto por ruta y recortar lo que sobra. **Verifica:** benchmark antes/después.
@@ -1340,7 +1341,7 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **S4 Acceso desde el celular por Tailscale** (decidido por Leo: sin app ni web propia). Vía: Tailscale + SSH + `tmux` con la TUI, sin código nuevo; se documenta en la guía de SSH (P13.S6). Una vista móvil dentro de Symphony solo si Leo la pide después, con ADR de transporte y seguridad.
 - **S5 Cierre.**
 
-**Ideas futuras (sin fase):** soporte para cualquier CLI de agente y para API keys de cualquier proveedor.
+**Ideas futuras (sin fase):** soporte para cualquier CLI de agente y para API keys de cualquier proveedor; política configurable de Symphony/harness (análogo a los permisos de Claude Code: allow/deny/ask, modos default/acceptEdits/plan/dontAsk/bypassPermissions, archivos ignorados estilo `.claudeignore`, política por proyecto en `.symphony/policy.toml`). Requiere ADR nuevo y decisión de alcance (solo archivos vs. también shell/git). No confundir con CONSTRAINTS.md (barra de calidad del repo) ni con AGENTS.md (reglas del orquestador).
 
 ---
 
