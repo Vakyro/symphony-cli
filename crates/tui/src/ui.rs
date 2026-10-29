@@ -88,9 +88,10 @@ fn section(title: &str) -> Line<'static> {
 pub fn render(app: &App, f: &mut Frame) {
     THEME.with(|c| *c.borrow_mut() = Some(app.theme.clone()));
     let bottom = if app.command.is_some() { 2 } else { 1 };
-    let [header, body, footer] = Layout::vertical([
+    let [header, body, status_bar, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
+        Constraint::Length(1),
         Constraint::Length(bottom),
     ])
     .areas(f.area());
@@ -160,6 +161,7 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::ReviewResult => review_result(app, f, body),
     }
 
+    status_line(app, f, status_bar);
     footer_line(app, f, footer);
     THEME.with(|c| *c.borrow_mut() = None);
 }
@@ -236,6 +238,222 @@ fn footer_line(app: &App, f: &mut Frame, area: Rect) {
         None => Line::from(dim(format!(" {}", hints(app)))),
     });
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// Barra de estado de una línea, siempre visible.
+struct StatusField {
+    id: &'static str,
+    label: Option<&'static str>,
+    value: String,
+    color: Option<Color>,
+}
+
+impl StatusField {
+    fn width(&self) -> usize {
+        let label_w = self.label.map_or(0, |l| l.chars().count() + 1); // etiqueta + espacio
+        label_w + self.value.chars().count()
+    }
+}
+
+fn status_line(app: &App, f: &mut Frame, area: Rect) {
+    let theme = current_theme();
+
+    // modelo del momento
+    let model_value = app
+        .chat_model
+        .clone()
+        .or_else(|| {
+            app.agent
+                .as_ref()
+                .and_then(|a| a.model().map(str::to_string))
+        })
+        .unwrap_or_else(|| "—".to_string());
+
+    // Proveedor del modelo: manda el catálogo (`anthropic`), porque el prefijo del id no siempre
+    // coincide (`claude/sonnet`); si el modelo no está en el catálogo, el `provider_id` del run y,
+    // como último recurso, lo de antes de la primera barra.
+    let provider = if model_value == "—" {
+        String::new()
+    } else {
+        let from_catalog = app
+            .models
+            .iter()
+            .find(|m| m["id"].as_str() == Some(model_value.as_str()))
+            .and_then(|m| m["provider_id"].as_str());
+        let from_run = app
+            .agent
+            .as_ref()
+            .filter(|a| a.model() == Some(model_value.as_str()))
+            .and_then(|a| a.inspect["current_run"]["provider_id"].as_str());
+        from_catalog
+            .or(from_run)
+            .map(str::to_string)
+            .unwrap_or_else(|| model_value.split('/').next().unwrap_or("").to_string())
+    };
+
+    // cuota
+    let mut cuota_value = "—".to_string();
+    if !provider.is_empty()
+        && let Some(p) = app
+            .providers
+            .iter()
+            .find(|p| p["id"].as_str() == Some(&provider))
+    {
+        let h = &p["health"];
+        if let Some(rem) = h["remaining"].as_f64() {
+            let pct = (rem * 100.0).round() as i64;
+            let mut text = format!("{pct} %");
+            // «reinicia en …» solo cuando la barra va ancha: en 80 columnas se come el resto.
+            if area.width >= 100
+                && let Some(reset) = h["reset_at"].as_i64()
+                && reset > app.now_ms
+            {
+                text = format!("{text} (reinicia en {})", ago(reset, app.now_ms));
+            }
+            cuota_value = text;
+        }
+    }
+
+    // carpeta
+    let folder_path = app
+        .project
+        .get("root")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| app.cwd.clone());
+    let folder = std::path::Path::new(&folder_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or(folder_path);
+
+    // rama
+    let branch = app
+        .project
+        .get("branch")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("—")
+        .to_string();
+
+    let mut fields = vec![
+        StatusField {
+            id: "modelo",
+            label: Some("modelo"),
+            value: model_value.clone(),
+            color: theme.brand,
+        },
+        StatusField {
+            id: "cuota",
+            label: Some("cuota"),
+            value: cuota_value,
+            color: theme.muted,
+        },
+        StatusField {
+            id: "carpeta",
+            label: None,
+            value: folder,
+            color: theme.muted,
+        },
+        StatusField {
+            id: "rama",
+            label: Some("rama"),
+            value: branch,
+            color: theme.muted,
+        },
+        StatusField {
+            id: "tokens",
+            label: Some("tokens"),
+            value: "—".to_string(),
+            color: theme.muted,
+        },
+        StatusField {
+            id: "modo",
+            label: Some("modo"),
+            value: "—".to_string(),
+            color: theme.muted,
+        },
+    ];
+
+    // Responsivo por ancho: umbrales fijos.
+    if area.width < 110 {
+        fields.retain(|f| f.id != "modo" && f.id != "tokens" && f.id != "carpeta");
+    }
+    if area.width < 80 {
+        fields.retain(|f| f.id != "rama");
+    }
+
+    let sep = "  |  ";
+    let sep_w = sep.chars().count();
+
+    let total_width = |fs: &[StatusField]| -> usize {
+        fs.iter().map(StatusField::width).sum::<usize>() + fs.len().saturating_sub(1) * sep_w
+    };
+
+    // Caída de campos de derecha a izquierda por prioridad.
+    let drop_priority = ["modo", "tokens", "carpeta", "rama"];
+    while total_width(&fields) > usize::from(area.width) && fields.len() > 2 {
+        let mut idx = None;
+        for pid in &drop_priority {
+            if let Some(i) = fields.iter().position(|f| f.id == *pid) {
+                idx = Some(i);
+                break;
+            }
+        }
+        match idx {
+            Some(i) => {
+                fields.remove(i);
+            }
+            None => break,
+        }
+    }
+
+    // Recorte del modelo si aún no cabe.
+    let other_w: usize = fields
+        .iter()
+        .filter(|f| f.id != "modelo")
+        .map(StatusField::width)
+        .sum();
+    let sep_count = fields.len().saturating_sub(1);
+    let available = usize::from(area.width)
+        .saturating_sub(other_w)
+        .saturating_sub(sep_count * sep_w);
+    if let Some(mf) = fields.iter_mut().find(|f| f.id == "modelo")
+        && mf.width() > available
+    {
+        let prefix = "modelo ";
+        let prefix_w = prefix.chars().count();
+        if available <= prefix_w {
+            mf.value = "…".to_string();
+        } else {
+            let avail_value = available.saturating_sub(prefix_w);
+            let chars: Vec<char> = mf.value.chars().collect();
+            if chars.len() + prefix_w <= available {
+                // ya cabe, nada
+            } else if avail_value <= 1 {
+                mf.value = "…".to_string();
+            } else {
+                let take = avail_value.saturating_sub(1);
+                let trunc: String = chars.into_iter().take(take).collect();
+                mf.value = format!("{trunc}…");
+            }
+        }
+    }
+
+    // Construcción de la línea (sin wrap).
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, ffield) in fields.iter().enumerate() {
+        if i > 0 {
+            spans.push(colored(sep.to_string(), theme.muted));
+        }
+        if let Some(label) = ffield.label {
+            spans.push(colored(format!("{label} "), theme.muted));
+        }
+        spans.push(colored(ffield.value.clone(), ffield.color));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn boxed(title: &str) -> Block<'static> {

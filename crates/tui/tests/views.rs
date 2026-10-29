@@ -1827,3 +1827,116 @@ fn view_01_home_80_columns() {
 fn view_01_home_160_columns() {
     insta::assert_snapshot!(terminal(&home_app(), 160, 28).backend().to_string());
 }
+
+// --- barra de estado (P17.S1) -------------------------------------------------
+
+/// La home con el catálogo cargado: modelo real y cuota tomada de `providers.list`.
+fn status_app() -> App {
+    let mut app = home_app();
+    ok(&mut app, Req::Models, models());
+    ok(&mut app, Req::Providers, providers());
+    app
+}
+
+/// La barra es la penúltima fila: debajo solo queda la línea de pistas.
+fn status_bar(app: &App, width: u16) -> String {
+    let screen = terminal(app, width, 28).backend().to_string();
+    let lines: Vec<&str> = screen.lines().collect();
+    // `TestBackend::to_string()` devuelve cada fila entre comillas y rellena a lo ancho.
+    lines[lines.len() - 2].trim_matches('"').trim().to_string()
+}
+
+#[test]
+fn the_status_bar_shows_the_six_fields_when_it_fits() {
+    let app = status_app();
+    let bar = status_bar(&app, 160);
+    assert!(bar.starts_with("modelo claude/opus"), "{bar:?}");
+    // 0.15 de cuota restante y reinicio dentro de 2 h, del proveedor real del modelo: el
+    // `provider_id` del catálogo (`anthropic`), no el prefijo del id (`claude`).
+    assert!(bar.contains("cuota 15 % (reinicia en 2 h)"), "{bar}");
+    assert!(bar.contains("arete-mobile"), "{bar}");
+    assert!(bar.contains("rama main"), "{bar}");
+    assert!(bar.contains("tokens —"), "{bar}");
+    assert!(bar.contains("modo —"), "{bar}");
+}
+
+#[test]
+fn the_status_bar_drops_the_last_fields_before_wrapping() {
+    let app = status_app();
+    let bar = status_bar(&app, 90);
+    assert!(bar.starts_with("modelo claude/opus"), "{bar}");
+    assert!(bar.contains("cuota 15 %"), "{bar}");
+    assert!(bar.contains("rama main"), "{bar}");
+    for gone in ["arete-mobile", "tokens", "modo"] {
+        assert!(!bar.contains(gone), "a 90 columnas no cabe {gone}: {bar}");
+    }
+}
+
+#[test]
+fn the_status_bar_keeps_model_and_quota_in_a_narrow_terminal() {
+    let app = status_app();
+    let bar = status_bar(&app, 60);
+    assert!(bar.starts_with("modelo claude/opus"), "{bar}");
+    assert!(bar.contains("cuota 15 %"), "{bar}");
+    assert!(!bar.contains("rama"), "{bar}");
+    assert!(bar.chars().count() <= 60, "se pasa de ancho: {bar}");
+}
+
+/// Si ni el modelo cabe, se recorta con «…»: la línea nunca se parte.
+#[test]
+fn the_status_bar_truncates_the_model_instead_of_wrapping() {
+    let app = status_app();
+    let bar = status_bar(&app, 30);
+    assert!(bar.starts_with("modelo "), "{bar}");
+    assert!(bar.contains('…'), "el modelo se recorta: {bar}");
+    assert!(!bar.contains("claude/opus"), "{bar}");
+    assert!(bar.contains("cuota 15 %"), "la cuota nunca se cae: {bar}");
+    assert!(bar.chars().count() <= 30, "se pasa de ancho: {bar}");
+}
+
+#[test]
+fn the_status_bar_is_on_every_screen() {
+    // Launch: la app recién creada, sin ninguna respuesta del daemon.
+    let launch = App::new("/work/arete-mobile");
+    assert_eq!(launch.screen, Screen::Launch);
+    assert!(status_bar(&launch, 96).starts_with("modelo "));
+
+    // Chat: el inicio de la app, cuando ya llegó el estado del proyecto.
+    let mut chat = App::new("/work/arete-mobile");
+    chat.start();
+    ok(&mut chat, Req::ProjectStatus, status(true, 0));
+    ok(&mut chat, Req::Providers, providers());
+    assert_eq!(chat.screen, Screen::Chat);
+    assert!(status_bar(&chat, 96).starts_with("modelo "));
+
+    // Home y Stats, con el catálogo cargado.
+    let home = status_app();
+    assert_eq!(home.screen, Screen::Home);
+    assert!(status_bar(&home, 96).starts_with("modelo claude/opus"));
+
+    let mut stats = status_app();
+    let calls = command(&mut stats, "stats");
+    assert_eq!(methods(&calls), ["context.stats", "usage.get"]);
+    assert_eq!(stats.screen, Screen::Stats);
+    assert!(status_bar(&stats, 96).starts_with("modelo "));
+}
+
+/// Sin datos, la barra no inventa: enseña «—» y no se rompe en una terminal estrecha.
+#[test]
+fn the_status_bar_shows_a_dash_when_it_has_no_data() {
+    let app = App::new("/work/arete-mobile");
+    let wide = status_bar(&app, 160);
+    assert!(wide.starts_with("modelo —"), "{wide}");
+    assert!(wide.contains("cuota —"), "{wide}");
+    // La carpeta sale del cwd, que existe aunque el proyecto no esté configurado.
+    assert!(wide.contains("arete-mobile"), "{wide}");
+    assert!(wide.contains("rama —"), "{wide}");
+    assert!(wide.contains("tokens —"), "{wide}");
+    assert!(wide.contains("modo —"), "{wide}");
+
+    // En 40 columnas la carpeta ya no cabe, pero la línea no se parte ni se pasa de ancho.
+    let narrow = status_bar(&app, 40);
+    assert!(narrow.starts_with("modelo —"), "{narrow}");
+    assert!(narrow.contains("cuota —"), "{narrow}");
+    assert!(narrow.chars().count() <= 40, "{narrow}");
+}

@@ -27,6 +27,6 @@ expression: draw(&app)
 "│                                                                                              │"
 "│                                                                                              │"
 "│                                                                                              │"
-"│                                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────┘"
+"modelo codex/gpt-5  |  cuota —  |  rama main                                                    "
 " m resuelto a mano · w pedir revisor · p volver a comprobar · x abandonar · Esc                 "
