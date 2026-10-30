@@ -125,7 +125,9 @@ fn absolute_in_word(word: &str) -> Option<&str> {
     if word.starts_with(['/', '\\']) {
         // Una expresión de `sed`/`grep`/`awk` (`/^fn/,/^}/p`, `/a+$/`) no es una ruta:
         // sin esto el guard bloqueaba a Codex en cada lectura con `sed -n '/…/p'`.
-        if word.starts_with('/') && word.contains(['^', '$', '+', '?', '{', '}', '[', ']']) {
+        if word.starts_with('/')
+            && word.contains(['^', '$', '+', '?', '{', '}', '[', ']', '\\', ',', '#'])
+        {
             return None;
         }
         return Some(word);
@@ -887,6 +889,7 @@ mod tests {
         // Expresiones de sed/grep no son rutas; `/etc/passwd` sí lo sigue siendo.
         assert!(guard_shell(&root, &root, "sed -n '/^fn main/,/^}/p' src/main.rs").is_ok());
         assert!(guard_shell(&root, &root, "grep -E '/api/v[0-9]+$' a.txt").is_ok());
+        assert!(guard_shell(&root, &root, r"sed -n '/### 4\.6/,/### 4\.7/p' PLAN.md").is_ok());
         assert!(guard_shell(&root, &root, "cat /etc/passwd").is_err());
         let inside = root.join("src");
         assert!(guard_shell(&root, &root, &format!("git -C {} status", inside.display())).is_ok());
