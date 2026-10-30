@@ -22,6 +22,41 @@ pub fn pinned_bin(bin: &Path) -> PathBuf {
     pin(bin).unwrap_or_else(|_| bin.to_path_buf())
 }
 
+/// Construye el binario `name` del workspace (`cargo build <args…>`) y devuelve una
+/// copia fijada con [`pinned_bin`].
+///
+/// Con `build.build-dir` (el caché compartido que inyecta el harness) los `deps/` no
+/// cuelgan del directorio del ejecutable del test: la ruta real del binario se toma
+/// del artefacto que emite cargo, no de `current_exe/../../`.
+pub fn build_and_pin(name: &str, args: &[&str]) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    use std::process::Command;
+
+    let output = Command::new(env!("CARGO"))
+        .arg("build")
+        .arg("--message-format=json-render-diagnostics")
+        .args(args)
+        .output()?;
+    if !output.status.success() {
+        return Err(Error::other(format!(
+            "cargo build de `{name}` falló:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let not_found = || Error::from(ErrorKind::NotFound);
+    let exe = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| {
+            v["reason"] == serde_json::json!("compiler-artifact")
+                && v["target"]["name"] == serde_json::json!(name)
+                && v["executable"].is_string()
+        })
+        .and_then(|v| v["executable"].as_str().map(str::to_string))
+        .ok_or_else(not_found)?;
+    pin(&PathBuf::from(exe))
+}
+
 fn pin(bin: &Path) -> std::io::Result<PathBuf> {
     let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
     let meta = std::fs::metadata(bin)?;

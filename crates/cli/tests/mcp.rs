@@ -52,6 +52,10 @@ impl Mcp {
         cmd.current_dir(cwd)
             .args(["mcp", "serve"])
             .env("SYMPHONY_HOME", home)
+            // Hermético: el broker prefiere SYMPHONY_WORKTREE sobre el cwd, y un
+            // entorno de harness heredado (p. ej. agentes de Symphony corriendo tests)
+            // lo define apuntando a otro directorio.
+            .env("SYMPHONY_WORKTREE", cwd)
             .env("SYMPHONYD", symphonyd())
             .env("PATH", path_with_fake_claude(home))
             .stdin(Stdio::piped())

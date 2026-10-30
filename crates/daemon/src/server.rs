@@ -2093,47 +2093,6 @@ fn providers_list(req: Request, state: &State) -> Response {
     }
 }
 
-#[cfg(test)]
-mod global_usage_tests {
-    use super::global_usage;
-    use rusqlite::Connection;
-
-    #[test]
-    fn usage_global_reads_and_aggregates_registered_project_databases() {
-        let home = tempfile::tempdir().unwrap();
-        let registry = Connection::open(home.path().join("symphony.db")).unwrap();
-        registry
-            .execute_batch("CREATE TABLE projects(id TEXT, root_path TEXT, created_at INTEGER);")
-            .unwrap();
-        for (id, name, tokens) in [("p1", "one", 30), ("p2", "two", 12)] {
-            let root = home.path().join(name);
-            std::fs::create_dir_all(root.join(".symphony")).unwrap();
-            registry
-                .execute(
-                    "INSERT INTO projects VALUES (?1, ?2, 0)",
-                    rusqlite::params![id, root.to_string_lossy()],
-                )
-                .unwrap();
-            let db = Connection::open(root.join(".symphony/symphony.db")).unwrap();
-            db.execute_batch("CREATE TABLE usage_records(provider_id TEXT, model_id TEXT, tokens_in INTEGER, tokens_out INTEGER, recorded_at INTEGER);").unwrap();
-            db.execute("INSERT INTO usage_records VALUES ('anthropic', 'opus', ?1, 0, CAST(strftime('%s','now') AS INTEGER) * 1000)", [tokens]).unwrap();
-        }
-        drop(registry);
-
-        let data = global_usage(home.path()).unwrap();
-        assert_eq!(data.providers[0].tokens, 42);
-        assert_eq!(data.daily.len(), 1);
-        assert_eq!(data.daily[0].tokens, 42);
-        assert!(data.incomplete_projects.is_empty());
-        assert!(
-            !home
-                .path()
-                .join("one/.symphony/symphony.db-journal")
-                .exists()
-        );
-    }
-}
-
 /// Un hook de un CLI (vía `symphony hook emit`) → eventos canónicos → bus.
 /// En P05 la decisión es siempre `allow`; el scheduler (P08) podrá retener o denegar.
 async fn hook_emit(req: Request, state: &State) -> Response {
@@ -3168,5 +3127,46 @@ async fn performance_set(req: Request, state: &State) -> Response {
             )
         }
         Err(e) => Response::error(req.id, "config_error", e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod global_usage_tests {
+    use super::global_usage;
+    use rusqlite::Connection;
+
+    #[test]
+    fn usage_global_reads_and_aggregates_registered_project_databases() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = Connection::open(home.path().join("symphony.db")).unwrap();
+        registry
+            .execute_batch("CREATE TABLE projects(id TEXT, root_path TEXT, created_at INTEGER);")
+            .unwrap();
+        for (id, name, tokens) in [("p1", "one", 30), ("p2", "two", 12)] {
+            let root = home.path().join(name);
+            std::fs::create_dir_all(root.join(".symphony")).unwrap();
+            registry
+                .execute(
+                    "INSERT INTO projects VALUES (?1, ?2, 0)",
+                    rusqlite::params![id, root.to_string_lossy()],
+                )
+                .unwrap();
+            let db = Connection::open(root.join(".symphony/symphony.db")).unwrap();
+            db.execute_batch("CREATE TABLE usage_records(provider_id TEXT, model_id TEXT, tokens_in INTEGER, tokens_out INTEGER, recorded_at INTEGER);").unwrap();
+            db.execute("INSERT INTO usage_records VALUES ('anthropic', 'opus', ?1, 0, CAST(strftime('%s','now') AS INTEGER) * 1000)", [tokens]).unwrap();
+        }
+        drop(registry);
+
+        let data = global_usage(home.path()).unwrap();
+        assert_eq!(data.providers[0].tokens, 42);
+        assert_eq!(data.daily.len(), 1);
+        assert_eq!(data.daily[0].tokens, 42);
+        assert!(data.incomplete_projects.is_empty());
+        assert!(
+            !home
+                .path()
+                .join("one/.symphony/symphony.db-journal")
+                .exists()
+        );
     }
 }

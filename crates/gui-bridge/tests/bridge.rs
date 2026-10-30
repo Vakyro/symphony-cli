@@ -17,14 +17,13 @@ impl Drop for Daemon {
 }
 
 fn build_daemon() -> PathBuf {
-    let status = Command::new(env!("CARGO"))
-        .args(["build", "-q", "-p", "symphony-daemon", "--bin", "symphonyd"])
-        .status()
-        .unwrap();
-    assert!(status.success(), "no se pudo construir symphonyd");
-    let exe = std::env::current_exe().unwrap();
-    let target = exe.parent().unwrap().parent().unwrap();
-    symphony_testkit::pinned_bin(&target.join(format!("symphonyd{}", std::env::consts::EXE_SUFFIX)))
+    // La ruta la emite cargo: con `build.build-dir` (caché compartido del harness)
+    // los `deps/` no cuelgan del ejecutable de este test.
+    symphony_testkit::build_and_pin(
+        "symphonyd",
+        &["-p", "symphony-daemon", "--bin", "symphonyd"],
+    )
+    .expect("cargo build symphonyd")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
