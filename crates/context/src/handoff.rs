@@ -672,6 +672,31 @@ mod tests {
         }
     }
 
+    /// Baseline fijo P18.S1 para las rutas que pasan el tamaño del handoff al router.
+    #[test]
+    #[ignore = "imprime el baseline reproducible P18.S1; no verifica comportamiento"]
+    fn p18_routing_handoff_token_baseline() {
+        let scenarios = [
+            ("rotation_context", 1usize, 70_000usize),
+            ("fallback_quota", 8, 30_000),
+            ("manual_switch", 3, 8_000),
+            ("same_provider", 12, 1_000),
+        ];
+        println!("ruta | escenario fijo | RAW | SAFE | BALANCED | AGGRESSIVE");
+        for (route, messages, chars) in scenarios {
+            let mut input = fixed();
+            input.diff = "x".repeat(chars);
+            input.conversation = chat(messages, 800);
+            println!(
+                "{route} | {messages} mensajes, diff={chars} chars | {} | {} | {} | {}",
+                assemble(&input, ContextMode::Raw).tokens_sent,
+                assemble(&input, ContextMode::Safe).tokens_sent,
+                assemble(&input, ContextMode::Balanced).tokens_sent,
+                assemble(&input, ContextMode::Aggressive).tokens_sent,
+            );
+        }
+    }
+
     /// Un diff realista: un cambio de verdad, un lockfile enorme y un archivo generado largo.
     fn big_diff() -> String {
         let mut d = String::from(
