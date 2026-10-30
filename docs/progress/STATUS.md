@@ -1,9 +1,9 @@
 # STATUS — Symphony CLI
 
-**Handoff P17.S8 (2026-10-29):** marcadores del ADR-0023 implementados en TUI, con parser puro, snapshots y prueba de reapertura por IPC. Sin cambios en persistencia ni dependencias. Pendiente integración y gate de fase; detalle y desviación de verificación en `docs/phases/P17-tui.md`.
+**Handoff P17.S8 (2026-10-30):** marcadores del ADR-0023 implementados en TUI; el prompt de `symphony-adapter-common` ahora los recomienda en respuestas del chat y el mdBook documenta sintaxis y uso. Nextest y clippy del crate en verde. Pendiente integración y gate de fase; detalle en `docs/phases/P17-tui.md`.
 
 
-**Actualizado:** 2026-10-29 · por codex/gpt-6.1
+**Actualizado:** 2026-10-30 · por codex/gpt-6.1
 **Fase actual:** P17 · TUI al día (rama `phase/p17-tui`). P13 **cerrada y mergeada** (`p13-done`); P16 en `phase/p16-validacion`, rebasada sobre `main` y a la espera de Leo (veredicto de uso) y de P17–P20 para los docs as-built.
 **Paso actual:** P17.S5 · pestaña TUI de procesos terminada. Queda integrar P17.S6 con sus vistas y cerrar S7. Plan completo de lo pendiente con las decisiones de Leo del 2026-10-29 en **`docs/progress/ROADMAP-2026-10-29.md`**. P16: S0–S1 ✅, S2/S3 medidos, S3 con guard de disco ✅, S4 esperando estar en `main`.
 **Estado del paso:** terminado y verificado en este worktree; pendiente de integración por el orquestador.

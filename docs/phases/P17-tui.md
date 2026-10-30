@@ -15,8 +15,10 @@
 - **Agente:** codex/gpt-6.
 - **Implementación:** parser puro en `crates/tui/src/markers.rs` para los seis tipos del ADR-0023. Aperturas desconocidas, cierres incorrectos y anidamientos permanecen literales. Render compartido por chat, conversación del agente y streaming; colores del tema (brand/ok/accent/warn/error/muted), sin dependencias nuevas y respetando NO_COLOR. Texto no marcado conserva el estilo normal de la terminal, igual que antes.
 - **Persistencia:** revisión de `recorder::message` y `repo::insert_message`: guardan el original inline o como blob, sin eliminar delimitadores. Prueba de reapertura con dos App nuevas y la misma respuesta IPC: transcript intacto y colores reconstruidos. No se modifica store ni recorder.
+- **Prompt y documentación:** `HARNESS_PROMPT` de `symphony-adapter-common` instruye a usar los seis tipos del ADR-0023 solo cuando ayuden a distinguir contenido; la sección del chat en la introducción del mdBook documenta sintaxis y comportamiento. Prueba unitaria para los seis marcadores.
 - **Pruebas:** casos puros de Unicode, vacíos, multilineales, tipos desconocidos, cierres incompletos/incorrectos y anidamientos; buffer con los seis colores y NO_COLOR; snapshots a 80 y 160 columnas revisados.
 - **Verificación:** nextest de TUI y clippy `-D warnings` en verde. La primera ejecución excedió el límite de 120 s de la herramienta; el reintento esperó el candado y terminó. Por error se ejecutó también el binario de integración `symphony-tui::daemon` (pasó), contrario a la instrucción; la comprobación final lo excluye explícitamente: 146 tests pasaron. SYMPHONY_LIVE eliminado antes de Cargo; sin xtask ni suscripciones reales.
+- **Verificación adicional del harness:** `env -u SYMPHONY_LIVE cargo nextest run -p symphony-adapter-common` (12 tests) y `env -u SYMPHONY_LIVE cargo clippy -p symphony-adapter-common -- -D warnings`, ambos en verde.
 - **Pendiente:** integración y gate de fase a cargo del integrador.
 
 

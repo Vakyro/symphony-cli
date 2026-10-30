@@ -1314,7 +1314,7 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **S5 Shell en curso:** lista de procesos del agente, abrir uno y ver su salida en vivo.
 - **S6 Vistas:** avance de agentes en un plan (rama, tarea/fase, %), ramas de git, pantalla `status` global (uso por modelo/sesión, proveedores, tips, heatmap mensual de uso; requiere ADR por ser datos entre proyectos, ver ADR-0018).
 - **S7 Cierre.**
-- **S8 Renderizado rico del chat (pendiente):** opción B, marcadores explícitos del agente para títulos, bullets, destacados, advertencias, errores y tablas; la TUI solo colorea lo marcado y conserva los marcadores en el transcript. Protocolo y alternativas: [`docs/adr/0023-marcadores-de-color-del-chat.md`](docs/adr/0023-marcadores-de-color-del-chat.md). No confundir con el tema de la TUI (S1), que ya está.
+- **S8 Renderizado rico del chat:** opción B, marcadores explícitos del agente para títulos, bullets, destacados, advertencias, errores y tablas; el prompt del harness los enseña, la TUI solo colorea lo marcado y conserva los marcadores en el transcript. Documentación del chat en el mdBook. Protocolo y alternativas: [`docs/adr/0023-marcadores-de-color-del-chat.md`](docs/adr/0023-marcadores-de-color-del-chat.md). No confundir con el tema de la TUI (S1), que ya está.
 
 ### P18 · Contexto y ahorro de tokens (`phase/p18-contexto`)
 - **S1 Auditoría del router y del handoff:** medir tokens de contexto por ruta y recortar lo que sobra. **Verifica:** benchmark antes/después.
