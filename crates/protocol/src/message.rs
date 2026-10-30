@@ -75,7 +75,7 @@ pub struct GitDeleteBranchResult {
 
 use crate::ProtocolError;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -267,7 +267,7 @@ mod tests {
         let v: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             v,
-            json!({"type": "request", "protocol": 2, "id": "01J", "method": "agent.pause", "params": {"agent_id": "01A"}})
+            json!({"type": "request", "protocol": 1, "id": "01J", "method": "agent.pause", "params": {"agent_id": "01A"}})
         );
     }
 
@@ -283,7 +283,7 @@ mod tests {
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             value,
-            json!({"type":"subscribe","protocol":2,"id":"s1","topics":["agent.processes"],"agent_id":"a1"})
+            json!({"type":"subscribe","protocol":1,"id":"s1","topics":["agent.processes"],"agent_id":"a1"})
         );
         assert_eq!(
             Message::from_bytes(&bytes).unwrap(),
@@ -297,10 +297,10 @@ mod tests {
 
     #[test]
     fn unknown_version_is_explicit_error() {
-        let bytes = br#"{"type":"request","protocol":1,"id":"x","method":"ping","params":{}}"#;
+        let bytes = br#"{"type":"request","protocol":2,"id":"x","method":"ping","params":{}}"#;
         assert!(matches!(
             Message::from_bytes(bytes),
-            Err(ProtocolError::UnsupportedVersion { got: 1 })
+            Err(ProtocolError::UnsupportedVersion { got: 2 })
         ));
     }
 
@@ -316,12 +316,12 @@ mod tests {
     #[test]
     fn unknown_fields_and_types_are_rejected() {
         let extra =
-            br#"{"type":"request","protocol":2,"id":"x","method":"ping","params":{},"sudo":true}"#;
+            br#"{"type":"request","protocol":1,"id":"x","method":"ping","params":{},"sudo":true}"#;
         assert!(matches!(
             Message::from_bytes(extra),
             Err(ProtocolError::Json(_))
         ));
-        let kind = br#"{"type":"broadcast","protocol":2}"#;
+        let kind = br#"{"type":"broadcast","protocol":1}"#;
         assert!(matches!(
             Message::from_bytes(kind),
             Err(ProtocolError::Json(_))

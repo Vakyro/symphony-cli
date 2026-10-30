@@ -176,7 +176,7 @@
 ### Revisión de cierre (P17.S7)
 
 - **Medio corregido:** `usage.global` sumaba uso por modelo y fecha entre proyectos, mezclando contadores que ADR-0022 exige mantener separados. La respuesta IPC ahora agrupa proveedor, modelo y días dentro de cada proyecto; el test del daemon comprueba que los totales de dos proyectos sigan siendo 30/12 y el test de vista que no aparezca un total conjunto.
-- **Medio corregido:** el nuevo contrato anidado de `usage.global` rompe la forma anterior de la respuesta; se subió `PROTOCOL_VERSION` a 2 para que un daemon y un cliente incompatibles fallen explícitamente. La prueba del protocolo confirma que v1 se rechaza.
+- **Medio corregido:** el nuevo contrato anidado de `usage.global` cambia la forma de la respuesta. La subida de `PROTOCOL_VERSION` a 2 que propuso la revisión se revirtió (integrador): `usage.global` es nuevo en P17 y nunca se publicó con la forma anterior, cliente y daemon se instalan juntos y el protocolo sigue en v1 (CLAUDE.md).
 - **Bajo pendiente:** `git.branches` consulta divergencia con un `rev-list` por rama que tenga upstream. Es una llamada local por rama y no afecta la corrección; si repositorios grandes vuelven lenta la vista, se puede cambiar a una consulta por lote.
 - **Bajo pendiente:** la vista global pinta el bloque y el heatmap de cada proyecto en una lista vertical; con muchos proyectos parte del contenido queda fuera del alto visible. No afecta el aislamiento de datos; considerar navegación/scroll si el uso real lo requiere.
 - **Revisado:** sin `unwrap`/`expect`/`panic` en las rutas de runtime añadidas; sin borrado forzado implícito; marcador inválido/anidado conservado literalmente; los mensajes IPC llevan versión y la versión incompatible se rechaza.
