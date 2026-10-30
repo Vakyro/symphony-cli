@@ -302,6 +302,11 @@ impl ProviderAdapter for ClaudeAdapter {
         Some(user_message(text))
     }
 
+    /// Claude Code es el único CLI con `/compact` real (ADR-0013 D2, enmienda 2026-10-30).
+    fn slash_compact(&self) -> Option<&'static str> {
+        Some("/compact")
+    }
+
     fn parse_stream_line(&self, line: &str) -> Vec<AgentEvent> {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             return Vec::new();

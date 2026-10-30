@@ -485,6 +485,13 @@ pub trait ProviderAdapter: Send + Sync {
     /// acepta entre turnos (Codex, ADR-0005).
     fn encode_user_message(&self, text: &str) -> Option<Vec<u8>>;
 
+    /// Comando de compactación de contexto que el CLI acepta como mensaje sobre su sesión
+    /// viva (ADR-0013 D2, enmienda 2026-10-30). Solo Claude Code tiene `/compact` real; el
+    /// resto de proveedores compacta con un handoff a sesión nueva (assembler de contexto).
+    fn slash_compact(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Una línea de stdout del CLI → eventos. Nunca falla: lo que no entiende lo ignora.
     fn parse_stream_line(&self, line: &str) -> Vec<AgentEvent>;
     /// Una línea de stderr del CLI → eventos (ADR-0009). Por defecto, ninguno: solo la

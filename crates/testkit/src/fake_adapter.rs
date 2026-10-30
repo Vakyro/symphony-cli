@@ -13,6 +13,9 @@ use symphony_core::FailureType;
 
 /// Proveedor fake cuyo id de sesión sale por stderr y no por el stream.
 pub const STDERR_SESSION_PROVIDER: &str = "fake-stderr";
+/// Proveedor fake que sí tiene compactación por comando (como Claude Code): los tests L2
+/// de la enmienda ADR-0013 D2 usan su `/compact` para cubrir esa rama sin CLIs reales.
+pub const COMPACT_PROVIDER: &str = "fake-compact";
 
 #[derive(Debug, Clone)]
 pub struct FakeAdapter {
@@ -154,6 +157,10 @@ impl ProviderAdapter for FakeAdapter {
 
     fn encode_user_message(&self, text: &str) -> Option<Vec<u8>> {
         Some(format!("{text}\n").into_bytes())
+    }
+
+    fn slash_compact(&self) -> Option<&'static str> {
+        (self.provider == COMPACT_PROVIDER).then_some("/compact")
     }
 
     fn parse_stream_line(&self, line: &str) -> Vec<AgentEvent> {

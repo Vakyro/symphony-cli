@@ -184,11 +184,75 @@ pub fn asks_before_phase(cfg: &PlanConfig) -> bool {
 
 // --- el driver: el daemon avanza el plan --------------------------------------------
 
-use symphony_core::{AgentId, AgentState, MessageId, RunEndReason, RunStatus, TaskStatus};
+use symphony_core::{AgentId, AgentState, MessageId, RunEndReason, RunId, RunStatus, TaskStatus};
 use symphony_store::repo;
 
 use crate::executor::Launch;
 use crate::runtime::{Runtime, now_ms};
+
+impl Runtime {
+    /// Anota cuántas tareas del plan estaban hechas al abrir `run` (P18.S3). Es la base del
+    /// contador de «tareas por sesión»: sin base, la cuenta cae a 0 (la sesión arranca de
+    /// cero). Solo anota cuando el plan existe: los runs sin plan (chat) no ensucian el mapa.
+    pub(crate) fn note_plan_done(&self, run: RunId, task: TaskId, worktree: &Path) {
+        let cfg = self.plan_config();
+        let Some(plan) = read_plan(worktree, task, cfg.min_tasks_per_phase as usize) else {
+            return;
+        };
+        let done = plan.counts().0;
+        if let Ok(mut m) = self.plan_done.lock() {
+            m.insert(run, done);
+        }
+    }
+
+    /// Anota una base conocida (la sesión nueva continúa un plan ya leído).
+    fn note_plan_done_value(&self, run: RunId, done: usize) {
+        if let Ok(mut m) = self.plan_done.lock() {
+            m.insert(run, done);
+        }
+    }
+
+    /// Tareas hechas desde que arrancó `run`; sin base anotada, todas las del plan (0 si no hay).
+    fn done_since(&self, run: RunId, plan: &Plan) -> usize {
+        let base = self
+            .plan_done
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&run).copied())
+            .unwrap_or(0);
+        plan.counts().0.saturating_sub(base)
+    }
+
+    fn clear_plan_done(&self, run: RunId) {
+        if let Ok(mut m) = self.plan_done.lock() {
+            m.remove(&run);
+        }
+    }
+
+    /// ¿Esta sesión ya llegó al tope de tareas que pide la config? (enmienda ADR-0013 D2)
+    fn compact_due(&self, run: RunId, plan: &Plan, cfg: &PlanConfig) -> bool {
+        cfg.compact_every_tasks > 0
+            && self.done_since(run, plan) >= cfg.compact_every_tasks as usize
+    }
+
+    pub(crate) fn set_awaiting_compact(&self, agent: AgentId, on: bool) {
+        if let Ok(mut s) = self.awaiting_compact.lock() {
+            if on {
+                s.insert(agent);
+            } else {
+                s.remove(&agent);
+            }
+        }
+    }
+
+    /// `true` si el agente cerró su sesión en el tope de tareas y espera la decisión de la
+    /// TUI (compactar o sesión larga). Lo expone `agent.inspect` (P18.S3).
+    pub fn awaits_compact(&self, agent: AgentId) -> bool {
+        self.awaiting_compact
+            .lock()
+            .is_ok_and(|s| s.contains(&agent))
+    }
+}
 
 /// Por qué un agente no pudo pasar a la fase siguiente.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +322,7 @@ impl Runtime {
     async fn archive_plan(&self, l: &Launch, plan: &Plan) {
         self.record_plan_summary(l.agent_id, Some(l.run_id), plan)
             .await;
+        self.clear_plan_done(l.run_id);
         let file = plan_file(&l.worktree, l.task_id);
         let _ = std::fs::remove_file(&file);
         if let Some(dir) = file.parent() {
@@ -301,6 +366,7 @@ impl Runtime {
         let reason = failure_reason(plan, index);
         self.record_plan_summary(l.agent_id, Some(l.run_id), plan)
             .await;
+        self.clear_plan_done(l.run_id);
         let (project, agent, run) = (l.project_id, l.agent_id, l.run_id);
         let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
         let health_cfg = self.bus.health_config();
@@ -341,6 +407,8 @@ impl Runtime {
 
     /// Cierra el run de la fase terminada (`PHASE_DONE`, `HANDED_OFF`) y abre el siguiente
     /// con el mismo proveedor y modelo, o deja al agente listo si se pidió confirmación.
+    /// Si la sesión llegó al tope de tareas (`compact_every_tasks`), el agente queda listo
+    /// esperando la decisión de la TUI: compactar o permitir una sesión larga (P18.S3).
     async fn close_phase_and_continue(
         &self,
         l: &Launch,
@@ -353,8 +421,16 @@ impl Runtime {
         let (agent, task, run) = (l.agent_id, l.task_id, l.run_id);
         let (provider, model) = (l.provider_id.clone(), l.model_id.clone());
         let health_cfg = self.bus.health_config();
-        let asks = asks_before_phase(cfg);
+        // Se lee la base antes de borrarla: es la cuenta de tareas de ESTA sesión. Borrarla
+        // antes haría que toda sesión cerrara en el tope (y el run de compactación volvería
+        // a pedir compactación sin fin).
+        let done_session = self.done_since(run, plan);
+        let due = self.compact_due(run, plan, cfg);
+        self.clear_plan_done(l.run_id);
+        let asks = due || asks_before_phase(cfg);
         let phase_title = plan.phases[index].title.clone();
+        let compact_every = cfg.compact_every_tasks;
+        self.set_awaiting_compact(agent, due);
         self.writer
             .write(Box::new(move |t| {
                 let now = now_ms();
@@ -370,10 +446,17 @@ impl Runtime {
                 crate::health::on_success(t, &provider, Some(&model), now)?;
                 crate::health::on_run_finished(t, run, &health_cfg, now)?;
                 if asks {
-                    let why = format!(
-                        "fase {} «{phase_title}» lista para arrancar: confirma",
-                        index + 1
-                    );
+                    let why = if due {
+                        format!(
+                            "la sesión hizo {done_session} tareas (tope {compact_every}): \
+                             compacta para continuar o confirma una sesión larga en la TUI"
+                        )
+                    } else {
+                        format!(
+                            "fase {} «{phase_title}» lista para arrancar: confirma",
+                            index + 1
+                        )
+                    };
                     repo::set_agent_state(t, agent, AgentState::Ready, Some(&why), now)?;
                     repo::set_task_status(t, task, TaskStatus::Ready, None, now)?;
                 }
@@ -384,11 +467,13 @@ impl Runtime {
         if asks {
             return Ok(());
         }
-        self.start_phase_run(l.agent_id, Some(l.run_id), index, plan, &l.model_id)
+        self.start_phase_run(l.agent_id, Some(l.run_id), index, plan, &l.model_id, false)
             .await
     }
 
-    /// Abre el run de la fase `index` con `model_id` y el prompt acotado a la fase.
+    /// Abre el run de la fase `index` con `model_id`. Con `compact`, el prompt no es el de
+    /// la fase sino el handoff completo del assembler (decisiones, constraints, archivos
+    /// tocados y plan): la compactación de los proveedores sin `/compact` (enmienda D2).
     async fn start_phase_run(
         &self,
         agent_id: AgentId,
@@ -396,6 +481,7 @@ impl Runtime {
         index: usize,
         plan: &Plan,
         model_id: &str,
+        compact: bool,
     ) -> Result<(), PhaseError> {
         let (agent, objective, model) = {
             let c = self
@@ -414,32 +500,140 @@ impl Runtime {
                 })?;
             (agent, objective, model)
         };
-        let prompt = phase_prompt(&objective, plan, index, agent.task_id);
-        let reason = format!(
-            "Fase {} de {} terminada; sesión nueva con el mismo modelo.",
-            index,
-            plan.phases.len()
-        );
+        // `start_successor` usa el prompt del assembler (handoff completo) cuando no hay
+        // override: compactar = None; la fase normal = el prompt acotado a la fase.
+        let prompt = (!compact).then(|| phase_prompt(&objective, plan, index, agent.task_id));
+        let reason = if compact {
+            format!(
+                "La sesión llegó a sus {} tareas: sesión nueva con el contexto preservado.",
+                self.plan_config().compact_every_tasks
+            )
+        } else {
+            format!(
+                "Fase {} de {} terminada; sesión nueva con el mismo modelo.",
+                index,
+                plan.phases.len()
+            )
+        };
+        self.set_awaiting_compact(agent_id, false);
         self.start_successor(
-            &agent,
-            from_run,
-            model,
-            &reason,
-            "RESTART",
-            None,
-            None,
-            None,
-            Some(prompt),
+            &agent, from_run, model, &reason, "RESTART", None, None, None, prompt,
         )
         .await
         .map(|_| ())
         .map_err(|e| PhaseError(e.0))
     }
 
-    /// El usuario confirma la fase siguiente (`phase_start = "ask"`).
+    /// Run de compactación (P18.S3): retoma la sesión viva del CLI y le manda su comando
+    /// de compactación (`/compact` en Claude Code). Al salir bien, `advance_plan` ve el
+    /// plan sin cambios y arranca la fase normal: la base anotada evita recompactar.
+    async fn start_compact_run(
+        &self,
+        agent_id: AgentId,
+        plan: &Plan,
+        model_id: &str,
+    ) -> Result<(), PhaseError> {
+        let (agent, model, session, worktree) = {
+            let c = self
+                .reader
+                .lock()
+                .map_err(|_| PhaseError("lector de la base no disponible".into()))?;
+            let agent = repo::get_agent(&c, agent_id).map_err(|e| PhaseError(e.to_string()))?;
+            let model = repo::eligible_model(&c, model_id)
+                .map_err(|e| PhaseError(e.to_string()))?
+                .map_err(|reason| {
+                    PhaseError(format!("`{model_id}` ya no es elegible: {reason}"))
+                })?;
+            let last = repo::runs_of(&c, agent_id)
+                .map_err(|e| PhaseError(e.to_string()))?
+                .into_iter()
+                .rev()
+                .find(|r| r.cli_session_id.is_some())
+                .ok_or_else(|| PhaseError("el run anterior no dejó sesión del CLI".into()))?;
+            let wt = agent
+                .worktree_id
+                .ok_or_else(|| PhaseError("el agente no tiene worktree".into()))?;
+            let worktree = repo::get_worktree(&c, wt)
+                .map_err(|e| PhaseError(e.to_string()))?
+                .path;
+            (
+                agent,
+                model,
+                last.cli_session_id.unwrap_or_default(),
+                worktree,
+            )
+        };
+        let adapter = self
+            .adapter(&model.provider_id)
+            .ok_or_else(|| PhaseError(format!("no hay adapter para `{}`", model.provider_id)))?;
+        let Some(command) = adapter.slash_compact() else {
+            return Err(PhaseError(
+                "el proveedor no tiene compactación por comando".into(),
+            ));
+        };
+        let run = RunId::new();
+        let (task_id, provider, model_id) = (
+            agent.task_id,
+            model.provider_id.clone(),
+            model.model_id.clone(),
+        );
+        self.writer
+            .write(Box::new(move |t| {
+                let now = now_ms();
+                repo::set_agent_state(t, agent_id, AgentState::Running, None, now)?;
+                if repo::get_task(t, task_id)?.status != TaskStatus::Running {
+                    repo::set_task_status(t, task_id, TaskStatus::Running, None, now)?;
+                }
+                repo::open_run(t, run, agent_id, &provider, &model_id, now)?;
+                Ok(())
+            }))
+            .await
+            .map_err(|e| PhaseError(e.to_string()))?;
+        self.note_plan_done_value(run, plan.counts().0);
+        self.set_awaiting_compact(agent_id, false);
+        let launch = Launch {
+            adapter,
+            project_id: agent.project_id,
+            agent_id,
+            task_id,
+            run_id: run,
+            provider_id: model.provider_id,
+            model_id: model.model_id,
+            worktree: PathBuf::from(worktree),
+            cli_model: model.cli_model_id,
+            prompt: command.to_string(),
+            resume_session: Some(session),
+        };
+        self.launch(launch)
+            .await
+            .map_err(|e| PhaseError(format!("no arrancó el run de compactación: {e}")))?;
+        Ok(())
+    }
+
+    /// El usuario confirma la fase siguiente (`phase_start = "ask"`) o resuelve la
+    /// compactación pendiente. Con `long`, la sesión siguiente sigue acumulando contexto
+    /// sin compactar (solo tras la confirmación explícita, enmienda ADR-0013 D2); sin él,
+    /// una sesión que llegó al tope compacta: `/compact` al mismo CLI si el proveedor lo
+    /// tiene y, si no, handoff del assembler con todo el contexto preservado.
     pub async fn start_next_phase(
         &self,
         agent_id: AgentId,
+    ) -> Result<symphony_core::RunId, PhaseError> {
+        self.confirm_next(agent_id, false).await
+    }
+
+    /// El usuario confirmó una sesión larga: la fase siguiente arranca sin compactar.
+    pub async fn allow_long_session(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<symphony_core::RunId, PhaseError> {
+        self.confirm_next(agent_id, true).await
+    }
+
+    async fn confirm_next(
+        &self,
+        agent_id: AgentId,
+        long: bool,
     ) -> Result<symphony_core::RunId, PhaseError> {
         let (agent, last) = {
             let c = self
@@ -478,8 +672,35 @@ impl Runtime {
             return Err(PhaseError("el plan no tiene una fase pendiente".into()));
         };
         let last = last.ok_or_else(|| PhaseError("el agente no tiene runs".into()))?;
-        self.start_phase_run(agent_id, Some(last.id), index, &plan, &last.model_id)
-            .await?;
+        // La base ya se consumió (y borró) al cerrar el run; la decisión exacta de ese
+        // cierre la guarda `awaits_compact`, no una recomputación contra la base perdida.
+        let due = self.awaits_compact(agent_id);
+        let compact_cmd = self
+            .adapter(&last.provider_id)
+            .and_then(|a| a.slash_compact().map(str::to_string));
+        if due && !long {
+            match compact_cmd {
+                Some(_) if last.cli_session_id.is_some() => {
+                    self.start_compact_run(agent_id, &plan, &last.model_id)
+                        .await?;
+                }
+                // Sin compactación del proveedor: sesión nueva con el handoff completo.
+                _ => {
+                    self.start_phase_run(
+                        agent_id,
+                        Some(last.id),
+                        index,
+                        &plan,
+                        &last.model_id,
+                        true,
+                    )
+                    .await?;
+                }
+            }
+        } else {
+            self.start_phase_run(agent_id, Some(last.id), index, &plan, &last.model_id, false)
+                .await?;
+        }
         let run = self
             .reader
             .lock()

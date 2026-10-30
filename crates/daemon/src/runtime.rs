@@ -179,6 +179,13 @@ pub struct Inner {
     pub(crate) batches: Mutex<HashMap<MilestoneId, usize>>,
     /// Una sola pasada de `fill_batches` a la vez.
     pub(crate) batch_fill: tokio::sync::Mutex<()>,
+    /// Tareas del plan ya hechas al abrir cada run (P18.S3): compactar cuando una sesión
+    /// completa `[plan] compact_every_tasks`. En memoria: tras reiniciar, la base cae a 0 y
+    /// la próxima rotación compacta (conservador, nunca largo).
+    pub(crate) plan_done: Mutex<HashMap<RunId, usize>>,
+    /// Agentes que cerraron su sesión en el tope de tareas y esperan la decisión de la TUI
+    /// (compactar o permitir una sesión larga), enmienda ADR-0013 D2.
+    pub(crate) awaiting_compact: Mutex<std::collections::HashSet<AgentId>>,
 }
 
 /// Persistencia del latido por defecto (producción).
@@ -252,6 +259,8 @@ impl Runtime {
                 graphs: crate::project_graph::Graphs::default(),
                 batches: Mutex::default(),
                 batch_fill: tokio::sync::Mutex::new(()),
+                plan_done: Mutex::default(),
+                awaiting_compact: Mutex::default(),
                 scheduling: std::sync::OnceLock::new(),
                 integration: tokio::sync::Mutex::new(()),
             }),

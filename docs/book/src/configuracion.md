@@ -107,6 +107,7 @@ level = "info"
   - `enabled`: si es `true`, cada agente creado planifica su tarea por fases en `.symphony/plan/<task_id>.md` y abre una sesión limpia al iniciar cada fase (`PHASE_DONE`).
   - `phase_start`: `"auto"` o `"ask"`.
   - `min_tasks_per_phase`: mínimo de tareas por fase (por defecto `2`; debe ser > 0).
+  - `compact_every_tasks`: tope de tareas por sesión (por defecto `3`, ADR-0013 D2 enmienda 2026-10-30). Al cerrar una sesión que lo alcanza, la TUI ofrece compactar (opción por defecto: `/compact` al mismo CLI en Claude Code, o sesión nueva con el handoff completo del assembler en los demás proveedores) o confirmar una sesión larga.
 - **`[harness]` (ADR-0019):**
   - `mode`: `"symphony"` (por defecto) expone las mismas herramientas mediante `symphony mcp serve` y desactiva las nativas en Claude Code, Codex, OpenCode, Copilot y Kimi; `"native"` deja a cada CLI con sus herramientas propias. Antigravity no soporta el harness por invocación y siempre usa sus herramientas nativas.
   - `style`: `"flintstone"` (por defecto) pide respuestas comprimidas y directas, sin relleno. Usa `"normal"` para apagarlo.

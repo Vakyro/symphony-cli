@@ -481,6 +481,35 @@ fn view_06_agent_waiting_for_an_executor() {
 }
 
 #[test]
+fn compact_prompt_offers_compact_or_long_session() {
+    let mut app = agent_app(Tab::Overview);
+    let mut waiting = inspect();
+    waiting["agent"]["state"] = json!("READY");
+    waiting["agent"]["awaits_compact"] = json!(true);
+    waiting["agent"]["state_reason"] = json!(
+        "la sesión hizo 3 tareas (tope 3): compacta para continuar o confirma una sesión larga en la TUI"
+    );
+    waiting["current_run"] = Value::Null;
+    ok(&mut app, Req::Inspect, waiting);
+    let screen = draw(&app);
+    assert!(screen.contains("Compactación"), "{screen}");
+    assert!(screen.contains("Enter"), "{screen}");
+    assert!(screen.contains("compactar y seguir"), "{screen}");
+    assert!(screen.contains("sesión larga"), "{screen}");
+    // Enter compacta (opción por defecto); L confirma la sesión larga.
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["agent.next_phase"]);
+    let calls = press(&mut app, KeyCode::Char('L'));
+    assert_eq!(methods(&calls), ["agent.long_session"]);
+    // Sin decisión pendiente las teclas vuelven a lo de siempre (L no compacta).
+    let mut running = inspect();
+    running["agent"]["state"] = json!("RUNNING");
+    ok(&mut app, Req::Inspect, running);
+    let calls = press(&mut app, KeyCode::Char('L'));
+    assert!(!methods(&calls).contains(&"agent.long_session"));
+}
+
+#[test]
 fn view_07_agent_conversation_with_executor_change() {
     let mut app = agent_app(Tab::Conversation);
     press(&mut app, KeyCode::Char('m'));

@@ -620,6 +620,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.kill" => agent_kill(req, state).await,
         "agent.switch" => agent_switch(req, state).await,
         "agent.next_phase" => agent_next_phase(req, state).await,
+        "agent.long_session" => agent_long_session(req, state).await,
         "agent.diff" => agent_diff(req, state).await,
         "agent.logs" => agent_logs(req, state).await,
         "agent.export" => agent_export(req, state).await,
@@ -1094,6 +1095,19 @@ async fn agent_next_phase(req: Request, state: &State) -> Response {
         Err(e) => return Response::error(req.id, "agent_not_found", e),
     };
     match state.runtime.start_next_phase(agent_id).await {
+        Ok(run_id) => Response::ok(req.id, json!({ "ok": true, "run_id": run_id.to_string() })),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+/// El usuario permitió una sesión larga: la fase siguiente arranca sin compactar
+/// (enmienda ADR-0013 D2, P18.S3).
+async fn agent_long_session(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.allow_long_session(agent_id).await {
         Ok(run_id) => Response::ok(req.id, json!({ "ok": true, "run_id": run_id.to_string() })),
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }

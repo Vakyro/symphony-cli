@@ -1514,6 +1514,8 @@ impl Runtime {
                 repo::get_worktree(c, wt)
             })?
             .path;
+        // Contador de tareas por sesión (P18.S3): base = tareas hechas del plan ahora.
+        self.note_plan_done(run, agent.task_id, Path::new(&worktree));
         let launch = Launch {
             adapter,
             project_id: agent.project_id,
@@ -2028,6 +2030,7 @@ impl Runtime {
             .path;
 
         let run = RunId::new();
+        self.note_plan_done(run, agent.task_id, Path::new(&worktree));
         let (task_id, state) = (agent.task_id, agent.state);
         let (provider, model_id) = (model.provider_id.clone(), model.model_id.clone());
         self.writer
@@ -2064,6 +2067,9 @@ impl Runtime {
         };
         // Si no arranca, `launch` ya dejó al agente `FAILED` con razón y recovery item.
         self.launch(launch).await.map_err(AgentOpError)?;
+        // Retomar la sesión con un mensaje es una sesión larga de facto: la decisión de
+        // compactación pendiente queda resuelta por el usuario (P18.S3).
+        self.set_awaiting_compact(agent_id, false);
         Ok(run)
     }
 
@@ -2376,6 +2382,7 @@ impl Runtime {
                 "context_mode": agent.context_mode.as_str(),
                 "priority": agent.priority,
                 "is_live": is_live,
+                "awaits_compact": self.awaits_compact(agent_id),
             },
             "task": {
                 "id": task.id.to_string(),
