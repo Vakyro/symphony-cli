@@ -23,6 +23,13 @@
 - **Pruebas:** `unset SYMPHONY_LIVE; cargo nextest run -p symphony-cli --test projects` (3 passed); `cargo clippy -p symphony-cli -- -D warnings` (verde). La corrida completa del crate tuvo fallos ambientales previos en hooks/MCP y dejó LEAK; no se atribuyen a este cambio.
 - **Commit:** pendiente.
 
+## P18.S6 · Segundo cerebro — ✅
+- **Agente:** kimi-code/kimi-for-coding · **Fecha:** 2026-10-30.
+- **Qué se hizo:** el daemon regenera markdowns deterministas en `<proyecto>/.symphony/brain/` (ignorado por git): `decisiones.md` (de `executor_changes`: fecha, agente, modelo de→a, motivo legible), `cambios.md` (últimas 300 `tool_calls` de edición/escritura con estado y detalle recortado) y `bitacora/agente-N.md` (tarea, estado y tabla de runs por agente; las huérfanas se borran). Todo desde datos ya persistidos: consultas SQL acotadas y plantillas, sin embeddings ni LLM (CONSTRAINTS). Escrituras solo vía el daemon (`Runtime::refresh_brain`, en línea porque es barato: ni trabajador en segundo plano ni tablas nuevas), enganchado al cerrar runs (natural y fallido) y a las transiciones de fase del plan, junto al refresco del grafo. Sin dependencias nuevas; `export::stamp` pasó a `pub(crate)`.
+- **Archivos clave:** `crates/daemon/src/brain.rs` (nuevo), `crates/daemon/src/executor.rs`, `crates/daemon/src/plan.rs`, `crates/daemon/src/lib.rs`, `crates/daemon/src/export.rs`, `.gitignore` (entrada explícita `.symphony/brain/`, ya cubierta por `.symphony/`).
+- **Pruebas:** 3 tests nuevos con proyecto temporal (DB real en tempdir y `Runtime` real): render de los tres documentos desde datos sembrados, base vacía con texto amable, y escritura/regeneración idempotente que solo toca `agente-*.md`. `cargo nextest run -p symphony-daemon -E 'not(binary(daemon))' --no-fail-fast`: 159 passed, 1 skipped; 7 failed, de los que 6 pasan al quitar `SYMPHONY_*` del ambiente (interferencia ambiental documentada; el transformer tardó 83 s pero en verde) y 1 es la regresión preexistente de P18.S1 (`handoff_combines_the_checkpoint_with_live_git`, falla igual sin este cambio). `cargo clippy -p symphony-daemon -- -D warnings` y `cargo fmt --check` verdes. No se corrió `cargo xtask check` (lo corre quien integra).
+- **Commit:** pendiente.
+
 ## Pasos
 
 ### P18.S2 · Flintstone por defecto — ✅

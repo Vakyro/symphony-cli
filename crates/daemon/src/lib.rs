@@ -2,6 +2,7 @@
 
 pub mod attach;
 pub mod batch;
+pub mod brain;
 pub mod bus;
 pub mod chat_merge;
 pub mod checkpoint;

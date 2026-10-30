@@ -53,7 +53,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ cerrada documentalmente: S1 tema y barra · S2 streaming y ediciones · S3 arranque · S4 mini piano · S5 procesos observados y pestaña TUI · S6 IPC y vistas de avance, ramas y status global · S8 marcadores explícitos · S7 cierre. Gate, merge y tag: integrador. Política configurable del harness: fuera de P17.
 
-**P18 · Contexto y ahorro de tokens:** siguiente fase; empezar por S1 y fijar el benchmark de tokens antes de los recortes.
+**P18 · Contexto y ahorro de tokens:** S1 en curso (benchmark fijado, recortes con regresión confirmada en `handoff_combines_the_checkpoint_with_live_git`, pendiente corrección y medición); S2 (flintstone) ✅; S4 (grafo al iniciar) ✅; S5 (`/init` de Symphony) ✅; **S6 (segundo cerebro en `.symphony/brain/`, daemon) ✅** — ver bitácora. Falta S3 (sesiones cortas) y S7 (cierre). Aviso repetido: correr los tests con `SYMPHONY_*` fuera del ambiente o fallan los de plugins/transformer (interferencia documentada en LEARNINGS).
 
 **P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasada sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · ✅ S3 benchmark medido con guard de disco · 🟡 S4 `install-check.yml` (espera estar en `main`; el trigger ya no se dispara desde `main`) · 🟡 S5 anexo de desviaciones
 

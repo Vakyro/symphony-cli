@@ -940,6 +940,8 @@ impl Runtime {
             if let Err(e) = result {
                 tracing::error!(agent = %agent, error = %e, "no se pudo cerrar el run");
             }
+            // El run ya quedó persistido: el segundo cerebro refleja el cierre (P18.S6).
+            self.refresh_brain();
             return;
         }
         // Una señal que Symphony no mandó (abort, OOM killer) es un crash: `FAILED`.
@@ -1071,6 +1073,8 @@ impl Runtime {
         if let Err(e) = result {
             tracing::error!(agent = %agent, error = %e, "no se pudo cerrar el run");
         }
+        // El run (y su motivo de fallo) ya quedó persistido: cerebro al día (P18.S6).
+        self.refresh_brain();
     }
 
     /// El mejor reemplazo según la política del agente (P10.S5, IDEA §5.7): el router elige entre

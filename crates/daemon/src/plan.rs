@@ -231,6 +231,7 @@ impl Runtime {
             Next::NoPlan => false,
             Next::Complete(plan) => {
                 self.refresh_graph(&l.worktree, Some(l.project_id.to_string()));
+                self.refresh_brain();
                 self.archive_plan(l, &plan).await;
                 false
             }
@@ -240,6 +241,7 @@ impl Runtime {
             }
             Next::NextPhase { index, plan } => {
                 self.refresh_graph(&l.worktree, Some(l.project_id.to_string()));
+                self.refresh_brain();
                 match self.close_phase_and_continue(l, index, &plan, &cfg).await {
                     Ok(()) => true,
                     Err(e) => {
@@ -333,6 +335,8 @@ impl Runtime {
         if let Err(e) = result {
             tracing::error!(agent = %agent, error = %e, "no se pudo cerrar el run con el plan fallido");
         }
+        // El run cerrado y su motivo ya están persistidos: cerebro al día (P18.S6).
+        self.refresh_brain();
     }
 
     /// Cierra el run de la fase terminada (`PHASE_DONE`, `HANDED_OFF`) y abre el siguiente
