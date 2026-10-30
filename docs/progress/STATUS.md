@@ -1,12 +1,12 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-30 · por codex/gpt-6
-**Fase actual:** P17 · TUI al día **cerrada documentalmente**; siguiente P18 · Contexto y ahorro de tokens.
-**Paso actual:** P17.S7 terminado: bitácora con commits de S4, S5, S6 y S8, decisiones ADR-0022/0023 y aprendizajes del dogfooding.
-**Estado del paso:** solo documentación; sin ejecutar Cargo. Gate de fase, merge a `main` y tag `p17-done` quedan a cargo del integrador y no se acreditan en esta sesión.
-**Responsable del cierre documental:** codex/gpt-6, retomando el worktree del executor anterior.
-**Siguiente:** integrar este cierre y verificar la fase; después P18.S1 (auditoría del router y del handoff, benchmark fijo antes/después) → P19 → P20 → cierre de P16. Meta de P18: reducir tokens un 40 %, según `docs/progress/DECISIONES-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
-**Seguimientos:** S5 conserva el test de socket IPC con fake-agent y la revisión de parsers fuera de hooks; S6 conserva la limitación del registro global y difiere a P19 el avance por fases de cada agente. Detalle en `docs/phases/P17-tui.md`.
+**Actualizado:** 2026-10-30 · por codex/gpt-6.1
+**Fase actual:** P17 · TUI; revisión de cierre ejecutada, pendiente de integrar.
+**Paso actual:** P17.S7 · revisión del diff de cierre: corregida la mezcla de contadores entre proyectos contra ADR-0022.
+**Estado del paso:** `nextest` de protocol (17), daemon --lib (38) y tui (148) en verde; clippy `-D warnings` de protocol, daemon y tui en verde. No se ejecutó `cargo xtask check`; merge y tag `p17-done` siguen a cargo del integrador.
+**Responsable:** codex/gpt-6.1.
+**Siguiente:** integrar la revisión y ejecutar el gate de fase; después P18.S1 (auditoría del router y del handoff, benchmark fijo antes/después) → P19 → P20 → cierre de P16. Meta de P18: reducir tokens un 40 %, según `docs/progress/DECISIONES-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
+**Seguimientos:** S5 conserva el test de socket IPC con fake-agent y la revisión de parsers fuera de hooks; S6 conserva la limitación del registro global y difiere a P19 el avance por fases de cada agente. La revisión encontró además dos puntos bajos, anotados en «Revisión de cierre» de `docs/phases/P17-tui.md`.
 **P16:** sigue pendiente del veredicto de uso, de S4 en `main` y de P18–P20 para completar los docs as-built y publicar.
 
 **Handoff 2026-10-29 · P17.S5 (cerrado):** integrado el trabajo del agente 065 (cherry-pick) en el worktree `agent-068`; corregidos clippy (`let-else` → `?` en `recorder.rs`) y el contract suite del fake_adapter (`ToolOutput`). Verdes: clippy `-D warnings` de protocol/daemon/testkit/adapter-common; `cargo nextest run` de los cuatro crates (excluido el binario `daemon`, flaky en Windows) y el L2 `shell_tool_output_is_listed_and_streamed_for_its_agent` por filtro de nombre. Aviso: al correr tests dentro del harness hay que quitar `SYMPHONY_USER_HOME` del ambiente (si no, los tests de plugins fallan; ver `docs/progress/LEARNINGS.md`). Quedan como seguimiento: test de socket IPC end-to-end con fake-agent como proveedor configurado, y revisar parsers de proveedores para emitir `ToolOutput` fuera de hooks. Decisión registrada en `docs/phases/P17-tui.md`. Siguiente: P17.S6.

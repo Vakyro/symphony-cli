@@ -173,6 +173,14 @@
 - **Verificación de esta sesión:** revisión documental y del historial; sin Cargo ni pruebas live por instrucción expresa. Las cifras de pruebas de cada paso son registros anteriores, no nuevas ejecuciones.
 - **Integración:** el integrador debe correr el gate de fase y efectuar merge a `main` y tag `p17-done`; esta tarea solo entrega el commit documental y no acredita esas operaciones.
 
+### Revisión de cierre (P17.S7)
+
+- **Medio corregido:** `usage.global` sumaba uso por modelo y fecha entre proyectos, mezclando contadores que ADR-0022 exige mantener separados. La respuesta IPC ahora agrupa proveedor, modelo y días dentro de cada proyecto; el test del daemon comprueba que los totales de dos proyectos sigan siendo 30/12 y el test de vista que no aparezca un total conjunto.
+- **Medio corregido:** el nuevo contrato anidado de `usage.global` rompe la forma anterior de la respuesta; se subió `PROTOCOL_VERSION` a 2 para que un daemon y un cliente incompatibles fallen explícitamente. La prueba del protocolo confirma que v1 se rechaza.
+- **Bajo pendiente:** `git.branches` consulta divergencia con un `rev-list` por rama que tenga upstream. Es una llamada local por rama y no afecta la corrección; si repositorios grandes vuelven lenta la vista, se puede cambiar a una consulta por lote.
+- **Bajo pendiente:** la vista global pinta el bloque y el heatmap de cada proyecto en una lista vertical; con muchos proyectos parte del contenido queda fuera del alto visible. No afecta el aislamiento de datos; considerar navegación/scroll si el uso real lo requiere.
+- **Revisado:** sin `unwrap`/`expect`/`panic` en las rutas de runtime añadidas; sin borrado forzado implícito; marcador inválido/anidado conservado literalmente; los mensajes IPC llevan versión y la versión incompatible se rechaza.
+
 ## Backlog / ideas futuras de P17 (documentadas, no implementadas)
 
 - **S8 · Renderizado rico del chat:** resuelto con la opción B del ADR-0023; ver el paso cerrado arriba.

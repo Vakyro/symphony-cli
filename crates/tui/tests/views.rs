@@ -2247,15 +2247,25 @@ fn branches_app() -> App {
 
 fn global_json() -> Value {
     json!({
-        "providers": [
-            { "provider_id": "anthropic", "model_id": "claude/sonnet", "tokens": 400_000 },
-            { "provider_id": "openai", "model_id": "codex/gpt-5", "tokens": 40_000 },
-            { "provider_id": "anthropic", "model_id": "claude/opus", "tokens": 10_000 },
-        ],
-        "daily": [
-            { "date": "2026-10-01", "tokens": 30_000 },
-            { "date": "2026-10-02", "tokens": 100_000 },
-            { "date": "2026-10-05", "tokens": 10_000 },
+        "projects": [
+            {
+                "root_path": "/work/app-one",
+                "providers": [
+                    { "provider_id": "anthropic", "model_id": "claude/sonnet", "tokens": 400_000 },
+                    { "provider_id": "openai", "model_id": "codex/gpt-5", "tokens": 40_000 }
+                ],
+                "daily": [
+                    { "date": "2026-10-01", "tokens": 30_000 },
+                    { "date": "2026-10-02", "tokens": 100_000 }
+                ]
+            },
+            {
+                "root_path": "/work/app-two",
+                "providers": [
+                    { "provider_id": "anthropic", "model_id": "claude/opus", "tokens": 10_000 }
+                ],
+                "daily": [{ "date": "2026-10-05", "tokens": 10_000 }]
+            }
         ],
         "incomplete_projects": ["/work/legacy-app"],
     })
@@ -2399,6 +2409,16 @@ fn view_38_global_status_80_columns() {
 #[test]
 fn view_38_global_status_160_columns() {
     insta::assert_snapshot!(terminal(&global_app(), 160, 28).backend().to_string());
+}
+
+#[test]
+fn global_usage_keeps_token_totals_separate_by_project() {
+    let output = terminal(&global_app(), 160, 40).backend().to_string();
+    assert!(output.contains("/work/app-one"));
+    assert!(output.contains("/work/app-two"));
+    assert!(output.contains("Total: 440000 tokens"));
+    assert!(output.contains("Total: 10000 tokens"));
+    assert!(!output.contains("Total: 450000 tokens"));
 }
 
 #[test]

@@ -2581,91 +2581,89 @@ fn branches(app: &App, f: &mut Frame, area: Rect) {
     paragraph(f, area, "Ramas", lines);
 }
 
-/// 38 Status global (P17.S6): uso del mes por modelo/proveedor entre proyectos
-/// (ADR-0022: solo lectura de cada `.symphony`) y el heatmap mensual de tokens.
+/// 38 Status global (P17.S6): uso por proyecto, sin combinar sus contadores (ADR-0022).
 fn global_status(app: &App, f: &mut Frame, area: Rect) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let Some(g) = app.global.as_ref() else {
         lines.push(Line::from(dim("Cargando…")));
         return paragraph(f, area, "Status global", lines);
     };
-    let mut models: Vec<Value> = g["providers"].as_array().cloned().unwrap_or_default();
-    models.sort_by(|a, b| {
-        b["tokens"]
-            .as_u64()
-            .unwrap_or(0)
-            .cmp(&a["tokens"].as_u64().unwrap_or(0))
-    });
-    let month_tokens: u64 = models
-        .iter()
-        .map(|m| m["tokens"].as_u64().unwrap_or(0))
-        .sum();
-    lines.push(section("USO DEL MES POR MODELO (ENTRE PROYECTOS)"));
-    if models.is_empty() {
+    lines.push(section("USO DEL MES POR PROYECTO"));
+    let projects = g["projects"].as_array().cloned().unwrap_or_default();
+    if projects.is_empty() {
         lines.push(Line::from(dim("  Sin uso registrado este mes.")));
     }
-    for m in models {
-        let tokens = m["tokens"].as_u64().unwrap_or(0);
-        lines.push(Line::from(vec![
-            Span::raw(format!(
-                "  {:<12} {:<24} ",
-                truncate(&text(&m["provider_id"]), 12),
-                truncate(&text(&m["model_id"]), 24)
-            )),
-            colored(format!("{tokens:>10} tok"), current_theme().accent),
-        ]));
-    }
-    lines.push(Line::from(dim(format!(
-        "  Total del mes: {month_tokens} tokens"
-    ))));
-    lines.push(Line::raw(""));
-
-    lines.push(section("CALOR MENSUAL"));
-    let daily_map: std::collections::BTreeMap<String, u64> = g["daily"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|d| {
-            d["date"]
-                .as_str()
-                .map(|date| (date.to_string(), d["tokens"].as_u64().unwrap_or(0)))
-        })
-        .collect();
-    let dates: Vec<String> = daily_map.keys().cloned().collect();
-    match crate::heatmap::month_of(&dates) {
-        Some((year, month)) => {
-            lines.push(Line::from(dim(format!(
-                "  {}",
-                crate::heatmap::month_label(year, month)
-            ))));
-            let weeks = crate::heatmap::month_grid(year, month, &daily_map);
-            for row in 0..7 {
-                let mut spans = vec![dim(format!("  {} ", crate::heatmap::WEEKDAYS[row]))];
-                for week in &weeks {
-                    match &week.0[row] {
-                        Some(day) => {
-                            let color = match day.level {
-                                0 => current_theme().muted,
-                                4 => current_theme().brand,
-                                _ => current_theme().accent,
-                            };
-                            spans.push(colored(
-                                format!("{} ", crate::heatmap::glyph(day.level)),
-                                color,
-                            ));
-                        }
-                        None => spans.push(Span::raw("  ")),
-                    }
-                }
-                lines.push(Line::from(spans));
-            }
-            lines.push(Line::from(dim(
-                "  · sin uso · ░ ▒ ▓ █ de menos a más tokens (el pico del mes marca el máximo)",
-            )));
+    for project in projects {
+        lines.push(Line::from(bold(format!(
+            "  {}",
+            text(&project["root_path"])
+        ))));
+        let mut models: Vec<Value> = project["providers"].as_array().cloned().unwrap_or_default();
+        models.sort_by(|a, b| {
+            b["tokens"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&a["tokens"].as_u64().unwrap_or(0))
+        });
+        let month_tokens: u64 = models
+            .iter()
+            .map(|m| m["tokens"].as_u64().unwrap_or(0))
+            .sum();
+        for model in models {
+            let tokens = model["tokens"].as_u64().unwrap_or(0);
+            lines.push(Line::from(vec![
+                Span::raw(format!(
+                    "    {:<12} {:<24} ",
+                    truncate(&text(&model["provider_id"]), 12),
+                    truncate(&text(&model["model_id"]), 24)
+                )),
+                colored(format!("{tokens:>10} tok"), current_theme().accent),
+            ]));
         }
-        None => lines.push(Line::from(dim(
-            "  Sin uso este mes: el calor aparece cuando hay tokens registrados.",
-        ))),
+        lines.push(Line::from(dim(format!("    Total: {month_tokens} tokens"))));
+
+        let daily_map: std::collections::BTreeMap<String, u64> = project["daily"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| {
+                d["date"]
+                    .as_str()
+                    .map(|date| (date.to_string(), d["tokens"].as_u64().unwrap_or(0)))
+            })
+            .collect();
+        let dates: Vec<String> = daily_map.keys().cloned().collect();
+        match crate::heatmap::month_of(&dates) {
+            Some((year, month)) => {
+                lines.push(Line::from(dim(format!(
+                    "    CALOR · {}",
+                    crate::heatmap::month_label(year, month)
+                ))));
+                let weeks = crate::heatmap::month_grid(year, month, &daily_map);
+                for row in 0..7 {
+                    let mut spans = vec![dim(format!("    {} ", crate::heatmap::WEEKDAYS[row]))];
+                    for week in &weeks {
+                        match &week.0[row] {
+                            Some(day) => {
+                                let color = match day.level {
+                                    0 => current_theme().muted,
+                                    4 => current_theme().brand,
+                                    _ => current_theme().accent,
+                                };
+                                spans.push(colored(
+                                    format!("{} ", crate::heatmap::glyph(day.level)),
+                                    color,
+                                ));
+                            }
+                            None => spans.push(Span::raw("  ")),
+                        }
+                    }
+                    lines.push(Line::from(spans));
+                }
+            }
+            None => lines.push(Line::from(dim("    Sin uso registrado este mes."))),
+        }
+        lines.push(Line::raw(""));
     }
 
     let incomplete: Vec<String> = g["incomplete_projects"]

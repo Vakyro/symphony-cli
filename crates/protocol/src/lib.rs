@@ -9,8 +9,8 @@ pub mod transport;
 pub use frame::{FrameDecoder, MAX_FRAME_LEN, encode_frame, read_frame, write_frame};
 pub use message::{
     DailyTokens, ErrorBody, Event, GitBranch, GitBranchRequest, GitBranchResult, GitBranches,
-    GitDeleteBranchResult, GlobalProviderUsage, GlobalUsage, Message, Outcome, PROTOCOL_VERSION,
-    Request, Response, Subscribe,
+    GitDeleteBranchResult, GlobalProjectUsage, GlobalProviderUsage, GlobalUsage, Message, Outcome,
+    PROTOCOL_VERSION, Request, Response, Subscribe,
 };
 
 use tokio::io::{AsyncRead, AsyncWrite};

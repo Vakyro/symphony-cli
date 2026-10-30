@@ -1,7 +1,6 @@
 //! Servidor IPC del daemon: una sola instancia por directorio de Symphony,
 //! métodos `ping`, `status` y `shutdown`, timeout por request y apagado ordenado.
 
-use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,8 +13,8 @@ use symphony_adapter_common::AgentEvent;
 use symphony_protocol::transport::{self, ListenerExt as _, LocalStream};
 use symphony_protocol::{
     Connection, DailyTokens, Event, GitBranch, GitBranchRequest, GitBranchResult, GitBranches,
-    GitDeleteBranchResult, GlobalProviderUsage, GlobalUsage, Message, PROTOCOL_VERSION, Request,
-    Response,
+    GitDeleteBranchResult, GlobalProjectUsage, GlobalProviderUsage, GlobalUsage, Message,
+    PROTOCOL_VERSION, Request, Response,
 };
 use symphony_store::{Writer, repo};
 
@@ -1945,14 +1944,12 @@ fn global_usage(user_home: &Path) -> Result<GlobalUsage, String> {
     let registry = user_home.join("symphony.db");
     if !registry.is_file() {
         return Ok(GlobalUsage {
-            providers: Vec::new(),
-            daily: Vec::new(),
+            projects: Vec::new(),
             incomplete_projects: Vec::new(),
         });
     }
     let projects = symphony_store::split::list_projects(&registry).map_err(|e| e.to_string())?;
-    let mut providers = BTreeMap::<(String, String), u64>::new();
-    let mut daily = BTreeMap::<String, u64>::new();
+    let mut project_usage = Vec::new();
     let mut incomplete = Vec::new();
     for (_, root) in projects {
         let db = Path::new(&root).join(".symphony/symphony.db");
@@ -1986,28 +1983,27 @@ fn global_usage(user_home: &Path) -> Result<GlobalUsage, String> {
                 continue;
             }
         };
-        for (provider, model, tokens) in provider_rows {
-            let total = providers.entry((provider, model)).or_default();
-            *total = total.saturating_add(u64::try_from(tokens).unwrap_or(0));
-        }
-        for (date, tokens) in daily_rows {
-            let total = daily.entry(date).or_default();
-            *total = total.saturating_add(u64::try_from(tokens).unwrap_or(0));
-        }
+        project_usage.push(GlobalProjectUsage {
+            root_path: root,
+            providers: provider_rows
+                .into_iter()
+                .map(|(provider_id, model_id, tokens)| GlobalProviderUsage {
+                    provider_id,
+                    model_id,
+                    tokens: u64::try_from(tokens).unwrap_or(0),
+                })
+                .collect(),
+            daily: daily_rows
+                .into_iter()
+                .map(|(date, tokens)| DailyTokens {
+                    date,
+                    tokens: u64::try_from(tokens).unwrap_or(0),
+                })
+                .collect(),
+        });
     }
     Ok(GlobalUsage {
-        providers: providers
-            .into_iter()
-            .map(|((provider_id, model_id), tokens)| GlobalProviderUsage {
-                provider_id,
-                model_id,
-                tokens,
-            })
-            .collect(),
-        daily: daily
-            .into_iter()
-            .map(|(date, tokens)| DailyTokens { date, tokens })
-            .collect(),
+        projects: project_usage,
         incomplete_projects: incomplete,
     })
 }
@@ -3137,7 +3133,7 @@ mod global_usage_tests {
     use rusqlite::Connection;
 
     #[test]
-    fn usage_global_reads_and_aggregates_registered_project_databases() {
+    fn usage_global_reads_registered_databases_without_combining_projects() {
         let home = tempfile::tempdir().unwrap();
         let registry = Connection::open(home.path().join("symphony.db")).unwrap();
         registry
@@ -3159,9 +3155,12 @@ mod global_usage_tests {
         drop(registry);
 
         let data = global_usage(home.path()).unwrap();
-        assert_eq!(data.providers[0].tokens, 42);
-        assert_eq!(data.daily.len(), 1);
-        assert_eq!(data.daily[0].tokens, 42);
+        assert_eq!(data.projects.len(), 2);
+        assert_eq!(data.projects[0].providers[0].tokens, 30);
+        assert_eq!(data.projects[1].providers[0].tokens, 12);
+        assert_eq!(data.projects[0].daily[0].tokens, 30);
+        assert_eq!(data.projects[1].daily[0].tokens, 12);
+        assert_ne!(data.projects[0].root_path, data.projects[1].root_path);
         assert!(data.incomplete_projects.is_empty());
         assert!(
             !home
