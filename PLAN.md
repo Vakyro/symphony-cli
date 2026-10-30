@@ -1319,7 +1319,7 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 ### P18 · Contexto y ahorro de tokens (`phase/p18-contexto`)
 - **S1 Auditoría del router y del handoff:** medir tokens de contexto por ruta y recortar lo que sobra. **Verifica:** benchmark antes/después.
 - **S2 Flintstone por defecto** en el harness (opcional por `[harness]`), medido contra el modo normal.
-- **S3 Sesiones cortas por defecto** y `/clear`/`/compact` por condiciones (ADR-0013 D2 sigue con `/compact` sin medir): confirmar qué existe, completar lo que falte; sesión larga solo con confirmación explícita.
+- **S3 Sesiones cortas por defecto:** por decisión de Leo, la sesión de un agente dura 3 tareas; al superar el límite, Symphony ejecuta automáticamente `/compact` o la compactación equivalente del proveedor, y hace handoff a una sesión nueva con el contexto del assembler si el proveedor no la ofrece. La compactación preserva decisiones, constraints, archivos tocados y el plan vigente; una sesión larga requiere confirmación explícita mediante un prompt en la TUI. **Verifica:** medición live con Codex pendiente.
 - **S4 Graphify al iniciar la conversación** y refresco por fase del proyecto; vista tipo Obsidian queda en P20.
 - **S5 `/init` de Symphony** (no el de cada agente) actualizado.
 - **S6 Segundo cerebro:** markdowns de decisiones, cambios y bitácora por agente, generados por el daemon. Sin embeddings (CONSTRAINTS).
