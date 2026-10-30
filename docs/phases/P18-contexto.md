@@ -9,6 +9,13 @@
 | Tag | — |
 | Docs usados | PLAN § P18, CONSTRAINTS §6, LEARNINGS.md |
 
+## P18.S5 · Init de proyecto actualizado — ✅
+- **Agente:** codex/gpt-5.x · **Fecha:** 2026-10-30.
+- **Qué se hizo:** `symphony init` ahora genera en `project.toml` el estilo del harness, las animaciones de UI y el compactado automático cada 3 tareas; el `.gitignore` del proyecto incluye `.symphony/brain/`; la CLI imprime un resumen de lo creado.
+- **Archivos clave:** `crates/core/src/config.rs`, `crates/daemon/src/server.rs`, `crates/cli/src/main.rs`, `crates/cli/tests/projects.rs`.
+- **Pruebas:** `unset SYMPHONY_LIVE; cargo nextest run -p symphony-cli --test projects` (3 passed); `cargo clippy -p symphony-cli -- -D warnings` (verde). La corrida completa del crate tuvo fallos ambientales previos en hooks/MCP y dejó LEAK; no se atribuyen a este cambio.
+- **Commit:** pendiente.
+
 ## Pasos
 
 ### P18.S2 · Flintstone por defecto — ✅

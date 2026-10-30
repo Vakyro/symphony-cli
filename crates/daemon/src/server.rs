@@ -268,6 +268,7 @@ fn ignore_state_in_git(home: &Path) {
             "*
 !.gitignore
 !project.toml
+brain/
 ",
         ) {
             tracing::warn!(error = %e, "no se pudo escribir {}", path.display());
@@ -1798,6 +1799,9 @@ async fn project_init(req: Request) -> Response {
                 kind,
                 performance,
                 failover,
+                harness_style: symphony_core::HarnessStyle::Flintstone,
+                animations: true,
+                compact_every_tasks: 3,
             },
         )
         .map(|c| (repo.root().display().to_string(), c.project.name))

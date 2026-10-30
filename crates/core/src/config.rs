@@ -229,6 +229,8 @@ pub struct PlanConfig {
     pub phase_start: PhaseStart,
     /// Una fase con menos tareas se junta con la siguiente.
     pub min_tasks_per_phase: u32,
+    /// Compacta la sesión automáticamente después de este número de tareas.
+    pub compact_every_tasks: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -244,6 +246,7 @@ impl Default for PlanConfig {
             enabled: true,
             phase_start: PhaseStart::Auto,
             min_tasks_per_phase: 2,
+            compact_every_tasks: 3,
         }
     }
 }
@@ -629,6 +632,12 @@ pub struct ProjectConfig {
     /// `[ui]` del proyecto: pisa la config global para este proyecto (P17.S4).
     #[serde(default)]
     pub ui: Option<UiConfig>,
+    /// `[harness]` del proyecto: pisa la configuración global.
+    #[serde(default)]
+    pub harness: Option<HarnessConfig>,
+    /// `[plan]` del proyecto: política de sesiones cortas.
+    #[serde(default)]
+    pub plan: Option<PlanConfig>,
 }
 
 /// `[plugins]` de `project.toml`: nombres de plugins ya instalados en `~/.symphony/plugins`.
@@ -862,6 +871,9 @@ pub struct ProjectInit<'a> {
     pub kind: ProjectKind,
     pub performance: PerformanceProfile,
     pub failover: FailoverPolicy,
+    pub harness_style: HarnessStyle,
+    pub animations: bool,
+    pub compact_every_tasks: u32,
 }
 
 /// Crea `project.toml` si no existe y devuelve la config del proyecto.
@@ -877,6 +889,12 @@ pub fn init_project(project_root: &Path, init: &ProjectInit) -> Result<ProjectCo
     doc["project"]["kind"] = toml_edit::value(init.kind.as_str());
     doc["performance"]["profile"] = toml_edit::value(init.performance.as_str());
     doc["routing"]["failover"] = toml_edit::value(init.failover.as_str());
+    doc["harness"]["style"] = toml_edit::value(match init.harness_style {
+        HarnessStyle::Flintstone => "flintstone",
+        HarnessStyle::Normal => "normal",
+    });
+    doc["ui"]["animations"] = toml_edit::value(init.animations);
+    doc["plan"]["compact_every_tasks"] = toml_edit::value(i64::from(init.compact_every_tasks));
     let text = format!("# Configuración de Symphony para este proyecto.\n{doc}");
     write_atomic(&path, &text)?;
     parse(&path, &text)
@@ -1148,6 +1166,9 @@ antigravity_skip_permissions = \"si\"
             kind: ProjectKind::Document,
             performance: PerformanceProfile::Eco,
             failover: FailoverPolicy::SameProvider,
+            harness_style: HarnessStyle::Flintstone,
+            animations: true,
+            compact_every_tasks: 3,
         };
         let created = init_project(dir.path(), &init).unwrap();
         assert_eq!(created.project.name, "arete-mobile");
