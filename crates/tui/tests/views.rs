@@ -1881,6 +1881,61 @@ fn chat_shows_the_model_suggestion_and_resolves_it_with_three_keys() {
     assert!(matches!(&app.notice, Some(Notice::Info(m)) if m.contains("modelo sugerido")));
 }
 
+/// El transcript se carga intacto y se colorea de nuevo en una App nueva.
+#[test]
+fn marcadores_al_reabrir_el_chat() {
+    let text = "Normal\n[[symphony:title]]Título[[/symphony:title]]\n[[symphony:bullet]]Viñeta[[/symphony:bullet]]\n[[symphony:highlight]]Destacado[[/symphony:highlight]]\n[[symphony:warning]]Aviso[[/symphony:warning]]\n[[symphony:error]]Error[[/symphony:error]]\n[[symphony:table]]Modelo | Estado\nopus   | listo[[/symphony:table]]";
+    let logs = json!({"messages": [{"role": "ASSISTANT", "content": text}], "partial": ""});
+    let mut previous = None;
+    for _ in 0..2 {
+        let mut app = chat_app();
+        app.theme = Theme::default();
+        ok(&mut app, Req::ChatGet, json!({"agent_id": "01CHAT"}));
+        ok(&mut app, Req::Logs, logs.clone());
+        assert_eq!(app.chat.as_ref().unwrap().messages[0]["content"], text);
+        let buf = buffer(&app);
+        for (label, color) in [
+            ("Normal", Color::Reset),
+            ("Título", app.theme.brand.unwrap()),
+            ("Viñeta", app.theme.ok.unwrap()),
+            ("Destacado", app.theme.accent.unwrap()),
+            ("Aviso", app.theme.warn.unwrap()),
+            ("Error", app.theme.error.unwrap()),
+            ("Modelo | Estado", app.theme.muted.unwrap()),
+        ] {
+            let row = (0..buf.area.height)
+                .find(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, *y)].symbol())
+                        .collect::<String>()
+                        .contains(label)
+                })
+                .unwrap();
+            let line: String = (0..buf.area.width)
+                .map(|x| buf[(x, row)].symbol())
+                .collect();
+            let start = line[..line.find(label).unwrap()].chars().count() as u16;
+            assert_eq!(buf[(start, row)].fg, color, "{label}");
+        }
+        let screen = draw(&app);
+        assert!(!screen.contains("[[symphony:"));
+        if let Some(ref previous) = previous {
+            assert_eq!(&screen, previous);
+        }
+        previous = Some(screen);
+        insta::assert_snapshot!(
+            "chat_marcadores_80",
+            terminal(&app, 80, 28).backend().to_string()
+        );
+        insta::assert_snapshot!(
+            "chat_marcadores_160",
+            terminal(&app, 160, 28).backend().to_string()
+        );
+        app.theme = Theme::no_color();
+        assert!(buffer(&app).content.iter().all(|c| c.fg == Color::Reset));
+    }
+}
+
 // --- tema (P17.S1) -----------------------------------------------------------
 
 /// El color tiene que llegar al buffer: los snapshots de texto no lo probarían.

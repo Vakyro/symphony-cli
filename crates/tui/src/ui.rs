@@ -1013,6 +1013,55 @@ fn wrap(s: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Envuelve los fragmentos conservando el color incluso al cortar una palabra.
+fn marked_lines(content: &str, width: usize) -> Vec<Vec<Span<'static>>> {
+    let theme = current_theme();
+    let chars: Vec<_> = crate::markers::parse(content)
+        .into_iter()
+        .flat_map(|(text, role)| {
+            let color = role.and_then(|r| theme.color(r));
+            text.chars().map(move |c| (c, color))
+        })
+        .collect();
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for src in chars.split(|(c, _)| *c == '\n') {
+        let mut line = Vec::new();
+        for word in src.split(|(c, _)| *c == ' ') {
+            let mut word = word;
+            while word.len() > width {
+                if !line.is_empty() {
+                    out.push(std::mem::take(&mut line));
+                }
+                out.push(word[..width].to_vec());
+                word = &word[width..];
+            }
+            if !line.is_empty() && line.len() + 1 + word.len() > width {
+                out.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push((' ', word.first().and_then(|(_, color)| *color)));
+            }
+            line.extend_from_slice(word);
+        }
+        out.push(line);
+    }
+    out.into_iter()
+        .map(|line| {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            for (c, color) in line {
+                let style = theme_fg(color);
+                if let Some(last) = spans.last_mut().filter(|s| s.style == style) {
+                    last.content.to_mut().push(c);
+                } else {
+                    spans.push(Span::styled(c.to_string(), style));
+                }
+            }
+            spans
+        })
+        .collect()
+}
+
 /// Prompt de un handoff: lo ve el modelo nuevo, no el usuario (FLOW §13.4 ya marca el cambio).
 // ponytail: se reconoce por su frase inicial (crates/context/src/handoff.rs); si cambia, hay que
 // actualizarla acá o el chat mostraría el handoff entero.
@@ -1036,16 +1085,23 @@ fn message_lines(m: &Value, width: usize) -> Vec<Line<'static>> {
                 "ASSISTANT" => ("agente", current_theme().ok),
                 _ => ("sistema", current_theme().muted),
             };
-            for (i, l) in wrap(content, width.saturating_sub(9))
-                .into_iter()
-                .enumerate()
-            {
+            let body_width = width.saturating_sub(9);
+            let body = if role == "ASSISTANT" && content.contains("[[symphony:") {
+                marked_lines(content, body_width)
+            } else {
+                wrap(content, body_width)
+                    .into_iter()
+                    .map(|l| vec![Span::raw(l)])
+                    .collect()
+            };
+            for (i, mut spans) in body.into_iter().enumerate() {
                 let prefix = if i == 0 {
                     format!("{who:>7} │ ")
                 } else {
                     "        │ ".into()
                 };
-                lines.push(Line::from(vec![colored(prefix, color), Span::raw(l)]));
+                spans.insert(0, colored(prefix, color));
+                lines.push(Line::from(spans));
             }
         }
     }

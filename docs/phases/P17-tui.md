@@ -11,6 +11,15 @@
 
 ## Pasos
 
+### P17.S8 · Marcadores de color del chat — ✅ (2026-10-29)
+- **Agente:** codex/gpt-6.
+- **Implementación:** parser puro en `crates/tui/src/markers.rs` para los seis tipos del ADR-0023. Aperturas desconocidas, cierres incorrectos y anidamientos permanecen literales. Render compartido por chat, conversación del agente y streaming; colores del tema (brand/ok/accent/warn/error/muted), sin dependencias nuevas y respetando NO_COLOR. Texto no marcado conserva el estilo normal de la terminal, igual que antes.
+- **Persistencia:** revisión de `recorder::message` y `repo::insert_message`: guardan el original inline o como blob, sin eliminar delimitadores. Prueba de reapertura con dos App nuevas y la misma respuesta IPC: transcript intacto y colores reconstruidos. No se modifica store ni recorder.
+- **Pruebas:** casos puros de Unicode, vacíos, multilineales, tipos desconocidos, cierres incompletos/incorrectos y anidamientos; buffer con los seis colores y NO_COLOR; snapshots a 80 y 160 columnas revisados.
+- **Verificación:** nextest de TUI y clippy `-D warnings` en verde. La primera ejecución excedió el límite de 120 s de la herramienta; el reintento esperó el candado y terminó. Por error se ejecutó también el binario de integración `symphony-tui::daemon` (pasó), contrario a la instrucción; la comprobación final lo excluye explícitamente: 146 tests pasaron. SYMPHONY_LIVE eliminado antes de Cargo; sin xtask ni suscripciones reales.
+- **Pendiente:** integración y gate de fase a cargo del integrador.
+
+
 ### P17.S5 · Herramientas shell observadas por el daemon — ✅ (2026-10-29)
 - **Decisión:** el daemon no ejecuta el shell del agente; el CLI proveedor ejecuta las herramientas. No existe un proceso shell administrado que Symphony pueda interceptar. Esta parte construye una vista derivada de los eventos `ToolRequested`/`ToolFinished` y salida reportada por el proveedor, persistidos vía `tool_calls` y `context_objects` (`TOOL_OUTPUT`), sin tabla nueva. IPC: `agent.processes` es una vista derivada de los `tool_calls` shell (no una tabla de procesos), y `agent.process.output` es una suscripción de **solo lectura** por agente, **sin stdin** ni shell interactiva.
 - **Alcance:** agregado `AgentEvent::ToolOutput`, parseo común de `tool_response`, almacenamiento redactado en object store, lista `agent.processes` derivada de tool calls shell, `Subscribe` versionado con `agent_id` opcional y tópicos `agent.processes` / `agent.process.output`; fake-agent L2 valida adapter → bus → recorder → vista y salida en vivo por bus. No hay stdin ni shell interactiva.
@@ -141,7 +150,7 @@
 
 ## Backlog / ideas futuras de P17 (documentadas, no implementadas)
 
-- **S8 · Renderizado rico del chat (pendiente):** colores en las respuestas estilo OpenCode. Un MD temporal que vive solo durante la sesión, con colores asignados por importancia (info/warn/error). Dos opciones a decidir con ADR corto: (A) colorear todo el markdown del asistente (requiere parser como pulldown-cmark, justificar dependencia en STACK) o (B) solo bloques especiales marcados por el agente (protocolo documentado en el harness). Decidir si el color lo asigna el agente o la TUI por heurística, y si el MD se persiste en el transcript o solo en memoria. No confundir con el tema de la TUI (S1), ya implementado.
+- **S8 · Renderizado rico del chat:** resuelto con la opción B del ADR-0023; ver el paso cerrado arriba.
 - **Política configurable de Symphony/harness (pendiente, fuera de P17):** análogo a los permisos de Claude Code (allow/deny/ask, modos default/acceptEdits/plan/dontAsk/bypassPermissions, archivos ignorados estilo .claudeignore, política por proyecto en .symphony/policy.toml). Requiere ADR nuevo y decisión de alcance (solo archivos vs. también shell/git). Documentado en PLAN.md bajo "Ideas futuras (sin fase)".
 
 
