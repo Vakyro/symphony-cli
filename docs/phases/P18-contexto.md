@@ -75,8 +75,18 @@ Comando de baseline arriba; conteos completos en `docs/research/tokens-p18-base.
 - **Parada:** se respeta AGENTS ante el gate fallido. Pendientes clippy, nueva medición posterior, comparación por ruta y cierre de S1. No se declara la meta del 40 % lograda. El benchmark fijo no contiene las repeticiones eliminadas, por lo que se espera ahorro cero en él; falta confirmarlo ejecutándolo.
 - **Alcance y decisiones:** no se cambian fixtures ni presupuestos para mejorar artificialmente la cifra, ni se omiten archivos por un checkpoint potencialmente atrasado. Sin dependencias nuevas. Se conserva la rama asignada por Symphony según DOGFOOD; no se ejecutó `cargo xtask check` ni pruebas live.
 
+## P18.S1 · Continuación de parte 2: segundo intento bloqueado
+
+- **Agente:** codex/gpt-6 · **Fecha:** 2026-10-30.
+- **Entorno:** antes de Cargo se eliminaron las variables SYMPHONY_* y CARGO_BUILD_BUILD_DIR del proceso de shell; no se modificó configuración global ni se invocaron proveedores reales.
+- **Gate general:** `cargo xtask check` completó fmt y clippy del workspace con `-D warnings`; la herramienta interrumpió el comando a los 600 s durante la compilación de tests. No se declara aprobado.
+- **Gate solicitado:** `cargo nextest run -p symphony-context -p symphony-daemon -E 'not(binary(daemon))'` → 168 passed, 1 failed, 3 skipped, 42 no ejecutados. El transformador que fallaba en la sesión anterior pasó (96,245 s).
+- **Causa concreta del fallo nuevo:** `handoff_combines_the_checkpoint_with_live_git`, `crates/daemon/tests/runtime.rs:1686`, exige `**Asistente:** Voy por partes.`. La deduplicación lo sustituye por `[igual al Último plan del executor anterior]`; conservar el texto completo en el plan no satisface ese contrato. No se relajó ninguna aserción.
+- **Parada:** segundo intento fallido de la tarea; plan local marcado `[!]` según instrucción del usuario. Sin nueva modificación de runtime ni tercer intento. Pendientes clippy acotado, benchmark posterior y tabla antes/después. No hay porcentaje medido ni cierre de S1.
+- **Handoff:** corregir la deduplicación conservando el prefijo requerido de conversación; verificar tests existentes sin debilitarlos y luego medir. Requiere nueva autorización para reanudar tras la parada solicitada. Logs locales en `target/p18-validation/`.
+
 ## Estado final
-Parte 1 establece una medición de handoff fija para cuatro cargas que representan rutas de routing y los cuatro modos del ensamblador. No se ha modificado comportamiento. Falta verificar los crates completos y completar la medición integrada de routing si se requiere antes de cerrar S1.
+P18.S1 parte 2 sigue incompleta: recortes implementados en el commit anterior, pero con una regresión confirmada en el contrato de conversación. Benchmark posterior pendiente; no se afirma alcanzar el 40 %. No se inició otra fase.
 
 ## Notas para el siguiente agente
 El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-base.md`. No lanzar CLIs reales; el benchmark es sintético y local.

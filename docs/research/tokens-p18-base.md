@@ -33,6 +33,12 @@ El router no arma otro prompt: `executor.rs::handoff_tokens` consulta `prepare_h
 
 La carga fija no contiene mensajes iguales al objetivo o al plan, y su diff de `x` no es un diff unificado que pueda reducir el compresor existente. No se cambian fixtures, estimador ni límites para aparentar ahorro; los tests existentes fijan además los recortes y el contenido RAW. La deduplicación se verifica por separado con dos tests nuevos, sin sustituir el benchmark ni relajar aserciones anteriores. No se descartan hechos por coincidencias parciales ni archivos por ausencia en un checkpoint que puede estar atrasado: git vivo sigue siendo la fuente de verdad.
 
+### Continuación: segundo intento (2026-10-30)
+
+Con `SYMPHONY_*` y `CARGO_BUILD_BUILD_DIR` eliminados del entorno del comando, el transformador pasó. La suite solicitada terminó con **168 passed, 1 failed, 3 skipped y 42 no ejecutados**: `handoff_combines_the_checkpoint_with_live_git` exige `**Asistente:** Voy por partes.`, pero recibe la referencia al plan. El texto completo permanece en el plan, pero el contrato existente exige también ese prefijo en conversación. Es una regresión del recorte; no se cambió la aserción.
+
+Se detuvo el trabajo tras el segundo intento fallido, según la instrucción de esta sesión. No se ejecutó el benchmark posterior: la tabla antes/después y el porcentaje siguen pendientes, no son 0 % medido. `cargo xtask check` completó fmt/clippy del workspace, pero la herramienta lo interrumpió a los 600 s durante la compilación de tests. El clippy acotado tampoco se volvió a ejecutar.
+
 ## Fixtures
 
 Se reutiliza el fixture fijo `fixed()` del módulo de handoff; se fija texto sintético (`x` para el diff), número de mensajes y 800 caracteres por mensaje. La tabla se regenera desde el test; no depende del repo de trabajo, reloj, proveedor, configuración del usuario ni red.
