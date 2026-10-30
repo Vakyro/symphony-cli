@@ -3,5 +3,6 @@
 pub mod ast;
 pub mod chunk;
 pub mod compress;
+pub mod graph;
 pub mod handoff;
 pub mod uri;

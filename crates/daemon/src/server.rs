@@ -846,10 +846,18 @@ fn chat_get(req: Request, state: &State) -> Response {
     // `project_root` ya es la raíz del repo (la devuelve `project.status`).
     let root = project_root_param(&req.params).display().to_string();
     read_view(req, state, |c| {
-        let agent = repo::project_by_root(c, &root)
-            .ok()
-            .flatten()
+        let project = repo::project_by_root(c, &root).ok().flatten();
+        let agent = project
+            .as_ref()
             .and_then(|p| repo::chat_agent(c, p.id).ok().flatten());
+        let graph_root = agent
+            .as_ref()
+            .and_then(|a| a.worktree_id)
+            .and_then(|id| repo::get_worktree(c, id).ok())
+            .map_or_else(|| PathBuf::from(&root), |w| PathBuf::from(w.path));
+        state
+            .runtime
+            .refresh_graph(&graph_root, project.map(|p| p.id.to_string()));
         Ok(json!({ "agent_id": agent.map(|a| a.id.to_string()) }))
     })
 }

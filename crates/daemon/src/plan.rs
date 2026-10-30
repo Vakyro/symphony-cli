@@ -230,6 +230,7 @@ impl Runtime {
         match next_after_run(&l.worktree, l.task_id, &cfg) {
             Next::NoPlan => false,
             Next::Complete(plan) => {
+                self.refresh_graph(&l.worktree, Some(l.project_id.to_string()));
                 self.archive_plan(l, &plan).await;
                 false
             }
@@ -238,6 +239,7 @@ impl Runtime {
                 true
             }
             Next::NextPhase { index, plan } => {
+                self.refresh_graph(&l.worktree, Some(l.project_id.to_string()));
                 match self.close_phase_and_continue(l, index, &plan, &cfg).await {
                     Ok(()) => true,
                     Err(e) => {

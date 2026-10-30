@@ -12,6 +12,10 @@ workspace = true
 
 [dependencies]
 symphony-core = { path = "../core" }
+ignore.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+toml_edit.workspace = true
 regex.workspace = true
 serde_json.workspace = true
 tree-sitter.workspace = true

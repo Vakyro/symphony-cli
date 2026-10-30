@@ -20,6 +20,7 @@ pub mod merge;
 pub mod migrate;
 pub mod plan;
 pub mod plugins;
+mod project_graph;
 pub mod providers;
 pub mod recorder;
 pub mod resources;

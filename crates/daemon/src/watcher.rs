@@ -286,7 +286,8 @@ async fn prune_missing(
     let pruned = writer
         .write(Box::new(move |t| {
             for uri in context::file_uris(t, &owner)? {
-                if keep.contains(&uri) {
+                // Los grafos son archivos generados por el daemon, fuera del recorrido del watcher.
+                if keep.contains(&uri) || uri.starts_with(crate::project_graph::URI_PREFIX) {
                     continue;
                 }
                 if let Some(old) = context::delete_file(t, &owner, &uri)? {

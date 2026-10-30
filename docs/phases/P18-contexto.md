@@ -5,9 +5,16 @@
 | Estado | EN CURSO |
 | Rama | phase/p18-contexto |
 | Inicio / cierre | 2026-10-30 / — |
-| Agentes que trabajaron | codex/gpt-6.1 (P18.S1 parte 1) |
+| Agentes que trabajaron | codex/gpt-6.1 (P18.S1 parte 1), codex/gpt-6-luna (P18.S4 parte 1), kimi-code (P18.S4 cierre) |
 | Tag | — |
 | Docs usados | PLAN § P18, CONSTRAINTS §6, LEARNINGS.md |
+
+## P18.S4 · Grafo del proyecto al iniciar — ✅
+- **Agente:** codex/gpt-6-luna (parte 1, sin verificar) + kimi-code (verificación y cierre) · **Fecha:** 2026-10-30.
+- **Qué se hizo:** grafo local del proyecto 100 % en Rust sobre `crates/context` (`graph.rs`): archivos (recorrido acotado y ordenado con `ignore`), símbolos principales por archivo reutilizando los niveles L0–L5 de tree-sitter ya existentes (`ast::symbols`), crates y dependencias entre crates resueltas desde los `Cargo.toml` (incluidas `workspace = true` y secciones `target`). El daemon (`crates/daemon/src/project_graph.rs`) construye el grafo en segundo plano al lanzar un agente y al abrir el chat (`chat_get`), con un trabajador por raíz y un semáforo global; refresca al cerrar cada fase del plan (`plan.rs`). El JSON se guarda en `.symphony/graphs/<hash>/graph.json` y el resumen (≤ 8 KB, con `redact`) se indexa en el índice ctx como `ctx://file/.symphony/graphs/<hash>/summary.md` y se inyecta al prompt del agente como referencia resumida. El watcher no poda los grafos del índice. Sin Python, sin dependencias nuevas fuera de STACK (`ignore`, `serde`, `tempfile`, `toml_edit` ya estaban en el workspace).
+- **Archivos clave:** `crates/context/src/graph.rs`, `crates/daemon/src/project_graph.rs`, `crates/daemon/src/executor.rs`, `crates/daemon/src/plan.rs`, `crates/daemon/src/server.rs`, `crates/daemon/src/watcher.rs`, `crates/daemon/src/runtime.rs`.
+- **Pruebas:** `cargo nextest run -p symphony-context -p symphony-daemon -E 'not(binary(daemon))'` → los 3 tests nuevos pasan (`grafo_extrae_modulos_simbolos_y_dependencias_locales`, `grafo_respeta_ignorados_limites_y_manifiestos_rotos`, `arranque_no_espera_al_grafo_y_refresco_actualiza_ctx`, este último con barrera real de semáforo, no medición de tiempos). 114 passed; 1 failed preexistente documentado de P18.S1 (`a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored`, falla igual sin este cambio; interferencia ambiental de `SYMPHONY_USER_HOME`, sin causa confirmada). `cargo clippy -p symphony-context -p symphony-daemon -- -D warnings` y `cargo fmt --check` verdes. No se corrió `cargo xtask check` (lo corre quien integra).
+- **Commit:** este commit (amend del wip de agente 92, ya verificado).
 
 ## P18.S5 · Init de proyecto actualizado — ✅
 - **Agente:** codex/gpt-5.x · **Fecha:** 2026-10-30.

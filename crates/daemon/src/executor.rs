@@ -417,6 +417,8 @@ impl Runtime {
     }
 
     async fn launch_inner(&self, l: Launch) -> Result<(), String> {
+        self.refresh_graph(&l.worktree, Some(l.project_id.to_string()));
+        let prompt = format!("{}{}", l.prompt, self.graph_context(&l.worktree));
         let main_workspace = self.watch_main_workspace(l.project_id).await;
         let mut env = vec![
             ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
@@ -460,7 +462,7 @@ impl Runtime {
         let spawn_req = SpawnRequest {
             worktree: l.worktree.clone(),
             model: l.cli_model.clone(),
-            prompt: l.prompt.clone(),
+            prompt: prompt.clone(),
             session_id: None,
             hook: self.hook.clone(),
             env,
@@ -516,7 +518,7 @@ impl Runtime {
                 }
                 other => other.map_err(|e| e.to_string()),
             };
-            let framed = l.adapter.frame_prompt(&l.prompt, &l.worktree);
+            let framed = l.adapter.frame_prompt(&prompt, &l.worktree);
             exited_early(proc.write_stdin(&l.adapter.encode_prompt(&framed)).await)?;
             if l.adapter.close_stdin_after_prompt() {
                 exited_early(proc.close_stdin().await)?;

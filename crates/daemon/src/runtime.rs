@@ -173,6 +173,7 @@ pub struct Inner {
     pub(crate) default_profile: Mutex<String>,
     /// File watchers, uno por proyecto (P09.S5).
     pub(crate) watchers: crate::watcher::Watchers,
+    pub(crate) graphs: crate::project_graph::Graphs,
     /// Lotes vivos (P11.5.S5): milestone → tope de simultáneos pedido. En memoria: tras reiniciar
     /// el daemon, un lote sigue con las dependencias que ya tiene, sin el ajuste por cuota.
     pub(crate) batches: Mutex<HashMap<MilestoneId, usize>>,
@@ -248,6 +249,7 @@ impl Runtime {
                 chat_switch_tokens: AtomicU64::new(0),
                 default_profile: Mutex::new("@code".into()),
                 watchers: crate::watcher::Watchers::default(),
+                graphs: crate::project_graph::Graphs::default(),
                 batches: Mutex::default(),
                 batch_fill: tokio::sync::Mutex::new(()),
                 scheduling: std::sync::OnceLock::new(),
