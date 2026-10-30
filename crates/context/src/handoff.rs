@@ -161,7 +161,17 @@ fn conversation_limits(mode: ContextMode) -> Option<(usize, usize)> {
 
 /// La conversación como texto: los mensajes más recientes que caben en el presupuesto
 /// (siempre al menos el último), con aviso de cuántos anteriores se omitieron.
-fn render_conversation(messages: &[ChatMessage], mode: ContextMode) -> (String, u8) {
+fn render_conversation(input: &HandoffInput, mode: ContextMode) -> (String, u8) {
+    let messages = &input.conversation;
+    let summarize = matches!(mode, ContextMode::Balanced | ContextMode::Aggressive);
+    let checkpoint = [
+        (input.objective.trim(), "[igual al Objetivo]"),
+        (
+            input.plan_tail.as_deref().unwrap_or_default().trim(),
+            "[igual al Último plan del executor anterior]",
+        ),
+    ];
+    let mut referenced = false;
     let (total, each) = match conversation_limits(mode) {
         Some((t, e)) => (Some(t), Some(e)),
         None => (None, None),
@@ -174,12 +184,21 @@ fn render_conversation(messages: &[ChatMessage], mode: ContextMode) -> (String, 
             Speaker::User => "Usuario",
             Speaker::Assistant => "Asistente",
         };
-        clipped |= is_clipped(m.text.trim(), each);
-        let line = format!("**{who}:** {}", clip(m.text.trim(), each, None));
+        let original = m.text.trim();
+        // Solo texto idéntico y completo en el checkpoint; nunca inferimos equivalencia.
+        let text = checkpoint
+            .iter()
+            .find(|(text, reference)| {
+                summarize && original == *text && reference.chars().count() < text.chars().count()
+            })
+            .map_or(original, |(_, reference)| *reference);
+        let line = format!("**{who}:** {}", clip(text, each, None));
         let len = line.chars().count();
         if total.is_some_and(|t| !kept.is_empty() && used + len > t) {
             break;
         }
+        clipped |= is_clipped(text, each);
+        referenced |= text != original;
         used += len;
         kept.push(line);
     }
@@ -192,6 +211,8 @@ fn render_conversation(messages: &[ChatMessage], mode: ContextMode) -> (String, 
     out.push_str(&kept.join("\n\n"));
     let f = if omitted > 0 || clipped {
         fidelity::CLIPPED
+    } else if referenced {
+        fidelity::COMPRESSED
     } else {
         fidelity::FULL
     };
@@ -365,7 +386,7 @@ pub fn assemble(input: &HandoffInput, mode: ContextMode) -> Handoff {
     let conversation = if input.conversation.is_empty() {
         String::new()
     } else {
-        let (rendered, fid) = render_conversation(&input.conversation, mode);
+        let (rendered, fid) = render_conversation(input, mode);
         items.push(Item {
             section: Section::Decisions,
             path: None,
@@ -589,6 +610,81 @@ mod tests {
                 text: format!("m{i} {}", "z".repeat(text_len)),
             })
             .collect()
+    }
+
+    #[test]
+    fn checkpoint_references_preserve_messages_and_complete_source() {
+        let mut input = fixed();
+        input.objective = "Conservar autorización y validar entradas. ".repeat(30);
+        input.plan_tail = Some("Decisión: mantener API; siguiente: probar límites. ".repeat(30));
+        input.conversation = vec![
+            ChatMessage {
+                speaker: Speaker::User,
+                text: input.objective.clone(),
+            },
+            ChatMessage {
+                speaker: Speaker::Assistant,
+                text: input.plan_tail.clone().unwrap(),
+            },
+            ChatMessage {
+                speaker: Speaker::User,
+                text: "No cambies la API.".into(),
+            },
+        ];
+        for mode in [ContextMode::Balanced, ContextMode::Aggressive] {
+            let (conversation, fid) = render_conversation(&input, mode);
+            assert_eq!(
+                conversation,
+                "**Usuario:** [igual al Objetivo]\n\n**Asistente:** [igual al Último plan del executor anterior]\n\n**Usuario:** No cambies la API."
+            );
+            assert_eq!(fid, fidelity::COMPRESSED);
+            let handoff = assemble(&input, mode);
+            assert_eq!(handoff.prompt.matches(input.objective.trim()).count(), 1);
+            assert_eq!(
+                handoff
+                    .prompt
+                    .matches(input.plan_tail.as_deref().unwrap().trim())
+                    .count(),
+                1
+            );
+            assert!(handoff.tokens_sent < assemble(&input, ContextMode::Safe).tokens_sent);
+            assert_eq!(handoff.tokens_sent, estimate_tokens(&handoff.prompt));
+            assert!(handoff.items.iter().map(|i| i.tokens).sum::<i64>() <= handoff.tokens_sent);
+        }
+        for mode in [ContextMode::Raw, ContextMode::Safe] {
+            let (conversation, fid) = render_conversation(&input, mode);
+            assert!(conversation.contains(input.objective.trim()));
+            assert!(conversation.contains(input.plan_tail.as_deref().unwrap().trim()));
+            assert_eq!(fid, fidelity::FULL);
+        }
+    }
+
+    #[test]
+    fn checkpoint_references_require_exact_matches_and_save_characters() {
+        let mut input = fixed();
+        input.objective = "Arreglar auth".into();
+        input.conversation = vec![
+            ChatMessage {
+                speaker: Speaker::User,
+                text: input.objective.clone(),
+            },
+            ChatMessage {
+                speaker: Speaker::Assistant,
+                text: format!("{}\nNo publicar.", input.plan_tail.as_deref().unwrap()),
+            },
+        ];
+        let (text, fid) = render_conversation(&input, ContextMode::Balanced);
+        assert!(text.contains("**Usuario:** Arreglar auth"));
+        assert!(text.contains(&input.conversation[1].text));
+        assert_eq!(fid, fidelity::FULL);
+        input.conversation.push(ChatMessage {
+            speaker: Speaker::User,
+            text: "ñ".repeat(2_000),
+        });
+        assert_eq!(
+            render_conversation(&input, ContextMode::Aggressive).1,
+            fidelity::CLIPPED
+        );
     }
 
     #[test]

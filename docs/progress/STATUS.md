@@ -116,6 +116,10 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 - P11.5.S9.2 · Handoff entre modelos a media tarea en los cuatro modos de contexto con proveedores reales (Claude/Codex): con OpenCode gratuito dio 429 en 3 corridas. Comando: `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_handoff` (ya existe para otros pares).
 
 ## Handoff para el siguiente agente
+
+### P18.S1 parte 2 · 2026-10-30 · codex · agent-090
+
+Recortes exactos implementados en `crates/context/src/handoff.rs`; dos tests nuevos pasaron, sin relajar tests existentes. Validación bloqueada: nextest de context/daemon excluyendo binary(daemon) terminó con 111 passed, 1 failed, 3 skipped y 99 no ejecutados por fail-fast. Falló `a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored` (esperaba mayúsculas, recibió original). Hipótesis documentada en LEARNINGS: `SYMPHONY_USER_HOME` heredado afecta plugins. Revisar ese entorno y obtener autorización para continuar tras gate fallido. Faltan clippy y benchmark posterior; el benchmark previo reprodujo la tabla existente. No se declara ahorro medido ni cierre del paso. Detalle en bitácora P18 y `docs/research/tokens-p18-base.md`.
 - **Vigente (2026-10-30):** cierre documental P17.S7 listo. Integrar el commit, correr el gate de fase con entorno de pruebas aislado y completar merge/tag; después P18.S1. No se ejecutó Cargo en esta sesión. Los apuntes de P13 que siguen son históricos y no son la próxima acción.
 - **Antes de tocar nada:** `git status` y `git log --oneline 441dfd6..HEAD` en `phase/p13-endurecimiento`. Hay 8 commits locales sin pushear desde la noche anterior.
 - **Agentes vivos:** #51 y #52 corren en Kimi y escriben en sus worktrees (`.symphony/worktrees/…/agent-05N`). No integrar a ciegas: revisar `git log` y el diff de cada uno.

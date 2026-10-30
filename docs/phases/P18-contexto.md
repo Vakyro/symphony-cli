@@ -65,6 +65,16 @@ Comando de baseline arriba; conteos completos en `docs/research/tokens-p18-base.
 - Comando: `cargo nextest run -p symphony-context p18_routing_handoff_token_baseline --run-ignored only --no-capture` → 1 passed.
 - Gates de fase pendientes al cierre de este borrador.
 
+## P18.S1 · Parte 2: recortes exactos — validación bloqueada
+
+- **Agente:** codex · **Fecha:** 2026-10-30.
+- **Cambio:** `crates/context/src/handoff.rs` sustituye mensajes idénticos al objetivo o plan completo por referencias más cortas en BALANCED/AGGRESSIVE. Preserva autor, orden y texto fuente; RAW/SAFE siguen completos. El router consume el tamaño resultante por `handoff_tokens`, sin necesitar otra implementación.
+- **Pruebas nuevas:** dos regresiones de coincidencia exacta, preservación, ahorro, fidelidad y mensajes cortos; ambas pasaron. No se modificaron tests ni snapshots existentes.
+- **Verificación:** con `SYMPHONY_LIVE` desactivado, benchmark previo 1 passed y tabla idéntica a la publicada; `cargo fmt -p symphony-context` y `git diff --check` correctos. `cargo nextest run -p symphony-context -p symphony-daemon -E 'not(binary(daemon))'`: 111 passed, 1 failed, 3 skipped; 99 no ejecutados por fail-fast.
+- **Fallo:** `runtime::a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored` esperaba transformación a mayúsculas y obtuvo el prompt original. LEARNINGS documenta interferencias de `SYMPHONY_USER_HOME` en plugins; es una hipótesis, no una causa confirmada en esta sesión.
+- **Parada:** se respeta AGENTS ante el gate fallido. Pendientes clippy, nueva medición posterior, comparación por ruta y cierre de S1. No se declara la meta del 40 % lograda. El benchmark fijo no contiene las repeticiones eliminadas, por lo que se espera ahorro cero en él; falta confirmarlo ejecutándolo.
+- **Alcance y decisiones:** no se cambian fixtures ni presupuestos para mejorar artificialmente la cifra, ni se omiten archivos por un checkpoint potencialmente atrasado. Sin dependencias nuevas. Se conserva la rama asignada por Symphony según DOGFOOD; no se ejecutó `cargo xtask check` ni pruebas live.
+
 ## Estado final
 Parte 1 establece una medición de handoff fija para cuatro cargas que representan rutas de routing y los cuatro modos del ensamblador. No se ha modificado comportamiento. Falta verificar los crates completos y completar la medición integrada de routing si se requiere antes de cerrar S1.
 
