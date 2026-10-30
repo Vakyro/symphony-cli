@@ -573,6 +573,8 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
+        // P17.S4: la TUI pregunta si puede animar (mascota del chat).
+        "config.ui" => config_ui(req, state),
         "merge.prepare" => merge_prepare(req, state).await,
         "merge.approve" | "merge.abort" | "merge.integrate" | "merge.resolve" => {
             merge_action(req, state).await
@@ -1560,6 +1562,31 @@ fn fact_list(req: Request, state: &State) -> Response {
         })
         .collect();
     Response::ok(req.id, json!({ "facts": list }))
+}
+
+/// `config.ui` (P17.S4): si la TUI puede animar la mascota del chat. Manda `[ui]` de la config
+/// del usuario (`~/.symphony/config.toml`); `.symphony/project.toml` la puede pisar por proyecto.
+fn config_ui(req: Request, state: &State) -> Response {
+    let root = project_root_param(&req.params);
+    let user = symphony_core::SymphonyHome::user_for(&state.home);
+    let config = match symphony_core::load_or_create(&user) {
+        Ok(c) => c,
+        Err(e) => return Response::error(req.id, "config_error", e.to_string()),
+    };
+    // El override vive en la raíz del repo (`.symphony/project.toml`); fuera de un repo
+    // no hay project.toml que aplique.
+    let repo_root = match symphony_git::Repo::discover(&root) {
+        Ok(repo) => repo.root().to_path_buf(),
+        Err(_) => return Response::ok(req.id, json!({ "animations": config.ui.animations })),
+    };
+    let project = match symphony_core::load_project(&repo_root) {
+        Ok(p) => p,
+        Err(e) => return Response::error(req.id, "config_error", e.to_string()),
+    };
+    let animations = project.map_or(config.ui.animations, |p| {
+        p.ui.map_or(config.ui.animations, |u| u.animations)
+    });
+    Response::ok(req.id, json!({ "animations": animations }))
 }
 
 /// Launch (FLOW §4.1): ¿es un repo?, ¿está inicializado?, ¿hay algo que recuperar?

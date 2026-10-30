@@ -220,7 +220,10 @@ fn agent_app(tab: Tab) -> App {
 #[test]
 fn view_01_launch_checking() {
     let mut app = App::new("/work/arete-mobile");
-    assert_eq!(methods(&app.start()), ["project.status", "providers.list"]);
+    assert_eq!(
+        methods(&app.start()),
+        ["project.status", "providers.list", "config.ui"]
+    );
     insta::assert_snapshot!(draw(&app));
 }
 
@@ -972,6 +975,82 @@ fn chat_app() -> App {
 #[test]
 fn view_00_chat_empty() {
     insta::assert_snapshot!(draw(&chat_app()));
+}
+
+/// P17.S4: chat con el agente trabajando (la mascota se ve) y las animaciones prendidas.
+fn chat_running_app() -> App {
+    let mut app = chat_app();
+    ok(&mut app, Req::UiConfig, json!({ "animations": true }));
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    let chat = app.chat.as_mut().unwrap();
+    chat.inspect = json!({ "agent": { "state": "RUNNING" } });
+    chat.messages = serde_json::from_value(json!([
+        { "role": "USER", "content": "corre los tests", "at": NOW - 6_000 },
+    ]))
+    .unwrap();
+    // Los snapshots no deben depender del entorno de quien corre los tests.
+    app.ui_animations = true;
+    app
+}
+
+/// La mascota (un mini piano de una octava con frases) cabe entera a 80 y a 160 columnas.
+#[test]
+fn view_00_chat_mascot_80_columns() {
+    insta::assert_snapshot!(terminal(&chat_running_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_00_chat_mascot_160_columns() {
+    insta::assert_snapshot!(terminal(&chat_running_app(), 160, 28).backend().to_string());
+}
+
+/// P17.S4: con `SYMPHONY_NO_ANIM` / `[ui] animations = false` / `NO_COLOR` no hay piano.
+#[test]
+fn chat_mascot_respects_the_kill_switches() {
+    use symphony_tui::mascot;
+
+    // Config apagada (`config.ui` → animations=false): nunca dibuja, sea cual sea el entorno.
+    let mut app = chat_running_app();
+    ok(&mut app, Req::UiConfig, json!({ "animations": false }));
+    assert!(!app.ui_animations);
+    let screen = draw(&app);
+    assert!(!screen.contains('█'), "{screen}");
+    assert!(!screen.contains('♪'), "{screen}");
+
+    // Config prendida: manda el entorno (es lo que leen SYMPHONY_NO_ANIM / NO_COLOR / TERM).
+    let env = mascot::env_ok();
+    ok(&mut app, Req::UiConfig, json!({ "animations": true }));
+    assert_eq!(app.ui_animations, env);
+
+    // Animaciones apagadas a mano (resultado de SYMPHONY_NO_ANIM): mismo chat, sin mascota.
+    app.ui_animations = false;
+    let screen = draw(&app);
+    assert!(!screen.contains('█'), "{screen}");
+    assert!(!screen.contains('♪'), "{screen}");
+
+    // Los tres interruptores de entorno apagan por separado.
+    assert!(mascot::env_allows(false, false, false));
+    assert!(!mascot::env_allows(true, false, false));
+    assert!(!mascot::env_allows(false, true, false));
+    assert!(!mascot::env_allows(false, false, true));
+    // La decisión pura: hacen falta config y entorno a la vez.
+    assert!(mascot::allowed(true, true));
+    assert!(!mascot::allowed(false, true));
+    assert!(!mascot::allowed(true, false));
+}
+
+/// La mascota solo vive en el chat principal: la vista de agente no la dibuja.
+#[test]
+fn mascot_only_shows_in_the_main_chat() {
+    let mut app = chat_running_app();
+    // Mismo agente «RUNNING», pero en la vista de agente (Esc → Home → Enter).
+    press(&mut app, KeyCode::Esc);
+    ok(&mut app, Req::Agents, agents());
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["agent.inspect"]);
+    ok(&mut app, Req::Inspect, inspect());
+    let screen = draw(&app);
+    assert!(!screen.contains('█'), "{screen}");
 }
 
 #[test]

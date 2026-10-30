@@ -5,6 +5,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
+use crate::mascot;
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +150,8 @@ pub enum Req {
     ChatMerge,
     ChatMergeReview,
     ChatMergeIntegrate,
+    /// `config.ui` (P17.S4): si la TUI puede animar (mascota del chat).
+    UiConfig,
     MilestoneCreate,
     /// Resolver la sugerencia de modelo pendiente (cambiar, mantener, no sugerir).
     SuggestionResolve,
@@ -661,6 +664,9 @@ pub struct App {
     pub quit: bool,
     /// Tema de la TUI (paleta de marca).
     pub theme: Theme,
+    /// La config y el entorno permiten animar la mascota del chat (P17.S4). La parte de
+    /// config se confirma con `config.ui` al arrancar; el entorno se lee una vez aquí.
+    pub ui_animations: bool,
     dirty: bool,
     inflight: usize,
     ticks: u64,
@@ -746,13 +752,14 @@ impl App {
             connected: true,
             quit: false,
             theme: Theme::from_env(),
+            ui_animations: mascot::env_ok(),
             dirty: false,
             inflight: 0,
             ticks: 0,
         }
     }
 
-    /// Las llamadas del arranque (Launch: proyecto y proveedores).
+    /// Las llamadas del arranque (Launch: proyecto, proveedores y config de UI).
     pub fn start(&mut self) -> Vec<Call> {
         let calls = vec![
             call(
@@ -761,6 +768,11 @@ impl App {
                 json!({ "project_root": self.cwd }),
             ),
             call(Req::Providers, "providers.list", json!({})),
+            call(
+                Req::UiConfig,
+                "config.ui",
+                json!({ "project_root": self.cwd }),
+            ),
         ];
         self.inflight += calls.len();
         calls
@@ -869,6 +881,11 @@ impl App {
     /// ¿Hay algo trabajando que se anima en pantalla? El loop redibuja rápido solo entonces.
     pub fn animating(&self) -> bool {
         self.screen == Screen::Chat && self.chat.as_ref().is_some_and(|c| c.state() == "RUNNING")
+    }
+
+    /// Ticks de 1 s desde que arrancó la app (la animación de la mascota avanza con él).
+    pub fn tick_count(&self) -> u64 {
+        self.ticks
     }
 
     fn view(&self) -> Option<&AgentView> {
@@ -1205,6 +1222,12 @@ impl App {
                     self.first_run.name = self.project_name().to_string();
                 }
             }
+            Req::UiConfig => {
+                // La config confirma o apaga; sin respuesta (error) queda el default del
+                // entorno: no es motivo de aviso.
+                let config_allows = v["animations"].as_bool().unwrap_or(true);
+                self.ui_animations = mascot::allowed(config_allows, mascot::env_ok());
+            }
             Req::ProjectInit => {
                 self.info("Proyecto inicializado.");
                 let next = if self.providers_needing_attention() > 0 {
@@ -1459,6 +1482,8 @@ impl App {
         }
         match (req, f.code.as_str()) {
             // FLOW §6: sin proveedores elegibles → Provider Setup sin perder la tarea.
+            // `config.ui` es opcional: si falla, la mascota queda según el entorno.
+            (Req::UiConfig, _) => Vec::new(),
             (Req::Create, "no_eligible_provider") => {
                 self.error(format!(
                     "{} Habilita un proveedor y vuelve: la tarea sigue escrita.",

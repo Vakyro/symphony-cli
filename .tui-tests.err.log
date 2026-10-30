@@ -1,0 +1,81 @@
+warning: linker stdout: Creando biblioteca C:\Users\Latitude 7390\Desktop\proyectos\symphony-cli\.symphony\cache\cargo-build\1\debug\deps\views-8c12e301f9fe7aef.lib y objeto C:\Users\Latitude 7390\Desktop\proyectos\symphony-cli\.symphony\cache\cargo-build\1\debug\deps\views-8c12e301f9fe7aef.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `symphony-tui` (test "views") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.30s
+────────────
+ Nextest run ID 6ebc012a-a2e5-4f3e-b04a-a8d9dde4e4bc with nextest profile: default
+    Starting 112 tests across 5 binaries
+        PASS [   0.021s] (  1/112) symphony-tui mascot::tests::allowed_needs_config_and_env
+        PASS [   0.030s] (  2/112) symphony-tui mascot::tests::piano_has_an_octave_and_a_phrase
+        PASS [   0.041s] (  3/112) symphony-tui mascot::tests::piano_is_deterministic_per_tick
+        PASS [   0.050s] (  4/112) symphony-tui mascot::tests::env_allows_blocks_each_kill_switch
+        PASS [   0.059s] (  5/112) symphony-tui mascot::tests::pressed_key_and_phrase_rotate
+        PASS [   0.066s] (  6/112) symphony-tui tests::a_lone_enter_is_not_a_paste_even_with_its_own_release
+        PASS [   0.074s] (  7/112) symphony-tui tests::mouse_events_after_enter_do_not_make_it_a_paste_but_are_kept
+        PASS [   0.084s] (  8/112) symphony-tui tests::enter_followed_by_more_keys_is_a_paste
+        PASS [   0.075s] (  9/112) symphony-tui::live live_journey_a_with_claude_code
+        PASS [   0.077s] ( 10/112) symphony-tui::live_cost live_cost_of_provider_switches
+        PASS [   0.078s] ( 11/112) symphony-tui::views a_footer_notice_expires_on_its_own
+        PASS [   0.081s] ( 12/112) symphony-tui::views a_pasted_newline_is_text_in_the_chat_and_enter_elsewhere
+        PASS [   0.033s] ( 13/112) symphony-tui::views chat_at_rest_does_not_animate
+        PASS [   0.083s] ( 14/112) symphony-tui::views an_unavailable_exact_model_is_never_substituted
+        PASS [   0.096s] ( 15/112) symphony-tui::views agent_conversation_wraps_long_messages_instead_of_cutting_them
+        FAIL [   0.069s] ( 16/112) symphony-tui::views bus_events_refresh_on_the_next_tick_without_piling_up
+  stdout ───
+
+    running 1 test
+    test bus_events_refresh_on_the_next_tick_without_piling_up ... FAILED
+
+    failures:
+
+    failures:
+        bus_events_refresh_on_the_next_tick_without_piling_up
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'bus_events_refresh_on_the_next_tick_without_piling_up' (7180) panicked at crates\tui\tests\views.rs:886:5:
+    assertion `left == right` failed
+      left: []
+     right: ["agent.list", "providers.list", "recovery.list", "system.get"]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 7 tests still running
+        PASS [   0.068s] ( 17/112) symphony-tui::views chat_first_message_creates_the_chat_then_sends_and_switches
+        PASS [   0.152s] ( 18/112) symphony-tui::views agent_conversation_scrolls_back_with_up_and_the_wheel_within_its_limits
+        PASS [   0.081s] ( 19/112) symphony-tui::views chat_long_input_keeps_the_tail_visible
+        PASS [   0.061s] ( 20/112) symphony-tui::views chat_merge_confirmation_does_not_survive_leaving_the_chat
+        PASS [   0.085s] ( 21/112) symphony-tui::views chat_mascot_respects_the_kill_switches
+        PASS [   0.066s] ( 22/112) symphony-tui::views chat_merge_needs_two_ctrl_g_after_an_approving_preflight
+        FAIL [   3.501s] ( 23/112) symphony-tui::daemon tui_drives_a_real_daemon_over_ipc_only
+  stdout ───
+
+    running 1 test
+    test tui_drives_a_real_daemon_over_ipc_only ... FAILED
+
+    failures:
+
+    failures:
+        tui_drives_a_real_daemon_over_ipc_only
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.43s
+
+  stderr ───
+    warning: linker stdout: Creando biblioteca C:\Users\Latitude 7390\Desktop\proyectos\symphony-cli\.symphony\cache\cargo-build\1\debug\deps\symphonyd.lib y objeto C:\Users\Latitude 7390\Desktop\proyectos\symphony-cli\.symphony\cache\cargo-build\1\debug\deps\symphonyd.exp
+      |
+      = note: `#[warn(linker_messages)]` on by default
+
+
+    thread 'tui_drives_a_real_daemon_over_ipc_only' (15860) panicked at crates\tui\tests\daemon.rs:41:6:
+    called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "El sistema no puede encontrar el archivo especificado." }
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   3.529s] 23/112 tests run: 21 passed, 2 failed, 0 skipped
+        FAIL [   0.069s] ( 16/112) symphony-tui::views bus_events_refresh_on_the_next_tick_without_piling_up
+        FAIL [   3.501s] ( 23/112) symphony-tui::daemon tui_drives_a_real_daemon_over_ipc_only
+warning: 89/112 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+error: test run failed

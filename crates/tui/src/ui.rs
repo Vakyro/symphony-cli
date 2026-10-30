@@ -14,6 +14,7 @@ use crate::app::{
     AgentView, App, Exec, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab,
     ago, state_phrase,
 };
+use crate::mascot;
 use crate::theme::Theme;
 
 thread_local! {
@@ -1167,7 +1168,9 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
         _ => {}
     }
     model.push(dim("   Rama: symphony/chat"));
-    let head = vec![
+    // P17.S4: la mascota (mini piano) solo en el chat principal y solo mientras trabaja.
+    let mascot_on = app.ui_animations && view.is_some_and(|v| v.state() == "RUNNING");
+    let mut head = vec![
         if view.is_some() {
             Line::from(vec![
                 bold("CHAT  "),
@@ -1179,8 +1182,11 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
         },
         Line::from(model),
     ];
+    if mascot_on {
+        head.extend(mascot::piano_lines(app.tick_count(), &current_theme()));
+    }
     let [top, body, input] = Layout::vertical([
-        Constraint::Length(4),
+        Constraint::Length(if mascot_on { 7 } else { 4 }),
         Constraint::Min(3),
         Constraint::Length(4),
     ])

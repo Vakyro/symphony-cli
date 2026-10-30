@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod io;
+pub mod mascot;
 pub mod theme;
 pub mod ui;
 

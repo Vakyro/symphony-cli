@@ -174,6 +174,22 @@ pub struct Config {
     pub chat: ChatConfig,
     pub plan: PlanConfig,
     pub harness: HarnessConfig,
+    pub ui: UiConfig,
+}
+
+/// `[ui]` (P17.S4): presentación de la TUI.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UiConfig {
+    /// Animaciones de la TUI (la mascota del chat, P17.S4). `SYMPHONY_NO_ANIM`, `NO_COLOR`
+    /// y una terminal sin animación (`TERM=dumb`) la apagan aunque esté en `true`.
+    pub animations: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self { animations: true }
+    }
 }
 
 /// `[harness]` (ADR-0019): con qué herramientas trabajan los modelos.
@@ -474,6 +490,12 @@ level = "info"
 # Apagado por defecto. Con un valor, si el último turno del chat llegó a esa cantidad de
 # tokens de contexto, el siguiente mensaje pasa al siguiente proveedor con el historial.
 # switch_at_tokens = 150000
+
+[ui]
+# Animaciones de la TUI: la mascota del chat (un mini piano que «piensa» mientras el
+# agente trabaja, P17.S4). Se apagan igual con la variable de entorno SYMPHONY_NO_ANIM,
+# con NO_COLOR o con una terminal sin animación (TERM=dumb).
+animations = true
 "#;
 
 impl Config {
@@ -593,6 +615,9 @@ pub struct ProjectConfig {
     /// Plugins instalados que este proyecto activa (P12, ADR-0015).
     #[serde(default)]
     pub plugins: Option<PluginsConfig>,
+    /// `[ui]` del proyecto: pisa la config global para este proyecto (P17.S4).
+    #[serde(default)]
+    pub ui: Option<UiConfig>,
 }
 
 /// `[plugins]` de `project.toml`: nombres de plugins ya instalados en `~/.symphony/plugins`.
@@ -948,6 +973,39 @@ mod tests {
         let config = load_or_create(&home).unwrap();
         assert_eq!(config.context.mode, ContextMode::Safe);
         assert_eq!(config.routing, RoutingConfig::default());
+    }
+
+    /// P17.S4: `[ui] animations` — la mascota del chat viene prendida y se apaga por config.
+    #[test]
+    fn ui_animations_default_true_and_overridable() {
+        let (_d, home) = home();
+        std::fs::create_dir_all(home.root()).unwrap();
+        assert!(load_or_create(&home).unwrap().ui.animations);
+
+        std::fs::write(home.config_path(), "[ui]\nanimations = false\n").unwrap();
+        assert!(!load_or_create(&home).unwrap().ui.animations);
+    }
+
+    /// P17.S4: `.symphony/project.toml` puede pisar `[ui]` del usuario.
+    #[test]
+    fn project_config_overrides_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".symphony")).unwrap();
+        std::fs::write(
+            project_config_path(root),
+            "[project]\nname = \"x\"\ndefault_branch = \"main\"\nkind = \"code\"\n\n[ui]\nanimations = false\n",
+        )
+        .unwrap();
+        let project = load_project(root).unwrap().unwrap();
+        assert_eq!(project.ui, Some(UiConfig { animations: false }));
+        // Sin la sección, no hay override: manda la config del usuario.
+        std::fs::write(
+            project_config_path(root),
+            "[project]\nname = \"x\"\ndefault_branch = \"main\"\nkind = \"code\"\n",
+        )
+        .unwrap();
+        assert_eq!(load_project(root).unwrap().unwrap().ui, None);
     }
 
     #[test]
