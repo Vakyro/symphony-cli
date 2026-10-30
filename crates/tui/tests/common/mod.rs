@@ -84,7 +84,7 @@ impl Driver {
                 .await
                 .unwrap_or_else(|_| panic!("timeout esperando: {what}\n{}", draw(&self.app)))
                 .expect("canal cerrado");
-            if matches!(msg, Msg::Event(_)) {
+            if matches!(msg, Msg::Event(..)) {
                 self.events += 1;
             }
             let calls = self.app.update(msg);

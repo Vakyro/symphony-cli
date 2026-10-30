@@ -115,6 +115,11 @@
 - **Verificado:** `cargo nextest run -p symphony-tui` → 101 ✅; `clippy --all-targets -D warnings` ✅;
   `cargo fmt --all -- --check` ✅.
 
+### P17.S5 · Procesos en la vista del agente (TUI) — ✅ (2026-10-29)
+- **Qué se hizo:** módulo `crates/tui/src/processes.rs` con lógica pura para listar comando, estado e inicio; nueva pestaña `Procesos`; llamada `agent.processes`; suscripción de solo lectura a `agent.process.output` y acumulación de salida en vivo, sin stdin ni shell interactiva.
+- **Pruebas:** 114 tests de `symphony-tui`, incluidos los tests puros del módulo; snapshots actualizados para 80 y 160 columnas. Clippy `-D warnings` en verde. No se ejecutaron tests del binario `symphony-daemon`.
+- **Archivos:** `app.rs`, `ui.rs`, `io.rs`, `lib.rs`, `processes.rs`, tests y snapshots.
+
 ### P17.S6 · IPC global y ramas de Git (daemon) — ✅
 - **Agente:** codex/gpt-6.1.
 - **Qué se hizo:** `usage.global` lee el registro `~/.symphony/symphony.db` y abre cada DB de proyecto en `SQLITE_OPEN_READ_ONLY`; agrega tokens del mes por proveedor/modelo y por fecha (`YYYY-MM-DD`). Proyectos sin DB o con esquema incompleto aparecen en `incomplete_projects`. `git.branches` devuelve ramas locales con current, ahead/behind respecto al upstream y si están integradas en HEAD; `git.checkout` cambia la rama; `git.delete_branch` nunca fuerza y devuelve `branch_not_merged` si no está integrada.

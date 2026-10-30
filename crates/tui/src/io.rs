@@ -57,14 +57,17 @@ pub async fn subscribe<S>(mut conn: Connection<S>, tx: mpsc::Sender<Msg>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let sub = Subscribe::new("tui-events", vec!["agent.event".into()]);
+    let sub = Subscribe::new(
+        "tui-events",
+        vec!["agent.event".into(), "agent.process.output".into()],
+    );
     if let Err(e) = conn.send(&Message::Subscribe(sub)).await {
         let _ = tx.send(Msg::Disconnected(e.to_string())).await;
         return;
     }
     loop {
         let msg = match conn.recv().await {
-            Ok(Some(Message::Event(e))) => Msg::Event(e.topic),
+            Ok(Some(Message::Event(e))) => Msg::Event(e.topic, e.payload),
             Ok(Some(Message::Response(r))) => match r.outcome {
                 Outcome::Ok(_) => continue,
                 Outcome::Error(e) => Msg::Disconnected(e.message),

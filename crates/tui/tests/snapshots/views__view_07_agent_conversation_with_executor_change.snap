@@ -9,7 +9,7 @@ expression: draw(&app)
 "│Executor:   codex/gpt-5 (run #2)                                                              │"
 "│Failover:   ANY   Workspace: symphony/8e4f/agent-001   Checkpoint: hace 14 s                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────┘"
-" 1 Resumen │ 2 Conversación │ 3 Actividad │ 4 Cambios │ 5 Historial                             "
+" 1 Resumen │ 2 Conversación │ 3 Actividad │ 4 Cambios │ 5 Historial │ 6 Procesos                "
 "┌ Conversación ────────────────────────────────────────────────────────────────────────────────┐"
 "│     tú │ Fix refresh token expiration                                                        │"
 "│                                                                                              │"

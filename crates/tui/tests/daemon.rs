@@ -135,7 +135,7 @@ async fn tui_drives_a_real_daemon_over_ipc_only() {
             .await
             .expect("no llegó ningún evento del bus")
             .unwrap();
-        if matches!(msg, Msg::Event(_)) {
+        if matches!(msg, Msg::Event(..)) {
             d.events += 1;
         }
         let calls = d.app.update(msg);

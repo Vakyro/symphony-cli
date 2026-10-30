@@ -73,15 +73,17 @@ pub enum Tab {
     Activity,
     Changes,
     History,
+    Processes,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Overview,
         Tab::Conversation,
         Tab::Activity,
         Tab::Changes,
         Tab::History,
+        Tab::Processes,
     ];
 
     pub fn title(self) -> &'static str {
@@ -91,6 +93,7 @@ impl Tab {
             Tab::Activity => "Actividad",
             Tab::Changes => "Cambios",
             Tab::History => "Historial",
+            Tab::Processes => "Procesos",
         }
     }
 
@@ -116,6 +119,7 @@ pub enum Req {
     Activity,
     Diff,
     History,
+    Processes,
     Control,
     Send,
     Switch,
@@ -205,7 +209,7 @@ pub enum Msg {
     Key(KeyEvent),
     Reply(Req, Result<Value, Failure>),
     /// Evento del bus (`agent.event`, `bus.lagged`).
-    Event(String),
+    Event(String, Value),
     /// Reloj (ms desde epoch): refresco y edades relativas.
     Tick(i64),
     Resize,
@@ -495,6 +499,8 @@ pub struct AgentView {
     pub activity: Vec<Value>,
     pub diff: String,
     pub history: Value,
+    pub processes: Value,
+    pub process_output: String,
     pub scroll: u16,
     /// Tope de `scroll` en Conversación (lo fija el render): ahí `scroll` cuenta desde el final.
     pub scroll_max: std::cell::Cell<u16>,
@@ -528,6 +534,8 @@ impl AgentView {
             activity: Vec::new(),
             diff: String::new(),
             history: Value::Null,
+            processes: Value::Null,
+            process_output: String::new(),
             scroll: 0,
             scroll_max: std::cell::Cell::new(u16::MAX),
             typing: false,
@@ -958,6 +966,7 @@ impl App {
             Tab::Activity => self.agent_call(Req::Activity, "agent.activity"),
             Tab::Changes => self.agent_call(Req::Diff, "agent.diff"),
             Tab::History => self.agent_call(Req::History, "agent.history"),
+            Tab::Processes => self.agent_call(Req::Processes, "agent.processes"),
         }
     }
 
@@ -1122,7 +1131,13 @@ impl App {
                 self.key(key)
             }
             Msg::Reply(req, result) => self.reply(req, result),
-            Msg::Event(_) => {
+            Msg::Event(topic, payload) => {
+                if topic == "agent.process.output"
+                    && let Some(a) = &mut self.agent
+                    && let Some(text) = payload["text"].as_str()
+                {
+                    a.process_output.push_str(text);
+                }
                 self.dirty = true;
                 Vec::new()
             }
@@ -1441,6 +1456,11 @@ impl App {
             Req::History => {
                 if let Some(a) = &mut self.agent {
                     a.history = v;
+                }
+            }
+            Req::Processes => {
+                if let Some(a) = &mut self.agent {
+                    a.processes = v;
                 }
             }
             Req::Control | Req::Switch => {
@@ -2253,7 +2273,7 @@ impl App {
                 let next = Tab::ALL[cycle(a.tab.index(), Tab::ALL.len(), false)];
                 switch_tab(a, next);
             }
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='6') => {
                 let i = usize::from(c as u8 - b'1');
                 switch_tab(a, Tab::ALL[i]);
             }

@@ -1613,7 +1613,28 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
         Tab::Activity => activity(app, f, body),
         Tab::Changes => changes(app, f, body),
         Tab::History => history(app, f, body),
+        Tab::Processes => processes(app, f, body),
     }
+}
+
+fn processes(app: &App, f: &mut Frame, area: Rect) {
+    let Some(a) = &app.agent else {
+        return;
+    };
+    let mut lines = vec![Line::raw("ESTADO      INICIO         COMANDO")];
+    lines.extend(
+        crate::processes::rows(&a.processes)
+            .into_iter()
+            .map(crate::processes::line),
+    );
+    lines.push(Line::raw(""));
+    lines.push(section("SALIDA EN VIVO (solo lectura)"));
+    lines.extend(
+        a.process_output
+            .lines()
+            .map(|line| Line::raw(line.to_string())),
+    );
+    paragraph(f, area, "Procesos", lines);
 }
 
 fn overview(app: &App, f: &mut Frame, area: Rect) {

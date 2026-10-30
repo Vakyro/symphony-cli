@@ -882,7 +882,7 @@ fn tabs_fetch_their_data() {
 #[test]
 fn bus_events_refresh_on_the_next_tick_without_piling_up() {
     let mut app = home_app();
-    app.update(Msg::Event("agent.event".into()));
+    app.update(Msg::Event("agent.event".into(), serde_json::Value::Null));
     let calls = app.update(Msg::Tick(NOW));
     assert_eq!(
         methods(&calls),
@@ -894,7 +894,7 @@ fn bus_events_refresh_on_the_next_tick_without_piling_up() {
         ]
     );
     // Con respuestas pendientes no se piden más.
-    app.update(Msg::Event("agent.event".into()));
+    app.update(Msg::Event("agent.event".into(), serde_json::Value::Null));
     assert!(app.update(Msg::Tick(NOW)).is_empty());
     ok(&mut app, Req::Agents, agents());
     ok(&mut app, Req::Providers, providers());
