@@ -166,7 +166,7 @@ impl ClaudeAdapter {
                 spec = spec
                     .args(["--tools", ""])
                     .arg("--append-system-prompt")
-                    .arg(symphony_adapter_common::HARNESS_PROMPT);
+                    .arg(symphony_adapter_common::harness_prompt(req));
             }
         }
         for m in symphony_adapter_common::extra_mcp(req) {

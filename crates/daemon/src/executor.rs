@@ -444,6 +444,16 @@ impl Runtime {
                 });
         if harness == symphony_core::HarnessMode::Symphony {
             env.push((symphony_adapter_common::ENV_HARNESS.into(), "1".into()));
+            let style =
+                symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&self.home))
+                    .map(|c| c.harness.style)
+                    .unwrap_or_default();
+            if style == symphony_core::HarnessStyle::Normal {
+                env.push((
+                    symphony_adapter_common::ENV_HARNESS_STYLE.into(),
+                    "normal".into(),
+                ));
+            }
         }
         env.extend(crate::gc::cargo_env(&self.home, &l.worktree));
         env.extend(self.shared_env(&l).await);

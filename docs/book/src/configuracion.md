@@ -53,6 +53,7 @@ min_tasks_per_phase = 2
 # "symphony" (por defecto: read, write, edit, glob, grep, shell y context_* vía MCP)
 # o "native" (las herramientas propias de cada CLI).
 mode = "symphony"
+style = "flintstone" # flintstone (por defecto) o normal
 
 [context]
 # Cuánto se comprime el contexto en un handoff: RAW · SAFE · BALANCED · AGGRESSIVE
@@ -108,6 +109,7 @@ level = "info"
   - `min_tasks_per_phase`: mínimo de tareas por fase (por defecto `2`; debe ser > 0).
 - **`[harness]` (ADR-0019):**
   - `mode`: `"symphony"` (por defecto) expone las mismas herramientas mediante `symphony mcp serve` y desactiva las nativas en Claude Code, Codex, OpenCode, Copilot y Kimi; `"native"` deja a cada CLI con sus herramientas propias. Antigravity no soporta el harness por invocación y siempre usa sus herramientas nativas.
+  - `style`: `"flintstone"` (por defecto) pide respuestas comprimidas y directas, sin relleno. Usa `"normal"` para apagarlo.
 - **`[context]`:**
   - `mode`: nivel de compresión de los handoffs entre proveedores o fases: `"RAW"`, `"SAFE"`, `"BALANCED"` (por defecto) o `"AGGRESSIVE"`. El original completo siempre queda guardado en el almacén de objetos y es recuperable mediante URIs `ctx://` (`symphony context raw <uri>`).
 - **`[providers]` y `[providers.limits.<id>]`:**

@@ -11,6 +11,14 @@
 
 ## Pasos
 
+### P18.S2 · Flintstone por defecto — ✅
+- **Agente:** codex/gpt-5.x · **Fecha:** 2026-10-30.
+- **Qué se hizo:** el prompt del harness añade por defecto instrucciones Flintstone (respuestas comprimidas y directas, sin relleno). `[harness] style = "normal"` lo apaga; `mode` y los proveedores no cambian.
+- **Archivos clave:** `crates/core/src/config.rs`, `crates/daemon/src/executor.rs`, `crates/adapters/common/src/lib.rs`, `crates/adapters/claude/src/lib.rs`, `docs/book/src/configuracion.md`.
+- **Medición:** el sufijo Flintstone mide 152 caracteres, aproximadamente 38 tokens con la estimación fija de 4 caracteres/token usada por P18.S1. Es el coste del prompt inicial; no se añadió al benchmark de handoff porque ese benchmark no construye prompts de proveedor.
+- **Pruebas:** `env -u SYMPHONY_LIVE cargo nextest run -p symphony-adapter-common` (13 passed); `env -u SYMPHONY_LIVE cargo clippy -p symphony-adapter-common -- -D warnings` (verde).
+- **Commit:** `9d9ba05`.
+
 ### P18.S1 · Medición inicial de routing y handoff — 🟡
 - **Agente:** codex/gpt-6.1 · **Fecha:** 2026-10-30.
 - **Qué se hizo:** se añadió una prueba de benchmark ignorada, reproducible y sin red/cuota en el ensamblador puro de contexto. Mide cargas fijas que representan rotación por contexto, fallback por cuota, cambio manual y ruta limitada al mismo proveedor en RAW/SAFE/BALANCED/AGGRESSIVE. No cambia runtime.

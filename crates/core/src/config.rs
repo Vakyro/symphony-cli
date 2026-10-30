@@ -197,6 +197,15 @@ impl Default for UiConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct HarnessConfig {
     pub mode: HarnessMode,
+    pub style: HarnessStyle,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HarnessStyle {
+    #[default]
+    Flintstone,
+    Normal,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -459,6 +468,8 @@ min_tasks_per_phase = 2
 # "symphony" (las de Symphony: leer, escribir, editar, buscar y shell, iguales para todos;
 # se apagan las nativas de los CLIs que lo permiten).
 mode = "symphony"
+# Estilo de respuestas del agente: "flintstone" (por defecto) o "normal".
+style = "flintstone"
 
 [context]
 # Cuánto se comprime el contexto en un handoff: RAW · SAFE · BALANCED · AGGRESSIVE
