@@ -914,6 +914,7 @@ fn agent_list(req: Request, state: &State) -> Response {
                         "task_title": a.task_title,
                         "provider_id": a.provider_id,
                         "model_id": a.model_id,
+                        "branch": a.branch,
                     })
                 })
                 .collect();
@@ -2064,7 +2065,7 @@ fn git_delete_branch(req: Request, state: &State) -> Response {
         Ok(request) if !request.branch.is_empty() => request,
         _ => return Response::error(req.id, "invalid_params", "falta `branch`"),
     };
-    match git_repo(state).and_then(|repo| repo.delete_branch(&request.branch, false)) {
+    match git_repo(state).and_then(|repo| repo.delete_branch(&request.branch, request.force)) {
         Ok(()) => Response::ok(
             req.id,
             json!(GitDeleteBranchResult {

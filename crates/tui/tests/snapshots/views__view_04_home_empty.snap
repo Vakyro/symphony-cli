@@ -29,4 +29,4 @@ expression: draw(&app)
 "│                                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────┘"
 "modelo —  |  cuota —  |  rama main                                                              "
-" ↑↓ elegir · Enter abrir · n nuevo · t tareas · m milestones · s sistema · p proveedores · r rec"
+" ↑↓ elegir · Enter abrir · n nuevo · t tareas · m milestones · a avance · b ramas · g status glo"

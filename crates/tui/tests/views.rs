@@ -93,12 +93,15 @@ fn providers() -> Value {
 fn agents() -> Value {
     json!({ "agents": [
         { "agent_id": "01AGENT1", "number": 1, "state": "RUNNING", "state_reason": null,
-          "task_code": "T-1", "task_title": "Supabase authentication", "provider_id": "anthropic", "model_id": "claude/sonnet" },
+          "task_code": "T-1", "task_title": "Supabase authentication", "provider_id": "anthropic", "model_id": "claude/sonnet",
+          "branch": "symphony/8e4f/agent-001" },
         { "agent_id": "01AGENT2", "number": 2, "state": "WAITING_PROVIDER",
           "state_reason": "Codex agotó su cuota y el failover está desactivado.",
-          "task_code": "T-2", "task_title": "Responsive modals", "provider_id": null, "model_id": null },
+          "task_code": "T-2", "task_title": "Responsive modals", "provider_id": null, "model_id": null,
+          "branch": "symphony/9a2c/agent-002" },
         { "agent_id": "01AGENT3", "number": 3, "state": "COMPLETED", "state_reason": null,
-          "task_code": "T-3", "task_title": "Integration tests", "provider_id": null, "model_id": null },
+          "task_code": "T-3", "task_title": "Integration tests", "provider_id": null, "model_id": null,
+          "branch": "symphony/1bd1/agent-003" },
     ]})
 }
 
@@ -2166,4 +2169,188 @@ fn chat_streams_partial_response_without_duplicates() {
     assert!(screen.contains("Voy a mirar el bug"), "{screen}");
     assert!(!screen.contains("▍"), "{screen}");
     assert_eq!(screen.matches("Voy a mirar el bug").count(), 1, "{screen}");
+}
+
+// --- P17.S6 · vistas avanzadas (avance, ramas, status global) ------------------
+
+fn branches_json() -> Value {
+    json!({ "branches": [
+        { "name": "main", "current": true, "ahead": 0, "behind": 0, "merged": true },
+        { "name": "phase/p17-tui", "current": false, "ahead": 3, "behind": 1, "merged": false },
+        { "name": "symphony/8e4f/agent-001", "current": false, "ahead": 0, "behind": 0, "merged": true },
+    ]})
+}
+
+fn branches_app() -> App {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('b'));
+    assert_eq!(app.screen, Screen::Branches);
+    assert_eq!(methods(&calls), ["git.branches"]);
+    ok(&mut app, Req::GitBranches, branches_json());
+    app
+}
+
+fn global_json() -> Value {
+    json!({
+        "providers": [
+            { "provider_id": "anthropic", "model_id": "claude/sonnet", "tokens": 400_000 },
+            { "provider_id": "openai", "model_id": "codex/gpt-5", "tokens": 40_000 },
+            { "provider_id": "anthropic", "model_id": "claude/opus", "tokens": 10_000 },
+        ],
+        "daily": [
+            { "date": "2026-10-01", "tokens": 30_000 },
+            { "date": "2026-10-02", "tokens": 100_000 },
+            { "date": "2026-10-05", "tokens": 10_000 },
+        ],
+        "incomplete_projects": ["/work/legacy-app"],
+    })
+}
+
+fn global_app() -> App {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.screen, Screen::GlobalStatus);
+    assert_eq!(methods(&calls), ["usage.global"]);
+    ok(&mut app, Req::UsageGlobal, global_json());
+    app
+}
+
+fn plan_app() -> App {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.screen, Screen::Plan);
+    assert_eq!(methods(&calls), ["agent.list", "task.list"]);
+    ok(&mut app, Req::Agents, agents());
+    ok(&mut app, Req::Tasks, tasks_json());
+    app
+}
+
+#[test]
+fn view_36_plan_progress_80_columns() {
+    insta::assert_snapshot!(terminal(&plan_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_36_plan_progress_160_columns() {
+    insta::assert_snapshot!(terminal(&plan_app(), 160, 28).backend().to_string());
+}
+
+#[test]
+fn the_plan_view_opens_the_selected_agent() {
+    let mut app = plan_app();
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen, Screen::Agent);
+    assert_eq!(methods(&calls), ["agent.inspect"]);
+}
+
+#[test]
+fn view_37_branches_80_columns() {
+    insta::assert_snapshot!(terminal(&branches_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_37_branches_160_columns() {
+    insta::assert_snapshot!(terminal(&branches_app(), 160, 28).backend().to_string());
+}
+
+#[test]
+fn checking_out_a_branch_does_not_ask_for_confirmation() {
+    let mut app = branches_app();
+    press(&mut app, KeyCode::Down); // phase/p17-tui
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["git.checkout"]);
+    assert_eq!(calls[0].params, json!({ "branch": "phase/p17-tui" }));
+    // La rama actual no se puede volver a pedir.
+    press(&mut app, KeyCode::Up); // main (actual)
+    let calls = press(&mut app, KeyCode::Enter);
+    assert!(calls.is_empty());
+    // Tras el checkout la barra de estado se relee junto con las ramas.
+    let calls = ok(
+        &mut app,
+        Req::GitCheckout,
+        json!({ "branch": "phase/p17-tui" }),
+    );
+    assert_eq!(methods(&calls), ["project.status", "git.branches"]);
+}
+
+#[test]
+fn deleting_a_branch_always_asks_and_deletes_without_force() {
+    let mut app = branches_app();
+    press(&mut app, KeyCode::Down); // phase/p17-tui
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert!(calls.is_empty(), "la primera d solo pregunta");
+    assert!(app.branch_pending.is_some());
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert_eq!(methods(&calls), ["git.delete_branch"]);
+    assert_eq!(
+        calls[0].params,
+        json!({ "branch": "phase/p17-tui", "force": false })
+    );
+}
+
+#[test]
+fn deleting_the_current_branch_is_rejected() {
+    let mut app = branches_app(); // main está seleccionada y es la actual
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert!(calls.is_empty());
+    assert!(app.branch_pending.is_none());
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert!(calls.is_empty(), "ni la segunda d borra la rama en uso");
+}
+
+#[test]
+fn a_not_merged_branch_needs_a_second_confirmation_to_force() {
+    let mut app = branches_app();
+    press(&mut app, KeyCode::Down); // phase/p17-tui (sin integrar)
+    press(&mut app, KeyCode::Char('d')); // pregunta
+    press(&mut app, KeyCode::Char('d')); // intenta sin forzar
+    let calls = app.update(Msg::Reply(
+        Req::GitDelete,
+        Err(Failure {
+            code: "branch_not_merged".into(),
+            message: "phase/p17-tui".into(),
+        }),
+    ));
+    assert!(calls.is_empty());
+    assert!(
+        app.branch_pending.is_some(),
+        "queda armada la segunda confirmación"
+    );
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert_eq!(methods(&calls), ["git.delete_branch"]);
+    assert_eq!(
+        calls[0].params,
+        json!({ "branch": "phase/p17-tui", "force": true })
+    );
+}
+
+#[test]
+fn any_other_key_cancels_the_pending_delete() {
+    let mut app = branches_app();
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('d')); // pregunta
+    press(&mut app, KeyCode::Char('x')); // otra tecla: caduca
+    assert!(app.branch_pending.is_none());
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert!(calls.is_empty(), "vuelve a preguntar, no borra");
+    assert!(app.branch_pending.is_some());
+}
+
+#[test]
+fn view_38_global_status_80_columns() {
+    insta::assert_snapshot!(terminal(&global_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_38_global_status_160_columns() {
+    insta::assert_snapshot!(terminal(&global_app(), 160, 28).backend().to_string());
+}
+
+#[test]
+fn the_global_view_reloads_with_r() {
+    let mut app = global_app();
+    let calls = press(&mut app, KeyCode::Char('r'));
+    assert_eq!(methods(&calls), ["usage.global"]);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::Home);
 }

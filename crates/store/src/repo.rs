@@ -1674,6 +1674,8 @@ pub struct HomeRow {
     /// `None` si el agente no tiene executor vivo (p. ej. `WAITING_PROVIDER`).
     pub provider_id: Option<String>,
     pub model_id: Option<String>,
+    /// Rama del worktree del agente (`None` si todavía no tiene worktree).
+    pub branch: Option<String>,
 }
 
 /// Home (DB §5): agentes activos + run abierto + modelo + task. `provider_health`
@@ -1695,19 +1697,21 @@ pub fn list_agents_rows(
     };
     let sql = if project_id.is_some() {
         format!(
-            "SELECT a.id, a.number, a.state, a.state_reason, t.code, t.title, r.provider_id, r.model_id
+            "SELECT a.id, a.number, a.state, a.state_reason, t.code, t.title, r.provider_id, r.model_id, w.branch
              FROM agents a
              JOIN tasks t ON t.id = a.task_id
              LEFT JOIN agent_runs r ON r.agent_id = a.id AND r.ended_at IS NULL
+             LEFT JOIN worktrees w ON w.id = a.worktree_id
              WHERE a.project_id = ?1 AND a.archived_at IS NULL {filter_active}
              ORDER BY a.number"
         )
     } else {
         format!(
-            "SELECT a.id, a.number, a.state, a.state_reason, t.code, t.title, r.provider_id, r.model_id
+            "SELECT a.id, a.number, a.state, a.state_reason, t.code, t.title, r.provider_id, r.model_id, w.branch
              FROM agents a
              JOIN tasks t ON t.id = a.task_id
              LEFT JOIN agent_runs r ON r.agent_id = a.id AND r.ended_at IS NULL
+             LEFT JOIN worktrees w ON w.id = a.worktree_id
              WHERE a.archived_at IS NULL {filter_active}
              ORDER BY a.number"
         )
@@ -1723,6 +1727,7 @@ pub fn list_agents_rows(
             task_title: r.get(5)?,
             provider_id: r.get(6)?,
             model_id: r.get(7)?,
+            branch: r.get(8)?,
         })
     };
     let rows: Vec<HomeRow> = if let Some(proj) = project_id {

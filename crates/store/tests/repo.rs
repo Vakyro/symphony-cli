@@ -396,6 +396,22 @@ fn home_rows_show_current_model_per_live_agent() {
     let t2 = task(&f);
     let a2 = agent(&f, t2);
     repo::open_run(&f.conn, RunId::new(), a1, "anthropic", "claude/sonnet", 10).unwrap();
+    let wt = WorktreeId::new();
+    repo::insert_worktree(
+        &f.conn,
+        &repo::Worktree {
+            id: wt,
+            project_id: f.project,
+            path: "/wt/a1".into(),
+            branch: "symphony/abcd-001".into(),
+            base_ref: "main".into(),
+            deps_strategy: "NONE".into(),
+            status: "READY".into(),
+        },
+        10,
+    )
+    .unwrap();
+    repo::set_agent_worktree(&f.conn, a1, wt, 11).unwrap();
     let rows = repo::home_rows(&f.conn, f.project).unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(
@@ -404,6 +420,8 @@ fn home_rows_show_current_model_per_live_agent() {
     );
     assert_eq!((rows[1].agent_id, rows[1].model_id.as_deref()), (a2, None));
     assert_eq!(rows[0].task_code, "T-1");
+    assert_eq!(rows[0].branch.as_deref(), Some("symphony/abcd-001"));
+    assert_eq!(rows[1].branch, None);
     repo::set_agent_state(&f.conn, a2, AgentState::Cancelled, None, 11).unwrap();
     assert_eq!(repo::home_rows(&f.conn, f.project).unwrap().len(), 1);
 }

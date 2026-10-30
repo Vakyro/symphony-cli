@@ -117,6 +117,9 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::Tasks => "· Tareas",
         Screen::TaskDetail => "· Tarea",
         Screen::Milestones => "· Milestones",
+        Screen::Plan => "· Avance del plan",
+        Screen::Branches => "· Ramas",
+        Screen::GlobalStatus => "· Status global",
         Screen::System => "· Sistema",
         Screen::PerformanceProfile => "· Perfil de rendimiento",
         Screen::Validation => "· Validación",
@@ -155,6 +158,9 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::Tasks => tasks(app, f, body),
         Screen::TaskDetail => task_detail(app, f, body),
         Screen::Milestones => milestones(app, f, body),
+        Screen::Plan => plan(app, f, body),
+        Screen::Branches => branches(app, f, body),
+        Screen::GlobalStatus => global_status(app, f, body),
         Screen::System => system(app, f, body),
         Screen::PerformanceProfile => performance_profile(app, f, body),
         Screen::Validation => validation(app, f, body),
@@ -184,7 +190,7 @@ fn hints(app: &App) -> &'static str {
             "Enter enviar · Tab modelo · ^Y copiar · ^E exportar · ^R revisar · ^G a main · F2 ratón · Esc"
         }
         Screen::Home => {
-            "↑↓ elegir · Enter abrir · n nuevo · t tareas · m milestones · s sistema · p proveedores · r recovery · : comando · Esc chat · q salir"
+            "↑↓ elegir · Enter abrir · n nuevo · t tareas · m milestones · a avance · b ramas · g status global · s sistema · p proveedores · r recovery · : comando · Esc chat · q salir"
         }
         Screen::NewAgent => "↑↓ campo · ←→ opción · Enter siguiente/crear · Esc cancelar",
         Screen::ModelPicker => "↑↓ elegir · Enter usar · Esc volver",
@@ -211,6 +217,11 @@ fn hints(app: &App) -> &'static str {
         Screen::Milestones => {
             "↑↓ elegir · n nuevo · a aprobar · c pedir cambios · h retener · r releer · Esc volver"
         }
+        Screen::Plan => "↑↓ elegir · Enter/a agente · r releer · Esc volver",
+        Screen::Branches => {
+            "↑↓ elegir · Enter cambiar · d borrar (d otra vez confirma) · r releer · Esc volver"
+        }
+        Screen::GlobalStatus => "r releer · Esc volver",
         Screen::System => "p cambiar perfil · r releer · Esc volver",
         Screen::PerformanceProfile => "↑↓ elegir · Enter aplicar · Esc volver",
         Screen::Validation => {
@@ -2418,6 +2429,205 @@ fn milestones(app: &App, f: &mut Frame, area: Rect) {
     paragraph(f, area, "Milestones", lines);
 }
 
+/// 36 Avance del plan (P17.S6): % del plan, fases (milestones) y agentes con rama y tarea.
+fn plan(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let (done, total) = crate::plan::progress(&app.tasks);
+    let pct = crate::plan::percent(done, total);
+    lines.push(Line::from(vec![
+        bold(format!("Plan {done}/{total} ({pct}%) ")),
+        colored(
+            crate::plan::bar(done, total, 24),
+            if pct == 100 {
+                current_theme().ok
+            } else {
+                current_theme().accent
+            },
+        ),
+    ]));
+    lines.push(Line::raw(""));
+
+    lines.push(section("FASES"));
+    let phases = crate::plan::phases(&app.tasks);
+    if phases.is_empty() {
+        lines.push(Line::from(dim(
+            "  Sin tareas todavía: crea un agente con n desde Inicio.",
+        )));
+    }
+    for (name, d, t) in phases {
+        lines.push(Line::from(vec![
+            Span::raw(format!("  {:<24} ", truncate(&name, 24))),
+            colored(crate::plan::bar(d, t, 12), current_theme().accent),
+            Span::raw(format!("  {d}/{t}")),
+        ]));
+    }
+    lines.push(Line::raw(""));
+
+    lines.push(section("AGENTES"));
+    if app.agents.is_empty() {
+        lines.push(Line::from(dim("  Ninguno todavía.")));
+    }
+    for (i, a) in app.agents.iter().enumerate() {
+        let state = text(&a["state"]);
+        let branch = a["branch"].as_str().unwrap_or("—");
+        let task = format!(
+            "{} {}",
+            text(&a["task_code"]),
+            truncate(&text(&a["task_title"]), 28)
+        );
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            Span::raw(format!("#{} ", num(&a["number"]))),
+            colored(format!("{state:<18} "), state_color(&state)),
+            colored(
+                format!("{:<28} ", truncate(branch, 28)),
+                current_theme().accent,
+            ),
+            Span::raw(task),
+        ]));
+    }
+    paragraph(f, area, "Avance del plan", lines);
+}
+
+/// 37 Ramas (P17.S6): estado de cada rama; Enter cambia sin confirmar y `d` borra
+/// con confirmación (la frase del pie es la pregunta, como con `x` al detener).
+fn branches(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.branches.is_empty() {
+        lines.push(Line::from(dim("Cargando ramas…")));
+        return paragraph(f, area, "Ramas", lines);
+    }
+    lines.push(Line::from(dim(format!(
+        "  {:<30} {:<14} {}",
+        "RAMA", "ESTADO", "DIVERGENCIA"
+    ))));
+    for (i, b) in app.branches.iter().enumerate() {
+        let name = text(&b["name"]);
+        let (label, _current) = crate::branches::state_label(b);
+        let color = if b["current"].as_bool().unwrap_or(false) {
+            current_theme().ok
+        } else if label == "sin integrar" {
+            current_theme().warn
+        } else {
+            current_theme().muted
+        };
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            Span::raw(if b["current"].as_bool().unwrap_or(false) {
+                format!("* {name:<28} ")
+            } else {
+                format!("  {name:<28} ")
+            }),
+            colored(format!("{label:<14} "), color),
+            dim(crate::branches::divergence(b)),
+        ]));
+    }
+    paragraph(f, area, "Ramas", lines);
+}
+
+/// 38 Status global (P17.S6): uso del mes por modelo/proveedor entre proyectos
+/// (ADR-0022: solo lectura de cada `.symphony`) y el heatmap mensual de tokens.
+fn global_status(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(g) = app.global.as_ref() else {
+        lines.push(Line::from(dim("Cargando…")));
+        return paragraph(f, area, "Status global", lines);
+    };
+    let mut models: Vec<Value> = g["providers"].as_array().cloned().unwrap_or_default();
+    models.sort_by(|a, b| {
+        b["tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .cmp(&a["tokens"].as_u64().unwrap_or(0))
+    });
+    let month_tokens: u64 = models
+        .iter()
+        .map(|m| m["tokens"].as_u64().unwrap_or(0))
+        .sum();
+    lines.push(section("USO DEL MES POR MODELO (ENTRE PROYECTOS)"));
+    if models.is_empty() {
+        lines.push(Line::from(dim("  Sin uso registrado este mes.")));
+    }
+    for m in models {
+        let tokens = m["tokens"].as_u64().unwrap_or(0);
+        lines.push(Line::from(vec![
+            Span::raw(format!(
+                "  {:<12} {:<24} ",
+                truncate(&text(&m["provider_id"]), 12),
+                truncate(&text(&m["model_id"]), 24)
+            )),
+            colored(format!("{tokens:>10} tok"), current_theme().accent),
+        ]));
+    }
+    lines.push(Line::from(dim(format!(
+        "  Total del mes: {month_tokens} tokens"
+    ))));
+    lines.push(Line::raw(""));
+
+    lines.push(section("CALOR MENSUAL"));
+    let daily_map: std::collections::BTreeMap<String, u64> = g["daily"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| {
+            d["date"]
+                .as_str()
+                .map(|date| (date.to_string(), d["tokens"].as_u64().unwrap_or(0)))
+        })
+        .collect();
+    let dates: Vec<String> = daily_map.keys().cloned().collect();
+    match crate::heatmap::month_of(&dates) {
+        Some((year, month)) => {
+            lines.push(Line::from(dim(format!(
+                "  {}",
+                crate::heatmap::month_label(year, month)
+            ))));
+            let weeks = crate::heatmap::month_grid(year, month, &daily_map);
+            for row in 0..7 {
+                let mut spans = vec![dim(format!("  {} ", crate::heatmap::WEEKDAYS[row]))];
+                for week in &weeks {
+                    match &week.0[row] {
+                        Some(day) => {
+                            let color = match day.level {
+                                0 => current_theme().muted,
+                                4 => current_theme().brand,
+                                _ => current_theme().accent,
+                            };
+                            spans.push(colored(
+                                format!("{} ", crate::heatmap::glyph(day.level)),
+                                color,
+                            ));
+                        }
+                        None => spans.push(Span::raw("  ")),
+                    }
+                }
+                lines.push(Line::from(spans));
+            }
+            lines.push(Line::from(dim(
+                "  · sin uso · ░ ▒ ▓ █ de menos a más tokens (el pico del mes marca el máximo)",
+            )));
+        }
+        None => lines.push(Line::from(dim(
+            "  Sin uso este mes: el calor aparece cuando hay tokens registrados.",
+        ))),
+    }
+
+    let incomplete: Vec<String> = g["incomplete_projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.as_str().map(str::to_string))
+        .collect();
+    if !incomplete.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("SIN DATOS COMPLETOS"));
+        for p in incomplete {
+            lines.push(Line::from(dim(format!("  {p}: sin base de uso legible."))));
+        }
+    }
+    paragraph(f, area, "Status global", lines);
+}
+
 fn bar(pct: f64, width: usize) -> String {
     let filled = ((pct.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
     format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
@@ -2829,6 +3039,9 @@ fn help(app: &App, f: &mut Frame, area: Rect) {
         ("n", "nuevo agente"),
         ("t", "tareas"),
         ("m", "milestones"),
+        ("a", "avance del plan"),
+        ("b", "ramas de git"),
+        ("g", "status global"),
         ("s", "sistema"),
         ("p", "proveedores"),
         ("r", "recovery"),

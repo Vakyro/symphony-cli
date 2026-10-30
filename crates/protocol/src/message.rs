@@ -42,6 +42,9 @@ pub struct GitBranch {
 #[serde(deny_unknown_fields)]
 pub struct GitBranchRequest {
     pub branch: String,
+    /// Segunda confirmación de la TUI para borrar una rama no integrada (P17.S6).
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

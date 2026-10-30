@@ -5,6 +5,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
+use crate::branches::{DeleteAction, PendingDelete, delete_key};
 use crate::mascot;
 use crate::theme::Theme;
 
@@ -50,6 +51,12 @@ pub enum Screen {
     TaskDetail,
     /// 17 Milestone Review.
     Milestones,
+    /// 36 Avance del plan: % del plan, fases y agentes con su rama y tarea (P17.S6).
+    Plan,
+    /// 37 Ramas de git: estado, cambiar sin confirmar y borrar con confirmación (P17.S6).
+    Branches,
+    /// 38 Status global: uso del mes por modelo/proveedor entre proyectos y heatmap (P17.S6).
+    GlobalStatus,
     /// 18 System / Resources.
     System,
     /// 19 Performance Profile.
@@ -159,6 +166,12 @@ pub enum Req {
     MilestoneCreate,
     /// Resolver la sugerencia de modelo pendiente (cambiar, mantener, no sugerir).
     SuggestionResolve,
+    /// 37: `git.branches`, `git.checkout` y `git.delete_branch` (P17.S6).
+    GitBranches,
+    GitCheckout,
+    GitDelete,
+    /// 38: `usage.global` entre proyectos (ADR-0022, P17.S6).
+    UsageGlobal,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -623,6 +636,12 @@ pub struct App {
     pub task_deps: Option<Value>,
     /// 17: `milestone.list`.
     pub milestones: Vec<Value>,
+    /// 36 (P17.S6): la confirmación de borrado de rama en curso, si hay.
+    pub branch_pending: Option<PendingDelete>,
+    /// 37 (P17.S6): `git.branches`.
+    pub branches: Vec<Value>,
+    /// 38 (P17.S6): `usage.global` (status global entre proyectos, ADR-0022).
+    pub global: Option<Value>,
     /// 18 y Home: `system.get`.
     pub system: Option<Value>,
     /// 19: perfil resaltado (índice en `PERFORMANCE`).
@@ -728,6 +747,9 @@ impl App {
             detail_task: None,
             task_deps: None,
             milestones: Vec::new(),
+            branch_pending: None,
+            branches: Vec::new(),
+            global: None,
             system: None,
             perf_sel: 1,
             flow_agent: None,
@@ -848,6 +870,8 @@ impl App {
             Screen::SharedMcp => self.shared_mcp.len(),
             Screen::Tasks => self.tasks.len(),
             Screen::Milestones => self.milestones.len(),
+            Screen::Plan => self.agents.len(),
+            Screen::Branches => self.branches.len(),
             Screen::PerformanceProfile => PERFORMANCE.len(),
             _ => 0,
         }
@@ -1050,6 +1074,16 @@ impl App {
                 "milestone.list",
                 json!({ "project_root": self.root() }),
             )),
+            Screen::Plan => {
+                calls.extend(self.agents_call());
+                calls.push(call(
+                    Req::Tasks,
+                    "task.list",
+                    json!({ "project_root": self.root() }),
+                ));
+            }
+            Screen::Branches => calls.push(call(Req::GitBranches, "git.branches", json!({}))),
+            Screen::GlobalStatus => calls.push(call(Req::UsageGlobal, "usage.global", json!({}))),
             Screen::System | Screen::PerformanceProfile => {
                 calls.push(call(Req::System, "system.get", json!({})));
             }
@@ -1104,6 +1138,8 @@ impl App {
     fn go(&mut self, screen: Screen) -> Vec<Call> {
         self.screen = screen;
         self.selected = 0;
+        // La confirmación de borrado solo vive en la vista de ramas (P17.S6).
+        self.branch_pending = None;
         self.refresh()
     }
 
@@ -1327,6 +1363,23 @@ impl App {
             }
             Req::TaskDeps => self.task_deps = Some(v.clone()),
             Req::Milestones => self.milestones = list("milestones"),
+            Req::GitBranches => self.branches = list("branches"),
+            Req::GitCheckout => {
+                let branch = v["branch"].as_str().unwrap_or("?").to_string();
+                self.branch_pending = None;
+                self.info(format!("Cambiado a la rama `{branch}`."));
+                // La rama nueva sale también en la barra de estado (project.status).
+                let mut calls = vec![self.status_call()];
+                calls.extend(self.refresh());
+                return calls;
+            }
+            Req::GitDelete => {
+                let branch = v["branch"].as_str().unwrap_or("?").to_string();
+                self.branch_pending = None;
+                self.info(format!("Rama `{branch}` borrada."));
+                return self.refresh();
+            }
+            Req::UsageGlobal => self.global = Some(v.clone()),
             Req::System => self.system = Some(v.clone()),
             Req::MilestoneDecide => {
                 self.info("Decisión registrada.");
@@ -1519,6 +1572,16 @@ impl App {
                 ));
                 Vec::new()
             }
+            // 37 (P17.S6): la rama no está integrada; sin una segunda confirmación no se fuerza.
+            (Req::GitDelete, "branch_not_merged") => {
+                let branch = f.message.clone();
+                self.branch_pending = Some(PendingDelete {
+                    branch: branch.clone(),
+                    step: crate::branches::DeleteStep::Force,
+                });
+                self.error(crate::branches::not_merged_notice(&branch));
+                Vec::new()
+            }
             _ => {
                 self.error(f.message);
                 Vec::new()
@@ -1584,6 +1647,9 @@ impl App {
             Screen::Tasks => self.tasks_key(key),
             Screen::TaskDetail => self.task_detail_key(key),
             Screen::Milestones => self.milestones_key(key),
+            Screen::Plan => self.plan_key(key),
+            Screen::Branches => self.branches_key(key),
+            Screen::GlobalStatus => self.global_key(key),
             Screen::System => self.system_key(key),
             Screen::PerformanceProfile => self.perf_key(key),
             Screen::Validation => self.validation_key(key),
@@ -1963,6 +2029,9 @@ impl App {
             KeyCode::Char('t') => self.go(Screen::Tasks),
             KeyCode::Char('m') => self.go(Screen::Milestones),
             KeyCode::Char('s') => self.go(Screen::System),
+            KeyCode::Char('a') => self.go(Screen::Plan),
+            KeyCode::Char('b') => self.go(Screen::Branches),
+            KeyCode::Char('g') => self.go(Screen::GlobalStatus),
             KeyCode::Char(':') | KeyCode::Char('/') => {
                 self.command = Some(String::new());
                 Vec::new()
@@ -2047,6 +2116,9 @@ impl App {
             "skills" => self.go(Screen::SharedSkills),
             "mcp" => self.go(Screen::SharedMcp),
             "stats" | "usage" => self.go(Screen::Stats),
+            "avance" | "plan" => self.go(Screen::Plan),
+            "branches" | "ramas" => self.go(Screen::Branches),
+            "global" | "status" => self.go(Screen::GlobalStatus),
             "tasks" | "task" => self.go(Screen::Tasks),
             "milestones" | "milestone" => self.go(Screen::Milestones),
             "system" | "sys" => self.go(Screen::System),
@@ -2058,7 +2130,7 @@ impl App {
             "" => Vec::new(),
             other => {
                 self.error(format!(
-                    "Comando desconocido `{other}`. Usa: spawn [modelo] <tarea> · agent <n> · new · providers · recovery · tasks · milestones · system · profile · context · skills · mcp · stats · quit"
+                    "Comando desconocido `{other}`. Usa: spawn [modelo] <tarea> · agent <n> · new · providers · recovery · tasks · milestones · avance · branches · global · system · profile · context · skills · mcp · stats · quit"
                 ));
                 Vec::new()
             }
@@ -2610,6 +2682,102 @@ impl App {
             KeyCode::Char('a') => decide("approve"),
             KeyCode::Char('c') => decide("request_changes"),
             KeyCode::Char('h') => decide("hold"),
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 36 (P17.S6): avance del plan. Enter abre el agente elegido.
+    fn plan_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if self.move_selection(key.code) {
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('a') => {
+                match self
+                    .agents
+                    .get(self.selected)
+                    .and_then(|a| a["agent_id"].as_str().map(str::to_string))
+                {
+                    Some(id) => self.open_agent(id),
+                    None => Vec::new(),
+                }
+            }
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 37 (P17.S6): ramas de git. Enter cambia sin confirmar; `d` borra siempre con
+    /// confirmación y solo fuerza (con una segunda confirmación) si git avisa de que
+    /// la rama no está integrada.
+    fn branches_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if self.move_selection(key.code) {
+            return Vec::new();
+        }
+        let pending = self.branch_pending.take();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            KeyCode::Enter => {
+                let Some((name, current)) = self.branches.get(self.selected).map(|b| {
+                    (
+                        b["name"].as_str().map(str::to_string),
+                        b["current"].as_bool().unwrap_or(false),
+                    )
+                }) else {
+                    return Vec::new();
+                };
+                let Some(name) = name else {
+                    return Vec::new();
+                };
+                if current {
+                    self.info(format!("Ya estás en `{name}`."));
+                    return Vec::new();
+                }
+                self.info(format!("Cambiando a `{name}`…"));
+                vec![call(
+                    Req::GitCheckout,
+                    "git.checkout",
+                    json!({ "branch": name }),
+                )]
+            }
+            KeyCode::Char('d') => {
+                let (name, current) = match self.branches.get(self.selected) {
+                    Some(b) => (
+                        b["name"].as_str().map(str::to_string),
+                        b["current"].as_bool().unwrap_or(false),
+                    ),
+                    None => (None, false),
+                };
+                match delete_key(pending.as_ref(), name.as_deref(), current) {
+                    DeleteAction::Ask(p) => {
+                        self.branch_pending = Some(p.clone());
+                        self.info(crate::branches::confirm_notice(&p.branch));
+                        Vec::new()
+                    }
+                    DeleteAction::Delete { branch, force } => vec![call(
+                        Req::GitDelete,
+                        "git.delete_branch",
+                        json!({ "branch": branch, "force": force }),
+                    )],
+                    DeleteAction::Cancel => {
+                        if current {
+                            self.error("No se puede borrar la rama en uso: cambia a otra antes.");
+                        }
+                        Vec::new()
+                    }
+                }
+            }
+            KeyCode::Char('r') => self.refresh(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 38 (P17.S6): status global entre proyectos; solo lectura (ADR-0022).
+    fn global_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
             KeyCode::Char('r') => self.refresh(),
             KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
             _ => Vec::new(),
