@@ -40,6 +40,17 @@ fn expected_stream(line: &str) -> Vec<&'static str> {
     }
 }
 
+/// `true` si `parse_standard_hook` emitiría `ToolOutput` para este hook (P17.S5):
+/// `tool_response` presente y con representación de texto no vacía.
+fn bash_response_non_empty(v: &Value) -> bool {
+    v.get("tool_response")
+        .map(|r| match r {
+            Value::String(s) => !s.is_empty(),
+            other => !other.is_null(),
+        })
+        .unwrap_or(false)
+}
+
 fn expected_hook(v: &Value) -> Vec<&'static str> {
     match (
         v["hook_event_name"].as_str().unwrap(),
@@ -49,7 +60,13 @@ fn expected_hook(v: &Value) -> Vec<&'static str> {
         ("UserPromptSubmit", _) => vec!["TurnStarted"],
         ("PreToolUse", "Bash") => vec!["CommandRequested"],
         ("PreToolUse", _) => vec!["ToolRequested"],
-        ("PostToolUse", "Bash") => vec!["CommandFinished"],
+        ("PostToolUse", "Bash") => {
+            let mut want = vec!["CommandFinished"];
+            if bash_response_non_empty(v) {
+                want.push("ToolOutput");
+            }
+            want
+        }
         ("PostToolUse", "apply_patch") => vec!["ToolFinished", "FileModified"],
         ("PostToolUse", _) => vec!["ToolFinished"],
         ("Stop", _) => vec!["TurnFinished"],

@@ -124,6 +124,21 @@ pub fn parse_standard_hook(payload: &Value) -> Vec<AgentEvent> {
                 ok,
                 exit_code,
             }];
+            if kind == ToolKind::Command
+                && let Some(text) = payload
+                    .get("tool_response")
+                    .map(|v| match v {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .filter(|s| !s.is_empty())
+            {
+                out.push(AgentEvent::ToolOutput {
+                    tool_use_id: str_field(payload, "tool_use_id"),
+                    tool: tool.clone(),
+                    text,
+                });
+            }
             if ok && kind == ToolKind::Edit {
                 out.push(AgentEvent::FileModified { tool, path });
             }
@@ -194,6 +209,12 @@ mod tests {
         assert_eq!(
             names(&json!({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash"})),
             ["CommandFinished"]
+        );
+        let output = parse_standard_hook(
+            &json!({"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"u1","tool_response":{"stdout":"hello","exit_code":0}}),
+        );
+        assert!(
+            matches!(output.last(), Some(AgentEvent::ToolOutput { tool_use_id: Some(id), text, .. }) if id == "u1" && text.contains("hello"))
         );
         assert_eq!(
             names(&json!({"hook_event_name": "Stop", "last_assistant_message": "listo"})),

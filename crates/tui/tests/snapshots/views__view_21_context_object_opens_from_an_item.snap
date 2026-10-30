@@ -27,6 +27,6 @@ expression: draw(&app)
 "│                                                                                              │"
 "│                                                                                              │"
 "│                                                                                              │"
-"│                                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────┘"
+"modelo codex/gpt-5  |  cuota —  |  rama main                                                    "
 " ↑↓ PgUp/PgDn desplazar · Esc volver al resumen                                                 "

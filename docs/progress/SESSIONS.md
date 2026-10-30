@@ -2,6 +2,10 @@
 
 Registro append-only. Una línea al inicio y un resumen al cierre de cada sesión.
 
+- 2026-10-30 · codex/gpt-6 · inicio y cierre · P17.S7: retomado el worktree limpio del executor anterior; cierre documental de P17 con commits de S4/S5/S6/S8 comprobados en `git log main..HEAD`, decisiones de S5 y ADR-0022/0023, STATUS con siguiente P18.S1 y aprendizajes del dogfooding. Solo los cuatro documentos pedidos; sin Cargo ni live. Gate, merge y tag de fase a cargo del integrador.
+
+- 2026-10-29 · codex/gpt-6 · inicio y pausa · P17.S5 daemon replanteada: implementación parcial de salida observada y vistas IPC; nextest del daemon falló dos veces en tests no relacionados, con LEAK en una cancelación. Pendiente completar IPC L2 con fake-agent y clippy.
+
 - 2026-09-24 06:00 · claude-code/opus-5.5 · P00.S0 · prevalidación (herramientas existentes + Test D manual) · sin repo todavía
 - 2026-09-24 08:00 · claude-code/opus-5.5 · inicio · P00.S1 · rama phase/p00-bootstrap
 - 2026-09-24 · claude-code/opus-5.5 · cierre · P00 completa (S1–S9), tag p00-done. Rust + workload C++ de VS instalados. Pendiente: remoto para la CI y permiso para P01
@@ -68,3 +72,5 @@ Registro append-only. Una línea al inicio y un resumen al cierre de cada sesió
 - 2026-10-27 · claude-code/sonnet-5.5 (orquestación) · cierre de jornada · P13.S3 ✅ soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB). Integrados #48 (guardia de aislamiento; corregido falso positivo con URLs), #49 (freno de lo pesado con disco bajo) y #50 (permisos, `depends_on`, `usage.get`). Pendientes: #51 y #52 en Kimi, gate completo, test inestable, merge a `main` y `p13-done`. Backlog de Leo en `docs/research/backlog-2026-10-27.md` y PLAN § P17–P20. Detalle: `docs/progress/CIERRE-2026-10-27.md`. Nada pusheado.
 - 2026-10-28 · opencode-go/kimi-k3.1-pro · inicio · P13.S8 · rama symphony/dsnpbcg6/agent-054 · corrección de los 8 tests leaky de symphony-cli en Windows
 - 2026-10-28 · opencode-go/deepseek-v4-pro (orquestación con Symphony) · cierre · P13.S8 ✅ · Integrados #51 (watchdog condicionado al run observado + colisiones de worktree) y #52 (plazos IPC de `hook.emit`), verificado ADR-0021, arreglado el test inestable del watcher (diagnóstico de #53) y la clase entera de `LEAK` del CLI (`DaemonGuard` en `common`; #54 murió a los 59 min con `NO_HEARTBEAT` dejando el trabajo sin commitear, se revisó y se completó). Gate `cargo xtask check` 733 tests 0 leaky, `cargo deny check` ✅, merge `--no-ff` a `main` y tag `p13-done`. Lecciones nuevas en `LEARNINGS.md` (§ Orquestación con Symphony).
+2026-10-29 · codex/gpt-6.1 · inicio · P17.S6 daemon: IPC tipado de uso global y ramas de Git.
+2026-10-29 · codex/gpt-6.1 · cierre · P17.S6 daemon: IPC tipado `usage.global`, `git.branches`, `git.checkout`, `git.delete_branch`; filtros propios y clippy verdes, sin tests del binario daemon. Commit del paso.

@@ -3,7 +3,14 @@
 //! llega un mensaje (tecla, respuesta, evento o tick), nunca en un loop ocupado.
 
 pub mod app;
+pub mod branches;
+pub mod heatmap;
 pub mod io;
+pub mod markers;
+pub mod mascot;
+pub mod plan;
+pub mod processes;
+pub mod theme;
 pub mod ui;
 
 use std::collections::VecDeque;

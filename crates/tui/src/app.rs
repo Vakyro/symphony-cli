@@ -5,6 +5,10 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
+use crate::branches::{DeleteAction, PendingDelete, delete_key};
+use crate::mascot;
+use crate::theme::Theme;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     /// 00 Chat: la vista inicial (P07.5.S7).
@@ -47,6 +51,12 @@ pub enum Screen {
     TaskDetail,
     /// 17 Milestone Review.
     Milestones,
+    /// 36 Avance del plan: % del plan, fases y agentes con su rama y tarea (P17.S6).
+    Plan,
+    /// 37 Ramas de git: estado, cambiar sin confirmar y borrar con confirmación (P17.S6).
+    Branches,
+    /// 38 Status global: uso del mes por modelo/proveedor entre proyectos y heatmap (P17.S6).
+    GlobalStatus,
     /// 18 System / Resources.
     System,
     /// 19 Performance Profile.
@@ -59,6 +69,8 @@ pub enum Screen {
     ConflictReview,
     /// 29 Review Agent Result.
     ReviewResult,
+    /// Ayuda: atajos y versión (S3b).
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,15 +80,17 @@ pub enum Tab {
     Activity,
     Changes,
     History,
+    Processes,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Overview,
         Tab::Conversation,
         Tab::Activity,
         Tab::Changes,
         Tab::History,
+        Tab::Processes,
     ];
 
     pub fn title(self) -> &'static str {
@@ -86,6 +100,7 @@ impl Tab {
             Tab::Activity => "Actividad",
             Tab::Changes => "Cambios",
             Tab::History => "Historial",
+            Tab::Processes => "Procesos",
         }
     }
 
@@ -111,6 +126,7 @@ pub enum Req {
     Activity,
     Diff,
     History,
+    Processes,
     Control,
     Send,
     Switch,
@@ -145,9 +161,17 @@ pub enum Req {
     ChatMerge,
     ChatMergeReview,
     ChatMergeIntegrate,
+    /// `config.ui` (P17.S4): si la TUI puede animar (mascota del chat).
+    UiConfig,
     MilestoneCreate,
     /// Resolver la sugerencia de modelo pendiente (cambiar, mantener, no sugerir).
     SuggestionResolve,
+    /// 37: `git.branches`, `git.checkout` y `git.delete_branch` (P17.S6).
+    GitBranches,
+    GitCheckout,
+    GitDelete,
+    /// 38: `usage.global` entre proyectos (ADR-0022, P17.S6).
+    UsageGlobal,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,7 +222,7 @@ pub enum Msg {
     Key(KeyEvent),
     Reply(Req, Result<Value, Failure>),
     /// Evento del bus (`agent.event`, `bus.lagged`).
-    Event(String),
+    Event(String, Value),
     /// Reloj (ms desde epoch): refresco y edades relativas.
     Tick(i64),
     Resize,
@@ -226,6 +250,191 @@ pub fn ctx_file_uri(path: &str) -> String {
         .replace('?', "%3F")
         .replace('#', "%23");
     format!("ctx://file/{esc}")
+}
+
+/// Lee avisos locales del repo (`.symphony/anuncios.md`), sin red. Devuelve hasta 8 líneas no vacías.
+fn load_local_news(cwd: &str) -> Vec<String> {
+    let path = std::path::Path::new(cwd)
+        .join(".symphony")
+        .join("anuncios.md");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(8)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Versión del binario (del crate), para el recuadro de ayuda.
+pub const SYMPHONY_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Líneas sumadas y quitadas de un archivo en el diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStat {
+    pub path: String,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// Líneas `+N −M` por archivo de un diff unificado (`git diff`), en el orden en que salen.
+///
+/// `+++`/`---` son cabecera solo mientras no haya empezado el hunk (`@@`); dentro del hunk son
+/// contenido como cualquier otra línea: quitar un comentario `-- x` de un `.sql` se ve `--- x`
+/// en el diff y también cuenta.
+pub fn diff_stats(diff: &str) -> Vec<FileStat> {
+    let lines: Vec<&str> = diff.lines().collect();
+    let mut stats: Vec<FileStat> = Vec::new();
+    let mut current: Option<(String, usize, usize)> = None;
+    let mut plus_minus: Option<String> = None;
+    let mut in_hunk = false;
+
+    for line in &lines {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            record(&mut stats, current.take());
+            plus_minus = None;
+            in_hunk = false;
+            current = git_diff_path(rest).map(|p| (p, 0, 0));
+            continue;
+        }
+
+        if let Some(body) = line
+            .strip_prefix("Binary files ")
+            .and_then(|b| b.strip_suffix(" differ"))
+        {
+            if current.is_none() {
+                current = binary_path(body).map(|p| (p, 0, 0));
+            }
+            continue;
+        }
+
+        if line.starts_with("@@") {
+            in_hunk = true;
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("--- ")
+            && !in_hunk
+        {
+            // Cabecera del lado `a/`; solo sirve si el `+++` es `/dev/null` (borrado).
+            if current.is_none() {
+                plus_minus = side_path(rest, "a/");
+            }
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("+++ ")
+            && !in_hunk
+        {
+            if current.is_none() {
+                current = side_path(rest, "b/")
+                    .or_else(|| plus_minus.take())
+                    .map(|p| (p, 0, 0));
+            }
+            continue;
+        }
+
+        if line.starts_with('\\') {
+            continue;
+        }
+
+        if let Some((_, added, removed)) = current.as_mut() {
+            if line.starts_with('+') {
+                *added += 1;
+            } else if line.starts_with('-') {
+                *removed += 1;
+            }
+        }
+    }
+
+    record(&mut stats, current.take());
+    stats
+}
+
+/// Suma un archivo al resumen; si el path ya salió (dos bloques del mismo archivo), acumula.
+fn record(stats: &mut Vec<FileStat>, file: Option<(String, usize, usize)>) {
+    let Some((path, added, removed)) = file else {
+        return;
+    };
+    match stats.iter_mut().find(|f| f.path == path) {
+        Some(f) => {
+            f.added += added;
+            f.removed += removed;
+        }
+        None => stats.push(FileStat {
+            path,
+            added,
+            removed,
+        }),
+    }
+}
+
+/// Ruta del lado `b/` de `diff --git a/x b/y`. Git entrecomilla y escapa las rutas raras, y en
+/// ese caso la forma es `"a/x" "b/y"`.
+fn git_diff_path(rest: &str) -> Option<String> {
+    let raw = match rest.rfind("\" \"") {
+        Some(i) => rest[i + 2..].trim(),
+        None => &rest[rest.rfind(" b/")? + 1..],
+    };
+    side_path(raw, "b/")
+}
+
+/// Ruta del lado `b/` de un `Binary files a/x and b/y differ` (0/0 en el resumen).
+fn binary_path(body: &str) -> Option<String> {
+    let i = body.rfind(" and ")?;
+    side_path(body[i + 5..].trim(), "b/")
+}
+
+/// Ruta de una cabecera `--- a/x` / `+++ b/x`: quita el prefijo del lado y las comillas de git.
+/// `/dev/null` no es un archivo, así que devuelve `None` y el nombre sale del otro lado.
+fn side_path(raw: &str, prefix: &str) -> Option<String> {
+    let raw = raw.split('\t').next().unwrap_or(raw).trim();
+    let path = unquote(raw);
+    let path = path.strip_prefix(prefix).unwrap_or(&path);
+    (!path.is_empty() && path != "/dev/null").then(|| path.to_string())
+}
+
+/// Deshace el entrecomillado C de git: `"b/caf\303\251"` → `b/café`.
+fn unquote(path: &str) -> String {
+    let Some(inner) = path.strip_prefix('"').and_then(|p| p.strip_suffix('"')) else {
+        return path.to_string();
+    };
+    let bytes = inner.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let Some(&c) = bytes.get(i) else { break };
+        match c {
+            b'n' => out.push(b'\n'),
+            b't' => out.push(b'\t'),
+            b'r' => out.push(b'\r'),
+            b'0'..=b'7' => {
+                // Octal de hasta tres cifras (`\303\251` = é en UTF-8).
+                let mut v = 0u32;
+                let mut n = 0;
+                while n < 3
+                    && let Some(&d @ b'0'..=b'7') = bytes.get(i)
+                {
+                    v = v * 8 + u32::from(d - b'0');
+                    i += 1;
+                    n += 1;
+                }
+                out.push(v as u8);
+                continue;
+            }
+            _ => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Cuánto dura un aviso del pie (ms).
@@ -303,6 +512,8 @@ pub struct AgentView {
     pub activity: Vec<Value>,
     pub diff: String,
     pub history: Value,
+    pub processes: Value,
+    pub process_output: String,
     pub scroll: u16,
     /// Tope de `scroll` en Conversación (lo fija el render): ahí `scroll` cuenta desde el final.
     pub scroll_max: std::cell::Cell<u16>,
@@ -336,6 +547,8 @@ impl AgentView {
             activity: Vec::new(),
             diff: String::new(),
             history: Value::Null,
+            processes: Value::Null,
+            process_output: String::new(),
             scroll: 0,
             scroll_max: std::cell::Cell::new(u16::MAX),
             typing: false,
@@ -380,8 +593,12 @@ pub const POLL_TICKS: u64 = 15;
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
     pub screen: Screen,
+    /// Pantalla desde la que se abrió la ayuda, para volver con Esc.
+    pub help_from: Option<Screen>,
     /// Carpeta desde la que se abrió Symphony.
     pub cwd: String,
+    /// Avisos del repo local (`.symphony/anuncios.md`), leídos una sola vez al arrancar.
+    pub news: Vec<String>,
     /// Respuesta de `project.status` (`Null` hasta que llega).
     pub project: Value,
     pub providers: Vec<Value>,
@@ -419,6 +636,12 @@ pub struct App {
     pub task_deps: Option<Value>,
     /// 17: `milestone.list`.
     pub milestones: Vec<Value>,
+    /// 36 (P17.S6): la confirmación de borrado de rama en curso, si hay.
+    pub branch_pending: Option<PendingDelete>,
+    /// 37 (P17.S6): `git.branches`.
+    pub branches: Vec<Value>,
+    /// 38 (P17.S6): `usage.global` (status global entre proyectos, ADR-0022).
+    pub global: Option<Value>,
     /// 18 y Home: `system.get`.
     pub system: Option<Value>,
     /// 19: perfil resaltado (índice en `PERFORMANCE`).
@@ -466,6 +689,11 @@ pub struct App {
     pub now_ms: i64,
     pub connected: bool,
     pub quit: bool,
+    /// Tema de la TUI (paleta de marca).
+    pub theme: Theme,
+    /// La config y el entorno permiten animar la mascota del chat (P17.S4). La parte de
+    /// config se confirma con `config.ui` al arrancar; el entorno se lee una vez aquí.
+    pub ui_animations: bool,
     dirty: bool,
     inflight: usize,
     ticks: u64,
@@ -489,9 +717,13 @@ fn cycle(i: usize, len: usize, forward: bool) -> usize {
 
 impl App {
     pub fn new(cwd: impl Into<String>) -> Self {
+        let cwd = cwd.into();
+        let news = load_local_news(&cwd);
         Self {
             screen: Screen::Launch,
-            cwd: cwd.into(),
+            help_from: None,
+            cwd,
+            news,
             project: Value::Null,
             providers: Vec::new(),
             agents: Vec::new(),
@@ -515,6 +747,9 @@ impl App {
             detail_task: None,
             task_deps: None,
             milestones: Vec::new(),
+            branch_pending: None,
+            branches: Vec::new(),
+            global: None,
             system: None,
             perf_sel: 1,
             flow_agent: None,
@@ -546,13 +781,15 @@ impl App {
             now_ms: 0,
             connected: true,
             quit: false,
+            theme: Theme::from_env(),
+            ui_animations: mascot::env_ok(),
             dirty: false,
             inflight: 0,
             ticks: 0,
         }
     }
 
-    /// Las llamadas del arranque (Launch: proyecto y proveedores).
+    /// Las llamadas del arranque (Launch: proyecto, proveedores y config de UI).
     pub fn start(&mut self) -> Vec<Call> {
         let calls = vec![
             call(
@@ -561,6 +798,11 @@ impl App {
                 json!({ "project_root": self.cwd }),
             ),
             call(Req::Providers, "providers.list", json!({})),
+            call(
+                Req::UiConfig,
+                "config.ui",
+                json!({ "project_root": self.cwd }),
+            ),
         ];
         self.inflight += calls.len();
         calls
@@ -628,6 +870,8 @@ impl App {
             Screen::SharedMcp => self.shared_mcp.len(),
             Screen::Tasks => self.tasks.len(),
             Screen::Milestones => self.milestones.len(),
+            Screen::Plan => self.agents.len(),
+            Screen::Branches => self.branches.len(),
             Screen::PerformanceProfile => PERFORMANCE.len(),
             _ => 0,
         }
@@ -669,6 +913,11 @@ impl App {
     /// ¿Hay algo trabajando que se anima en pantalla? El loop redibuja rápido solo entonces.
     pub fn animating(&self) -> bool {
         self.screen == Screen::Chat && self.chat.as_ref().is_some_and(|c| c.state() == "RUNNING")
+    }
+
+    /// Ticks de 1 s desde que arrancó la app (la animación de la mascota avanza con él).
+    pub fn tick_count(&self) -> u64 {
+        self.ticks
     }
 
     fn view(&self) -> Option<&AgentView> {
@@ -741,6 +990,7 @@ impl App {
             Tab::Activity => self.agent_call(Req::Activity, "agent.activity"),
             Tab::Changes => self.agent_call(Req::Diff, "agent.diff"),
             Tab::History => self.agent_call(Req::History, "agent.history"),
+            Tab::Processes => self.agent_call(Req::Processes, "agent.processes"),
         }
     }
 
@@ -824,6 +1074,16 @@ impl App {
                 "milestone.list",
                 json!({ "project_root": self.root() }),
             )),
+            Screen::Plan => {
+                calls.extend(self.agents_call());
+                calls.push(call(
+                    Req::Tasks,
+                    "task.list",
+                    json!({ "project_root": self.root() }),
+                ));
+            }
+            Screen::Branches => calls.push(call(Req::GitBranches, "git.branches", json!({}))),
+            Screen::GlobalStatus => calls.push(call(Req::UsageGlobal, "usage.global", json!({}))),
             Screen::System | Screen::PerformanceProfile => {
                 calls.push(call(Req::System, "system.get", json!({})));
             }
@@ -866,7 +1126,11 @@ impl App {
                 }
                 calls.extend(self.chat_calls());
             }
-            Screen::Launch | Screen::NotARepo | Screen::FirstRun | Screen::NewAgent => {}
+            Screen::Launch
+            | Screen::NotARepo
+            | Screen::FirstRun
+            | Screen::NewAgent
+            | Screen::Help => {}
         }
         calls
     }
@@ -874,6 +1138,8 @@ impl App {
     fn go(&mut self, screen: Screen) -> Vec<Call> {
         self.screen = screen;
         self.selected = 0;
+        // La confirmación de borrado solo vive en la vista de ramas (P17.S6).
+        self.branch_pending = None;
         self.refresh()
     }
 
@@ -901,7 +1167,13 @@ impl App {
                 self.key(key)
             }
             Msg::Reply(req, result) => self.reply(req, result),
-            Msg::Event(_) => {
+            Msg::Event(topic, payload) => {
+                if topic == "agent.process.output"
+                    && let Some(a) = &mut self.agent
+                    && let Some(text) = payload["text"].as_str()
+                {
+                    a.process_output.push_str(text);
+                }
                 self.dirty = true;
                 Vec::new()
             }
@@ -1001,6 +1273,12 @@ impl App {
                     self.first_run.name = self.project_name().to_string();
                 }
             }
+            Req::UiConfig => {
+                // La config confirma o apaga; sin respuesta (error) queda el default del
+                // entorno: no es motivo de aviso.
+                let config_allows = v["animations"].as_bool().unwrap_or(true);
+                self.ui_animations = mascot::allowed(config_allows, mascot::env_ok());
+            }
             Req::ProjectInit => {
                 self.info("Proyecto inicializado.");
                 let next = if self.providers_needing_attention() > 0 {
@@ -1085,6 +1363,23 @@ impl App {
             }
             Req::TaskDeps => self.task_deps = Some(v.clone()),
             Req::Milestones => self.milestones = list("milestones"),
+            Req::GitBranches => self.branches = list("branches"),
+            Req::GitCheckout => {
+                let branch = v["branch"].as_str().unwrap_or("?").to_string();
+                self.branch_pending = None;
+                self.info(format!("Cambiado a la rama `{branch}`."));
+                // La rama nueva sale también en la barra de estado (project.status).
+                let mut calls = vec![self.status_call()];
+                calls.extend(self.refresh());
+                return calls;
+            }
+            Req::GitDelete => {
+                let branch = v["branch"].as_str().unwrap_or("?").to_string();
+                self.branch_pending = None;
+                self.info(format!("Rama `{branch}` borrada."));
+                return self.refresh();
+            }
+            Req::UsageGlobal => self.global = Some(v.clone()),
             Req::System => self.system = Some(v.clone()),
             Req::MilestoneDecide => {
                 self.info("Decisión registrada.");
@@ -1216,6 +1511,11 @@ impl App {
                     a.history = v;
                 }
             }
+            Req::Processes => {
+                if let Some(a) = &mut self.agent {
+                    a.processes = v;
+                }
+            }
             Req::Control | Req::Switch => {
                 if let Some(state) = v["state"].as_str() {
                     self.info(format!("Agente {}.", state_phrase(state)));
@@ -1255,6 +1555,8 @@ impl App {
         }
         match (req, f.code.as_str()) {
             // FLOW §6: sin proveedores elegibles → Provider Setup sin perder la tarea.
+            // `config.ui` es opcional: si falla, la mascota queda según el entorno.
+            (Req::UiConfig, _) => Vec::new(),
             (Req::Create, "no_eligible_provider") => {
                 self.error(format!(
                     "{} Habilita un proveedor y vuelve: la tarea sigue escrita.",
@@ -1268,6 +1570,16 @@ impl App {
                     "{} Elige otro modelo, decide después o Esc para cancelar.",
                     f.message
                 ));
+                Vec::new()
+            }
+            // 37 (P17.S6): la rama no está integrada; sin una segunda confirmación no se fuerza.
+            (Req::GitDelete, "branch_not_merged") => {
+                let branch = f.message.clone();
+                self.branch_pending = Some(PendingDelete {
+                    branch: branch.clone(),
+                    step: crate::branches::DeleteStep::Force,
+                });
+                self.error(crate::branches::not_merged_notice(&branch));
                 Vec::new()
             }
             _ => {
@@ -1297,6 +1609,20 @@ impl App {
         if self.screen != Screen::Chat {
             self.chat_merge_armed = false;
         }
+        if key.code == KeyCode::Char('?')
+            && !matches!(
+                self.screen,
+                Screen::Agent
+                    | Screen::FirstRun
+                    | Screen::NewAgent
+                    | Screen::ProviderSetup
+                    | Screen::Help
+            )
+        {
+            self.help_from = Some(self.screen);
+            self.screen = Screen::Help;
+            return Vec::new();
+        }
         match self.screen {
             Screen::Launch => self.launch_key(key),
             Screen::NotARepo => {
@@ -1321,12 +1647,16 @@ impl App {
             Screen::Tasks => self.tasks_key(key),
             Screen::TaskDetail => self.task_detail_key(key),
             Screen::Milestones => self.milestones_key(key),
+            Screen::Plan => self.plan_key(key),
+            Screen::Branches => self.branches_key(key),
+            Screen::GlobalStatus => self.global_key(key),
             Screen::System => self.system_key(key),
             Screen::PerformanceProfile => self.perf_key(key),
             Screen::Validation => self.validation_key(key),
             Screen::MergePreflight => self.merge_key(key),
             Screen::ConflictReview => self.conflict_key(key),
             Screen::ReviewResult => self.review_key(key),
+            Screen::Help => self.help_key(key),
         }
     }
 
@@ -1366,6 +1696,16 @@ impl App {
             }
             _ => Vec::new(),
         }
+    }
+
+    fn help_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if matches!(
+            key.code,
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')
+        ) {
+            self.screen = self.help_from.take().unwrap_or(Screen::Home);
+        }
+        Vec::new()
     }
 
     fn first_run_key(&mut self, key: KeyEvent) -> Vec<Call> {
@@ -1689,6 +2029,9 @@ impl App {
             KeyCode::Char('t') => self.go(Screen::Tasks),
             KeyCode::Char('m') => self.go(Screen::Milestones),
             KeyCode::Char('s') => self.go(Screen::System),
+            KeyCode::Char('a') => self.go(Screen::Plan),
+            KeyCode::Char('b') => self.go(Screen::Branches),
+            KeyCode::Char('g') => self.go(Screen::GlobalStatus),
             KeyCode::Char(':') | KeyCode::Char('/') => {
                 self.command = Some(String::new());
                 Vec::new()
@@ -1773,6 +2116,9 @@ impl App {
             "skills" => self.go(Screen::SharedSkills),
             "mcp" => self.go(Screen::SharedMcp),
             "stats" | "usage" => self.go(Screen::Stats),
+            "avance" | "plan" => self.go(Screen::Plan),
+            "branches" | "ramas" => self.go(Screen::Branches),
+            "global" | "status" => self.go(Screen::GlobalStatus),
             "tasks" | "task" => self.go(Screen::Tasks),
             "milestones" | "milestone" => self.go(Screen::Milestones),
             "system" | "sys" => self.go(Screen::System),
@@ -1784,7 +2130,7 @@ impl App {
             "" => Vec::new(),
             other => {
                 self.error(format!(
-                    "Comando desconocido `{other}`. Usa: spawn [modelo] <tarea> · agent <n> · new · providers · recovery · tasks · milestones · system · profile · context · skills · mcp · stats · quit"
+                    "Comando desconocido `{other}`. Usa: spawn [modelo] <tarea> · agent <n> · new · providers · recovery · tasks · milestones · avance · branches · global · system · profile · context · skills · mcp · stats · quit"
                 ));
                 Vec::new()
             }
@@ -1999,7 +2345,7 @@ impl App {
                 let next = Tab::ALL[cycle(a.tab.index(), Tab::ALL.len(), false)];
                 switch_tab(a, next);
             }
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='6') => {
                 let i = usize::from(c as u8 - b'1');
                 switch_tab(a, Tab::ALL[i]);
             }
@@ -2336,6 +2682,102 @@ impl App {
             KeyCode::Char('a') => decide("approve"),
             KeyCode::Char('c') => decide("request_changes"),
             KeyCode::Char('h') => decide("hold"),
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 36 (P17.S6): avance del plan. Enter abre el agente elegido.
+    fn plan_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if self.move_selection(key.code) {
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('a') => {
+                match self
+                    .agents
+                    .get(self.selected)
+                    .and_then(|a| a["agent_id"].as_str().map(str::to_string))
+                {
+                    Some(id) => self.open_agent(id),
+                    None => Vec::new(),
+                }
+            }
+            KeyCode::Char('r') => self.refresh(),
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 37 (P17.S6): ramas de git. Enter cambia sin confirmar; `d` borra siempre con
+    /// confirmación y solo fuerza (con una segunda confirmación) si git avisa de que
+    /// la rama no está integrada.
+    fn branches_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        if self.move_selection(key.code) {
+            return Vec::new();
+        }
+        let pending = self.branch_pending.take();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
+            KeyCode::Enter => {
+                let Some((name, current)) = self.branches.get(self.selected).map(|b| {
+                    (
+                        b["name"].as_str().map(str::to_string),
+                        b["current"].as_bool().unwrap_or(false),
+                    )
+                }) else {
+                    return Vec::new();
+                };
+                let Some(name) = name else {
+                    return Vec::new();
+                };
+                if current {
+                    self.info(format!("Ya estás en `{name}`."));
+                    return Vec::new();
+                }
+                self.info(format!("Cambiando a `{name}`…"));
+                vec![call(
+                    Req::GitCheckout,
+                    "git.checkout",
+                    json!({ "branch": name }),
+                )]
+            }
+            KeyCode::Char('d') => {
+                let (name, current) = match self.branches.get(self.selected) {
+                    Some(b) => (
+                        b["name"].as_str().map(str::to_string),
+                        b["current"].as_bool().unwrap_or(false),
+                    ),
+                    None => (None, false),
+                };
+                match delete_key(pending.as_ref(), name.as_deref(), current) {
+                    DeleteAction::Ask(p) => {
+                        self.branch_pending = Some(p.clone());
+                        self.info(crate::branches::confirm_notice(&p.branch));
+                        Vec::new()
+                    }
+                    DeleteAction::Delete { branch, force } => vec![call(
+                        Req::GitDelete,
+                        "git.delete_branch",
+                        json!({ "branch": branch, "force": force }),
+                    )],
+                    DeleteAction::Cancel => {
+                        if current {
+                            self.error("No se puede borrar la rama en uso: cambia a otra antes.");
+                        }
+                        Vec::new()
+                    }
+                }
+            }
+            KeyCode::Char('r') => self.refresh(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 38 (P17.S6): status global entre proyectos; solo lectura (ADR-0022).
+    fn global_key(&mut self, key: KeyEvent) -> Vec<Call> {
+        match key.code {
             KeyCode::Char('r') => self.refresh(),
             KeyCode::Esc | KeyCode::Char('q') => self.go(Screen::Home),
             _ => Vec::new(),

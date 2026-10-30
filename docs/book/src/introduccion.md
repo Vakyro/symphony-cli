@@ -22,6 +22,7 @@ Al ejecutar `symphony` dentro de un proyecto, la vista inicial es el **chat gene
 - Al terminar cada turno con cambios, Symphony hace un commit automático en `symphony/chat`.
 - Puedes cambiar de proveedor o de modelo entre turnos de forma manual, por agotamiento de cuota (failover automático) o por umbral de tokens configurado (`[chat] switch_at_tokens`).
 - Tu rama `main` no se toca hasta que pides explícitamente integrar el chat con `symphony chat merge` (que incluye preflight y revisión opcional por un *review agent*).
+- En el harness de Symphony, los agentes pueden colorear partes de sus respuestas con `[[symphony:title]]…[[/symphony:title]]`, `[[symphony:bullet]]…[[/symphony:bullet]]`, `[[symphony:highlight]]…[[/symphony:highlight]]`, `[[symphony:warning]]…[[/symphony:warning]]`, `[[symphony:error]]…[[/symphony:error]]` y `[[symphony:table]]…[[/symphony:table]]`. Úsalos solo cuando ayuden a distinguir títulos, puntos, destacados, avisos, errores o tablas; el texto normal queda sin marcar. La TUI conserva los marcadores en el transcript y colorea solo los spans válidos (ADR-0023).
 
 ### Agentes de tareas en paralelo y planes por fases (ADR-0011, ADR-0013)
 

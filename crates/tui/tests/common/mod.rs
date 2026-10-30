@@ -14,22 +14,12 @@ use symphony_tui::app::{App, Call, Msg};
 use symphony_tui::ui;
 use tokio::sync::mpsc;
 
-/// `target/debug` (este test vive en `target/debug/deps`).
-pub fn target_dir() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    exe.parent().unwrap().parent().unwrap().to_path_buf()
-}
-
 /// Construye un binario de otro paquete del workspace y devuelve su ruta.
+/// La ruta la emite cargo: con `build.build-dir` (caché compartido del harness)
+/// los `deps/` no cuelgan del ejecutable de este test.
 pub fn build(package: &str, bin: &str) -> PathBuf {
-    let status = Command::new(env!("CARGO"))
-        .args(["build", "-q", "-p", package, "--bin", bin])
-        .status()
-        .unwrap();
-    assert!(status.success(), "no se pudo construir {bin}");
-    symphony_testkit::pinned_bin(
-        &target_dir().join(format!("{bin}{}", std::env::consts::EXE_SUFFIX)),
-    )
+    symphony_testkit::build_and_pin(bin, &["-p", package, "--bin", bin])
+        .unwrap_or_else(|e| panic!("no se pudo construir {bin}: {e}"))
 }
 
 pub fn git(dir: &Path, args: &[&str]) {
@@ -94,7 +84,7 @@ impl Driver {
                 .await
                 .unwrap_or_else(|_| panic!("timeout esperando: {what}\n{}", draw(&self.app)))
                 .expect("canal cerrado");
-            if matches!(msg, Msg::Event(_)) {
+            if matches!(msg, Msg::Event(..)) {
                 self.events += 1;
             }
             let calls = self.app.update(msg);

@@ -1314,6 +1314,7 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **S5 Shell en curso:** lista de procesos del agente, abrir uno y ver su salida en vivo.
 - **S6 Vistas:** avance de agentes en un plan (rama, tarea/fase, %), ramas de git, pantalla `status` global (uso por modelo/sesión, proveedores, tips, heatmap mensual de uso; requiere ADR por ser datos entre proyectos, ver ADR-0018).
 - **S7 Cierre.**
+- **S8 Renderizado rico del chat:** opción B, marcadores explícitos del agente para títulos, bullets, destacados, advertencias, errores y tablas; el prompt del harness los enseña, la TUI solo colorea lo marcado y conserva los marcadores en el transcript. Documentación del chat en el mdBook. Protocolo y alternativas: [`docs/adr/0023-marcadores-de-color-del-chat.md`](docs/adr/0023-marcadores-de-color-del-chat.md). No confundir con el tema de la TUI (S1), que ya está.
 
 ### P18 · Contexto y ahorro de tokens (`phase/p18-contexto`)
 - **S1 Auditoría del router y del handoff:** medir tokens de contexto por ruta y recortar lo que sobra. **Verifica:** benchmark antes/después.
@@ -1325,7 +1326,19 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **S7 Cierre.**
 
 ### P19 · Orquestación automática (`phase/p19-orquestacion`)
-- **S1 Versión ligera de código abierto para disponibilidad de modelos** (Leo: «no Jev», una alternativa que no pese nada; Leo dará la información en próximas sesiones). Se evalúa licencia, tamaño, runtime y telemetría, y se decide con ADR. ⛔ si exige dependencias prohibidas (Node/Python, ML en ruta crítica).
+- **S1 Versión ligera de código abierto para disponibilidad de modelos** (Leo: «no Jev», una alternativa que no pese nada; Leo dará la información en próximas sesiones). Se evalúa licencia, tamaño, runtime y telemetría, y se decide con ADR. ⛔ si exige dependencias prohibidas (Node/Python, ML en ruta crítica). **Investigación documentada (2026-10-29):**
+  - **Jev** (TypeSafe AI) es un modelo propietario "System One": clasificador, no LLM. Devuelve valores tipados + probabilidades calibradas en un solo paso paralelo (70–500 ms, ~$0.042/MTok entrada, salida gratis). Tres primitivas: `Choice` (hasta 255 opciones), `Score` (2–10 niveles), `Noul` (sí/no 0–1). Sin generación de texto, por construcción sin errores de tipo. Acceso anticipado, solo texto, números autoinformados (benchmarks del propio proveedor). No publica arquitectura ni pesos.
+  - **Requisito de Leo:** no acoplarse a Jev. Debe ser **personalizable**: el usuario puede usar el modelo que tenga instalado en su computadora (Jev, una alternativa open-source o uno propio). Symphony solo define el contrato (estado + preguntas tipadas → decisiones tipadas + probabilidades) y un adaptador por backend; el backend se elige por configuración (`[models.decision]` o equivalente), con fallback a un LLM normal si no hay ninguno.
+  - **Alternativas open-source investigadas (todasApache 2.0 o pesos abiertos, ejecutables en local):**
+    - **Laya** (ModernBERT/mmBERT, 322M–421M): el más cercano a Jev arquitectónicamente; choice/score/noul; multilingüe (100+ idiomas); `pip install laya`. Ideal para decisiones multilingües pequeñas.
+    - **Kev** (Qwen3.5 0.8B–9B + LoRA rango 16 + cabeza de puntero): implementa el contrato `/v1/systemone` de TypeSafe, por lo que el código del SDK de Jev se redirige a un servidor local de Kev sin cambios. Varios tamaños y canalización de entrenamiento abierta.
+    - **Von** (ModernBERT, ~395M): OptionMarker, choice/noul/score, calibración post-entrenamiento, CPU/CUDA/ROCm/Apple Silicon. Huella pequeña, inferencia local compacta.
+    - **NanoJev** (Qwen3-0.6B, 0.6B): cabezas de decisión compartidas, decisiones en paralelo, agrupación de múltiples estados/preguntas en un solo forward pass. Entrenable de extremo a extremo.
+    - **Nimble** (Qwen3.5-9B + LoRA rango 16): lee logits candidatos en lugar de decodificar; publica modelo, receta de entrenamiento y curación de datos. Para experimentación/entrenamiento.
+    - **SemIf** (logits directos sobre Qwen3.5-4B sin fine-tuning): reutiliza modelos abiertos existentes, sin checkpoint especializado. Para experimentar sin entrenar.
+    - **Rizzo Flow** (Spark-X2.5 + llama.cpp): serving local sencillo, API compatible con Jev, cuantización, caché KV reutilizable.
+  - **Criterios de decisión (ADR):** licencia Apache 2.0 (o compatible), tamaño ≤ ~1B para CPU, sin Node/Python en ruta crítica (el runtime del modelo puede ser Python en el servidor, pero el core de Symphony no depende de él), sin telemetría, latencia < 1 s en CPU, contrato de salida tipada + probabilidades. El backend se abstrae tras un trait `DecisionModel` en un crate nuevo `crates/decision` (o extensión de `context`), con adaptadores por backend (HTTP local, in-process si aplica).
+  - **Uso dentro de Symphony:** capa de decisión dentro del bucle del agente (enrutamiento con umbral de confianza, clasificación de tareas, guardrails), no reemplazo del LLM de generación. Cascada: modelo de decisión clasifica/enruta barato → código determinista maneja lo que puede → modelo de frontera toma la minoría difícil. Bloqueado si exige dependencias prohibidas. ⛔ pendiente de Leo para elegir el backend por defecto y el umbral de confianza.
 - **S2 Disponibilidad y perfiles `@best-coding`, `@best-reasoning`, `@fastest`, `@cheap`, `@automatic`:** se deciden al inicio de la sesión y al cambiar de modelo, nunca por mensaje; usan solo modelos con créditos.
 - **S3 Planeador:** elegir el mejor modelo planeador disponible; plan por fases con tareas.
 - **S4 Delegación y *effort*:** cada tarea al modelo que mejor encaje; el effort sigue lo que pida el usuario (barato, producido, razonado).
@@ -1340,7 +1353,11 @@ Cada paso es independiente salvo que diga lo contrario: si uno queda ⛔, se ano
 - **S4 Acceso desde el celular por Tailscale** (decidido por Leo: sin app ni web propia). Vía: Tailscale + SSH + `tmux` con la TUI, sin código nuevo; se documenta en la guía de SSH (P13.S6). Una vista móvil dentro de Symphony solo si Leo la pide después, con ADR de transporte y seguridad.
 - **S5 Cierre.**
 
-**Ideas futuras (sin fase):** soporte para cualquier CLI de agente y para API keys de cualquier proveedor.
+**Ideas futuras (sin fase):** soporte para cualquier CLI de agente y para API keys de cualquier proveedor; política configurable de Symphony/harness (análogo a los permisos de Claude Code: allow/deny/ask, modos default/acceptEdits/plan/dontAsk/bypassPermissions, archivos ignorados estilo `.claudeignore`, política por proyecto en `.symphony/policy.toml`). Requiere ADR nuevo y decisión de alcance (solo archivos vs. también shell/git). No confundir con CONSTRAINTS.md (barra de calidad del repo) ni con AGENTS.md (reglas del orquestador). **Nuevas ideas documentadas (2026-10-29):** **Nueva idea (2026-10-29):** Symphony con su propia linea de agentes basados en LLMs ya existentes - un agente para codigo, uno para tareas sencillas, uno para investigacion, etc. - cada uno con un system prompt, herramientas y perfil optimizados para su rol (en vez de un unico agente generico). Requiere ADR de roles, prompts y seleccion automatica por tipo de tarea; complementa los perfiles @best-coding/@best-reasoning de P19.S2 y el planeador P19.S3. Sin codigo por ahora.
+- **Versión cooperativa en línea:** Symphony multi-usuario donde se invita a compañeros/amigos y cada uno suma sus propios proveedores, cuentas, modelos y tokens (cuotas compartidas/pooled). Requiere ADR de transporte, autenticación, aislamiento por usuario y modelo de cuotas. Mucho más allá de P20.S4 (Tailscale + SSH, single-user).
+- **Context compaction con Jev (o equivalente):** usar un modelo de decisión tipo System One para compactar el contexto (similar a fast-jev-compaction) pero preservando más contenido importante (decisiones, constraints, archivos tocados). Integrable en P18.S3 (`/compact`) o P18.S4. Requiere el trait `DecisionModel` de P19.S1.
+- **Git merge vs. git rebase:** documentar cuándo usar cada uno (merge para integrar ramas de feature con historial preservado; rebase para mantener una rama lineal y limpia antes de integrar). Posible guía en `docs/book` o skill; no es código.
+- **Ingeniería de grafos en los agentes (línea de producción):** modelar el flujo de agentes como un grafo de producción (nodos = etapas/tareas, aristas = dependencias/handoffs), con reintentos, paralelismo y checkpoint por nodo. Complementa el planeador (P19.S3) y la vista de avance (P17.S6). Requiere ADR de representación y persistencia.
 
 ---
 
@@ -1519,3 +1536,10 @@ coordina varios CLIs de IA (Claude Code, Codex, Antigravity, Kimi, Copilot).
 ## Identidad
 Firma como `herramienta/modelo` (ej. `claude-code/opus`, `codex/gpt-5.x`).
 ```
+
+## Enmiendas de Ola 0 (2026-10-29)
+
+- P17.S4: mini piano de una octava; no fuegos artificiales.
+- P20.S3: la vista Habbo sale del plan y queda como idea futura.
+- P19: Laya es el backend predeterminado y el backend es enchufable; Symphony no trae Python.
+- Antigravity está sin cuota durante aproximadamente 48 horas desde el 2026-10-29.

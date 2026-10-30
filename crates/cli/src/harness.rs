@@ -123,6 +123,13 @@ fn shell_words(command: &str) -> Vec<String> {
 /// La primera ruta absoluta de una palabra, incluidas formas como `--archivo=/tmp/a` y `-CC:\a`.
 fn absolute_in_word(word: &str) -> Option<&str> {
     if word.starts_with(['/', '\\']) {
+        // Una expresión de `sed`/`grep`/`awk` (`/^fn/,/^}/p`, `/a+$/`) no es una ruta:
+        // sin esto el guard bloqueaba a Codex en cada lectura con `sed -n '/…/p'`.
+        if word.starts_with('/')
+            && word.contains(['^', '$', '+', '?', '{', '}', '[', ']', '\\', ',', '#'])
+        {
+            return None;
+        }
         return Some(word);
     }
     let bytes = word.as_bytes();
@@ -879,6 +886,11 @@ mod tests {
             assert!(err.contains("comando rechazado"), "{command}: {err}");
         }
         assert!(guard_shell(&root, &root, "echo https://ejemplo.com/a").is_ok());
+        // Expresiones de sed/grep no son rutas; `/etc/passwd` sí lo sigue siendo.
+        assert!(guard_shell(&root, &root, "sed -n '/^fn main/,/^}/p' src/main.rs").is_ok());
+        assert!(guard_shell(&root, &root, "grep -E '/api/v[0-9]+$' a.txt").is_ok());
+        assert!(guard_shell(&root, &root, r"sed -n '/### 4\.6/,/### 4\.7/p' PLAN.md").is_ok());
+        assert!(guard_shell(&root, &root, "cat /etc/passwd").is_err());
         let inside = root.join("src");
         assert!(guard_shell(&root, &root, &format!("git -C {} status", inside.display())).is_ok());
         assert!(guard_shell(&root, &outside, "echo no").is_err());

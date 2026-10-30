@@ -5,9 +5,12 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::Color;
 use serde_json::{Value, json};
-use symphony_tui::app::{App, Call, Exec, Failure, Msg, Notice, Req, Screen, Tab};
+use symphony_tui::app::{App, Call, Exec, Failure, Msg, Notice, Req, Screen, Tab, diff_stats};
+use symphony_tui::theme::Theme;
 use symphony_tui::ui;
 
 const NOW: i64 = 1_800_000_000_000;
@@ -35,9 +38,18 @@ fn methods(calls: &[Call]) -> Vec<&str> {
 }
 
 fn draw(app: &App) -> String {
-    let mut t = Terminal::new(TestBackend::new(96, 28)).unwrap();
+    terminal(app, 96, 28).backend().to_string()
+}
+
+fn terminal(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
+    let mut t = Terminal::new(TestBackend::new(width, height)).unwrap();
     t.draw(|f| ui::render(app, f)).unwrap();
-    t.backend().to_string()
+    t
+}
+
+/// El buffer crudo, con estilos. `to_string()` solo da el texto: el color no se ve ahí.
+fn buffer(app: &App) -> Buffer {
+    terminal(app, 96, 28).backend().buffer().clone()
 }
 
 fn status(initialized: bool, recovery: i64) -> Value {
@@ -81,12 +93,15 @@ fn providers() -> Value {
 fn agents() -> Value {
     json!({ "agents": [
         { "agent_id": "01AGENT1", "number": 1, "state": "RUNNING", "state_reason": null,
-          "task_code": "T-1", "task_title": "Supabase authentication", "provider_id": "anthropic", "model_id": "claude/sonnet" },
+          "task_code": "T-1", "task_title": "Supabase authentication", "provider_id": "anthropic", "model_id": "claude/sonnet",
+          "branch": "symphony/8e4f/agent-001" },
         { "agent_id": "01AGENT2", "number": 2, "state": "WAITING_PROVIDER",
           "state_reason": "Codex agotó su cuota y el failover está desactivado.",
-          "task_code": "T-2", "task_title": "Responsive modals", "provider_id": null, "model_id": null },
+          "task_code": "T-2", "task_title": "Responsive modals", "provider_id": null, "model_id": null,
+          "branch": "symphony/9a2c/agent-002" },
         { "agent_id": "01AGENT3", "number": 3, "state": "COMPLETED", "state_reason": null,
-          "task_code": "T-3", "task_title": "Integration tests", "provider_id": null, "model_id": null },
+          "task_code": "T-3", "task_title": "Integration tests", "provider_id": null, "model_id": null,
+          "branch": "symphony/1bd1/agent-003" },
     ]})
 }
 
@@ -152,6 +167,7 @@ fn home_app() -> App {
     let mut app = App::new("/work/arete-mobile");
     app.now_ms = NOW;
     app.start();
+    ok(&mut app, Req::UiConfig, json!({ "animations": true }));
     ok(&mut app, Req::Providers, providers());
     ok(&mut app, Req::ProjectStatus, status(true, 0));
     ok(&mut app, Req::Agents, agents());
@@ -208,7 +224,10 @@ fn agent_app(tab: Tab) -> App {
 #[test]
 fn view_01_launch_checking() {
     let mut app = App::new("/work/arete-mobile");
-    assert_eq!(methods(&app.start()), ["project.status", "providers.list"]);
+    assert_eq!(
+        methods(&app.start()),
+        ["project.status", "providers.list", "config.ui"]
+    );
     insta::assert_snapshot!(draw(&app));
 }
 
@@ -235,6 +254,35 @@ fn view_01_launch_not_a_repo() {
     insta::assert_snapshot!(draw(&app));
     press(&mut app, KeyCode::Char('q'));
     assert!(app.quit);
+}
+
+#[test]
+fn launch_art_fits_and_is_hidden_in_a_small_terminal() {
+    let app = App::new("/work/arete-mobile");
+    let out = draw(&app);
+    assert!(out.contains(ui::LAUNCH_ART[0]));
+    for l in ui::LAUNCH_ART {
+        assert!(l.chars().count() <= 64);
+    }
+    let small = terminal(&app, 60, 16).backend().to_string();
+    assert!(!small.contains(ui::LAUNCH_ART[0]));
+    assert!(small.contains("SYMPHONY"));
+}
+
+#[test]
+fn launch_new_project_lists_what_to_do_first() {
+    let mut app = App::new("/work/arete-mobile");
+    app.start();
+    ok(&mut app, Req::Providers, providers());
+    ok(&mut app, Req::ProjectStatus, status(false, 0));
+    assert_eq!(app.screen, Screen::Launch);
+    let out = draw(&app);
+    assert!(out.contains("PARA EMPEZAR"));
+    assert!(out.contains("configurar el proyecto"));
+    assert!(out.contains("abrir sin configurar"));
+    let home = home_app();
+    let home_out = draw(&home);
+    assert!(!home_out.contains("PARA EMPEZAR"));
 }
 
 #[test]
@@ -837,7 +885,7 @@ fn tabs_fetch_their_data() {
 #[test]
 fn bus_events_refresh_on_the_next_tick_without_piling_up() {
     let mut app = home_app();
-    app.update(Msg::Event("agent.event".into()));
+    app.update(Msg::Event("agent.event".into(), serde_json::Value::Null));
     let calls = app.update(Msg::Tick(NOW));
     assert_eq!(
         methods(&calls),
@@ -849,7 +897,7 @@ fn bus_events_refresh_on_the_next_tick_without_piling_up() {
         ]
     );
     // Con respuestas pendientes no se piden más.
-    app.update(Msg::Event("agent.event".into()));
+    app.update(Msg::Event("agent.event".into(), serde_json::Value::Null));
     assert!(app.update(Msg::Tick(NOW)).is_empty());
     ok(&mut app, Req::Agents, agents());
     ok(&mut app, Req::Providers, providers());
@@ -931,6 +979,82 @@ fn chat_app() -> App {
 #[test]
 fn view_00_chat_empty() {
     insta::assert_snapshot!(draw(&chat_app()));
+}
+
+/// P17.S4: chat con el agente trabajando (la mascota se ve) y las animaciones prendidas.
+fn chat_running_app() -> App {
+    let mut app = chat_app();
+    ok(&mut app, Req::UiConfig, json!({ "animations": true }));
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    let chat = app.chat.as_mut().unwrap();
+    chat.inspect = json!({ "agent": { "state": "RUNNING" } });
+    chat.messages = serde_json::from_value(json!([
+        { "role": "USER", "content": "corre los tests", "at": NOW - 6_000 },
+    ]))
+    .unwrap();
+    // Los snapshots no deben depender del entorno de quien corre los tests.
+    app.ui_animations = true;
+    app
+}
+
+/// La mascota (un mini piano de una octava con frases) cabe entera a 80 y a 160 columnas.
+#[test]
+fn view_00_chat_mascot_80_columns() {
+    insta::assert_snapshot!(terminal(&chat_running_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_00_chat_mascot_160_columns() {
+    insta::assert_snapshot!(terminal(&chat_running_app(), 160, 28).backend().to_string());
+}
+
+/// P17.S4: con `SYMPHONY_NO_ANIM` / `[ui] animations = false` / `NO_COLOR` no hay piano.
+#[test]
+fn chat_mascot_respects_the_kill_switches() {
+    use symphony_tui::mascot;
+
+    // Config apagada (`config.ui` → animations=false): nunca dibuja, sea cual sea el entorno.
+    let mut app = chat_running_app();
+    ok(&mut app, Req::UiConfig, json!({ "animations": false }));
+    assert!(!app.ui_animations);
+    let screen = draw(&app);
+    assert!(!screen.contains('█'), "{screen}");
+    assert!(!screen.contains('♪'), "{screen}");
+
+    // Config prendida: manda el entorno (es lo que leen SYMPHONY_NO_ANIM / NO_COLOR / TERM).
+    let env = mascot::env_ok();
+    ok(&mut app, Req::UiConfig, json!({ "animations": true }));
+    assert_eq!(app.ui_animations, env);
+
+    // Animaciones apagadas a mano (resultado de SYMPHONY_NO_ANIM): mismo chat, sin mascota.
+    app.ui_animations = false;
+    let screen = draw(&app);
+    assert!(!screen.contains('█'), "{screen}");
+    assert!(!screen.contains('♪'), "{screen}");
+
+    // Los tres interruptores de entorno apagan por separado.
+    assert!(mascot::env_allows(false, false, false));
+    assert!(!mascot::env_allows(true, false, false));
+    assert!(!mascot::env_allows(false, true, false));
+    assert!(!mascot::env_allows(false, false, true));
+    // La decisión pura: hacen falta config y entorno a la vez.
+    assert!(mascot::allowed(true, true));
+    assert!(!mascot::allowed(false, true));
+    assert!(!mascot::allowed(true, false));
+}
+
+/// La mascota solo vive en el chat principal: la vista de agente no la dibuja.
+#[test]
+fn mascot_only_shows_in_the_main_chat() {
+    let mut app = chat_running_app();
+    // Mismo agente «RUNNING», pero en la vista de agente (Esc → Home → Enter).
+    press(&mut app, KeyCode::Esc);
+    ok(&mut app, Req::Agents, agents());
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["agent.inspect"]);
+    ok(&mut app, Req::Inspect, inspect());
+    let screen = draw(&app);
+    assert!(!screen.contains('█'), "{screen}");
 }
 
 #[test]
@@ -1755,4 +1879,553 @@ fn chat_shows_the_model_suggestion_and_resolves_it_with_three_keys() {
         json!({ "status": "ACCEPTED" }),
     );
     assert!(matches!(&app.notice, Some(Notice::Info(m)) if m.contains("modelo sugerido")));
+}
+
+/// El transcript se carga intacto y se colorea de nuevo en una App nueva.
+#[test]
+fn marcadores_al_reabrir_el_chat() {
+    let text = "Normal\n[[symphony:title]]Título[[/symphony:title]]\n[[symphony:bullet]]Viñeta[[/symphony:bullet]]\n[[symphony:highlight]]Destacado[[/symphony:highlight]]\n[[symphony:warning]]Aviso[[/symphony:warning]]\n[[symphony:error]]Error[[/symphony:error]]\n[[symphony:table]]Modelo | Estado\nopus   | listo[[/symphony:table]]";
+    let logs = json!({"messages": [{"role": "ASSISTANT", "content": text}], "partial": ""});
+    let mut previous = None;
+    for _ in 0..2 {
+        let mut app = chat_app();
+        app.theme = Theme::default();
+        ok(&mut app, Req::ChatGet, json!({"agent_id": "01CHAT"}));
+        ok(&mut app, Req::Logs, logs.clone());
+        assert_eq!(app.chat.as_ref().unwrap().messages[0]["content"], text);
+        let buf = buffer(&app);
+        for (label, color) in [
+            ("Normal", Color::Reset),
+            ("Título", app.theme.brand.unwrap()),
+            ("Viñeta", app.theme.ok.unwrap()),
+            ("Destacado", app.theme.accent.unwrap()),
+            ("Aviso", app.theme.warn.unwrap()),
+            ("Error", app.theme.error.unwrap()),
+            ("Modelo | Estado", app.theme.muted.unwrap()),
+        ] {
+            let row = (0..buf.area.height)
+                .find(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, *y)].symbol())
+                        .collect::<String>()
+                        .contains(label)
+                })
+                .unwrap();
+            let line: String = (0..buf.area.width)
+                .map(|x| buf[(x, row)].symbol())
+                .collect();
+            let start = line[..line.find(label).unwrap()].chars().count() as u16;
+            assert_eq!(buf[(start, row)].fg, color, "{label}");
+        }
+        let screen = draw(&app);
+        assert!(!screen.contains("[[symphony:"));
+        if let Some(ref previous) = previous {
+            assert_eq!(&screen, previous);
+        }
+        previous = Some(screen);
+        insta::assert_snapshot!(
+            "chat_marcadores_80",
+            terminal(&app, 80, 28).backend().to_string()
+        );
+        insta::assert_snapshot!(
+            "chat_marcadores_160",
+            terminal(&app, 160, 28).backend().to_string()
+        );
+        app.theme = Theme::no_color();
+        assert!(buffer(&app).content.iter().all(|c| c.fg == Color::Reset));
+    }
+}
+
+// --- tema (P17.S1) -----------------------------------------------------------
+
+/// El color tiene que llegar al buffer: los snapshots de texto no lo probarían.
+#[test]
+fn the_brand_paints_the_header() {
+    let mut app = home_app();
+    app.theme = Theme::default();
+    let buf = buffer(&app);
+    let title = buf.cell((1, 0)).unwrap();
+    assert_eq!(title.symbol(), "S", "la cabecera empieza por « SYMPHONY »");
+    assert_eq!(title.fg, Color::Rgb(140, 120, 180), "morado de marca");
+}
+
+/// Ninguna celda puede salirse de la paleta: nada de cian ni colores chillones.
+#[test]
+fn no_cell_escapes_the_brand_palette() {
+    let mut app = home_app();
+    app.theme = Theme::default();
+    let t = Theme::default();
+    let palette: Vec<Color> = [t.brand, t.accent, t.ok, t.warn, t.error, t.muted, t.border]
+        .into_iter()
+        .flatten()
+        .collect();
+    let outside: Vec<(String, Color)> = buffer(&app)
+        .content
+        .iter()
+        .filter(|c| c.fg != Color::Reset && !palette.contains(&c.fg))
+        .map(|c| (c.symbol().to_string(), c.fg))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "colores fuera de la paleta: {outside:?}"
+    );
+}
+
+/// `NO_COLOR`: la misma información, sin pintar nada.
+#[test]
+fn no_color_keeps_the_view_without_paint() {
+    let mut app = home_app();
+    app.theme = Theme::no_color();
+    let buf = buffer(&app);
+    assert!(
+        buf.content.iter().all(|c| c.fg == Color::Reset),
+        "con NO_COLOR no se pinta ninguna celda"
+    );
+    assert!(buf.content.iter().any(|c| c.symbol() == "S"));
+}
+
+/// La barra se ve entera a 80 columnas, y a 160 no se estira ni se rompe.
+#[test]
+fn view_01_home_80_columns() {
+    insta::assert_snapshot!(terminal(&home_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_01_home_160_columns() {
+    insta::assert_snapshot!(terminal(&home_app(), 160, 28).backend().to_string());
+}
+
+// --- barra de estado (P17.S1) -------------------------------------------------
+
+/// La home con el catálogo cargado: modelo real y cuota tomada de `providers.list`.
+fn status_app() -> App {
+    let mut app = home_app();
+    ok(&mut app, Req::Models, models());
+    ok(&mut app, Req::Providers, providers());
+    app
+}
+
+/// La barra es la penúltima fila: debajo solo queda la línea de pistas.
+fn status_bar(app: &App, width: u16) -> String {
+    let screen = terminal(app, width, 28).backend().to_string();
+    let lines: Vec<&str> = screen.lines().collect();
+    // `TestBackend::to_string()` devuelve cada fila entre comillas y rellena a lo ancho.
+    lines[lines.len() - 2].trim_matches('"').trim().to_string()
+}
+
+#[test]
+fn the_status_bar_shows_the_six_fields_when_it_fits() {
+    let app = status_app();
+    let bar = status_bar(&app, 160);
+    assert!(bar.starts_with("modelo claude/opus"), "{bar:?}");
+    // 0.15 de cuota restante y reinicio dentro de 2 h, del proveedor real del modelo: el
+    // `provider_id` del catálogo (`anthropic`), no el prefijo del id (`claude`).
+    assert!(bar.contains("cuota 15 % (reinicia en 2 h)"), "{bar}");
+    assert!(bar.contains("arete-mobile"), "{bar}");
+    assert!(bar.contains("rama main"), "{bar}");
+    assert!(bar.contains("tokens —"), "{bar}");
+    assert!(bar.contains("modo —"), "{bar}");
+}
+
+#[test]
+fn the_status_bar_drops_the_last_fields_before_wrapping() {
+    let app = status_app();
+    let bar = status_bar(&app, 90);
+    assert!(bar.starts_with("modelo claude/opus"), "{bar}");
+    assert!(bar.contains("cuota 15 %"), "{bar}");
+    assert!(bar.contains("rama main"), "{bar}");
+    for gone in ["arete-mobile", "tokens", "modo"] {
+        assert!(!bar.contains(gone), "a 90 columnas no cabe {gone}: {bar}");
+    }
+}
+
+#[test]
+fn the_status_bar_keeps_model_and_quota_in_a_narrow_terminal() {
+    let app = status_app();
+    let bar = status_bar(&app, 60);
+    assert!(bar.starts_with("modelo claude/opus"), "{bar}");
+    assert!(bar.contains("cuota 15 %"), "{bar}");
+    assert!(!bar.contains("rama"), "{bar}");
+    assert!(bar.chars().count() <= 60, "se pasa de ancho: {bar}");
+}
+
+/// Si ni el modelo cabe, se recorta con «…»: la línea nunca se parte.
+#[test]
+fn the_status_bar_truncates_the_model_instead_of_wrapping() {
+    let app = status_app();
+    let bar = status_bar(&app, 30);
+    assert!(bar.starts_with("modelo "), "{bar}");
+    assert!(bar.contains('…'), "el modelo se recorta: {bar}");
+    assert!(!bar.contains("claude/opus"), "{bar}");
+    assert!(bar.contains("cuota 15 %"), "la cuota nunca se cae: {bar}");
+    assert!(bar.chars().count() <= 30, "se pasa de ancho: {bar}");
+}
+
+#[test]
+fn the_status_bar_is_on_every_screen() {
+    // Launch: la app recién creada, sin ninguna respuesta del daemon.
+    let launch = App::new("/work/arete-mobile");
+    assert_eq!(launch.screen, Screen::Launch);
+    assert!(status_bar(&launch, 96).starts_with("modelo "));
+
+    // Chat: el inicio de la app, cuando ya llegó el estado del proyecto.
+    let mut chat = App::new("/work/arete-mobile");
+    chat.start();
+    ok(&mut chat, Req::ProjectStatus, status(true, 0));
+    ok(&mut chat, Req::Providers, providers());
+    assert_eq!(chat.screen, Screen::Chat);
+    assert!(status_bar(&chat, 96).starts_with("modelo "));
+
+    // Home y Stats, con el catálogo cargado.
+    let home = status_app();
+    assert_eq!(home.screen, Screen::Home);
+    assert!(status_bar(&home, 96).starts_with("modelo claude/opus"));
+
+    let mut stats = status_app();
+    let calls = command(&mut stats, "stats");
+    assert_eq!(methods(&calls), ["context.stats", "usage.get"]);
+    assert_eq!(stats.screen, Screen::Stats);
+    assert!(status_bar(&stats, 96).starts_with("modelo "));
+}
+
+/// Sin datos, la barra no inventa: enseña «—» y no se rompe en una terminal estrecha.
+#[test]
+fn the_status_bar_shows_a_dash_when_it_has_no_data() {
+    let app = App::new("/work/arete-mobile");
+    let wide = status_bar(&app, 160);
+    assert!(wide.starts_with("modelo —"), "{wide}");
+    assert!(wide.contains("cuota —"), "{wide}");
+    // La carpeta sale del cwd, que existe aunque el proyecto no esté configurado.
+    assert!(wide.contains("arete-mobile"), "{wide}");
+    assert!(wide.contains("rama —"), "{wide}");
+    assert!(wide.contains("tokens —"), "{wide}");
+    assert!(wide.contains("modo —"), "{wide}");
+
+    // En 40 columnas la carpeta ya no cabe, pero la línea no se parte ni se pasa de ancho.
+    let narrow = status_bar(&app, 40);
+    assert!(narrow.starts_with("modelo —"), "{narrow}");
+    assert!(narrow.contains("cuota —"), "{narrow}");
+    assert!(narrow.chars().count() <= 40, "{narrow}");
+}
+
+// --- P17.S2: resumen de ediciones y streaming --------------------------------
+
+#[test]
+fn diff_stats_counts_two_files_and_ignores_headers() {
+    let diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,3 @@\n context\n-old line\n+new line\n+added line\n\\ No newline at end of file\n\ndiff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-removed line\n+changed line\n";
+    let stats = diff_stats(diff);
+    assert_eq!(stats.len(), 2, "{stats:?}");
+    assert_eq!(stats[0].path, "a.txt");
+    assert_eq!(stats[0].added, 2);
+    assert_eq!(stats[0].removed, 1);
+    assert_eq!(stats[1].path, "b.txt");
+    assert_eq!(stats[1].added, 1);
+    assert_eq!(stats[1].removed, 1);
+}
+
+/// Dentro de un hunk, una línea que empieza por `--- `/`+++ ` es contenido: quitar un comentario
+/// `-- x` de un `.sql` se ve `--- x` en el diff y tiene que contar.
+#[test]
+fn diff_stats_counts_content_that_looks_like_a_file_header() {
+    let diff = "diff --git a/x.sql b/x.sql\n--- a/x.sql\n+++ b/x.sql\n@@ -1,3 +1,3 @@\n--- comentario viejo\n+++ comentario nuevo\n SELECT 1;\n";
+    let stats = diff_stats(diff);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "x.sql");
+    assert_eq!(stats[0].added, 1, "`+++ comentario nuevo` es contenido");
+    assert_eq!(stats[0].removed, 1, "`--- comentario viejo` es contenido");
+}
+
+/// Trozo suelto sin `diff --git`: el nombre sale del `+++` o, en un borrado, del `---`.
+#[test]
+fn diff_stats_reads_a_fragment_without_a_git_header() {
+    let fragment = "--- a/src/x.rs\n+++ b/src/x.rs\n@@ -1 +1,2 @@\n-old\n+new\n+extra\n";
+    let stats = diff_stats(fragment);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "src/x.rs");
+    assert_eq!((stats[0].added, stats[0].removed), (2, 1));
+
+    let deletion = "--- a/viejo.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-borrado\n";
+    let stats = diff_stats(deletion);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "viejo.txt");
+    assert_eq!((stats[0].added, stats[0].removed), (0, 1));
+}
+
+/// Git entrecomilla y escapa las rutas raras; y el mismo archivo puede venir en dos bloques.
+#[test]
+fn diff_stats_unquotes_paths_and_sums_repeated_files() {
+    let quoted =
+        "diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"\n@@ -1 +1 @@\n-uno\n+dos\n";
+    let stats = diff_stats(quoted);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "caf\u{e9}.txt");
+    assert_eq!((stats[0].added, stats[0].removed), (1, 1));
+
+    let repeated = "diff --git a/x.txt b/x.txt\n@@ -1 +1 @@\n-uno\n+dos\ndiff --git a/x.txt b/x.txt\n@@ -9 +9 @@\n-tres\n+cuatro\n+cinco\n";
+    let stats = diff_stats(repeated);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "x.txt");
+    assert_eq!((stats[0].added, stats[0].removed), (3, 2));
+
+    let binary =
+        "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n";
+    let stats = diff_stats(binary);
+    assert_eq!(stats.len(), 1, "{stats:?}");
+    assert_eq!(stats[0].path, "logo.png");
+    assert_eq!((stats[0].added, stats[0].removed), (0, 0));
+}
+
+#[test]
+fn view_09_agent_changes_shows_edit_summary() {
+    let app = agent_app(Tab::Changes);
+    let screen = draw(&app);
+    assert!(screen.contains("Cambios · 1 archivo +2 −1"), "{screen}");
+    assert!(
+        screen
+            .lines()
+            .any(|l| { l.contains("src/auth.ts") && l.contains("+2") && l.contains("−1") }),
+        "{screen}"
+    );
+}
+
+#[test]
+fn view_09_agent_changes_without_diff_shows_empty_message() {
+    let mut app = agent_app(Tab::Changes);
+    app.agent.as_mut().unwrap().diff = String::new();
+    let screen = draw(&app);
+    assert!(screen.contains("Sin cambios contra la base."), "{screen}");
+    assert!(!screen.contains("archivo"), "{screen}");
+}
+
+#[test]
+fn chat_streams_partial_response_without_duplicates() {
+    let mut app = chat_app();
+    ok(&mut app, Req::ChatGet, json!({ "agent_id": "01CHAT" }));
+    ok(&mut app, Req::Inspect, inspect());
+    ok(
+        &mut app,
+        Req::Logs,
+        json!({ "messages": [ { "role": "USER", "content": "hola" } ], "partial": "Voy a" }),
+    );
+    let screen = draw(&app);
+    assert!(screen.contains("Voy a▍"), "{screen}");
+    ok(
+        &mut app,
+        Req::Logs,
+        json!({
+            "messages": [
+                { "role": "USER", "content": "hola" },
+                { "role": "ASSISTANT", "content": "Voy a mirar el bug" }
+            ],
+            "partial": ""
+        }),
+    );
+    let screen = draw(&app);
+    assert!(screen.contains("Voy a mirar el bug"), "{screen}");
+    assert!(!screen.contains("▍"), "{screen}");
+    assert_eq!(screen.matches("Voy a mirar el bug").count(), 1, "{screen}");
+}
+
+// --- P17.S6 · vistas avanzadas (avance, ramas, status global) ------------------
+
+fn branches_json() -> Value {
+    json!({ "branches": [
+        { "name": "main", "current": true, "ahead": 0, "behind": 0, "merged": true },
+        { "name": "phase/p17-tui", "current": false, "ahead": 3, "behind": 1, "merged": false },
+        { "name": "symphony/8e4f/agent-001", "current": false, "ahead": 0, "behind": 0, "merged": true },
+    ]})
+}
+
+fn branches_app() -> App {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('b'));
+    assert_eq!(app.screen, Screen::Branches);
+    assert_eq!(methods(&calls), ["git.branches"]);
+    ok(&mut app, Req::GitBranches, branches_json());
+    app
+}
+
+fn global_json() -> Value {
+    json!({
+        "projects": [
+            {
+                "root_path": "/work/app-one",
+                "providers": [
+                    { "provider_id": "anthropic", "model_id": "claude/sonnet", "tokens": 400_000 },
+                    { "provider_id": "openai", "model_id": "codex/gpt-5", "tokens": 40_000 }
+                ],
+                "daily": [
+                    { "date": "2026-10-01", "tokens": 30_000 },
+                    { "date": "2026-10-02", "tokens": 100_000 }
+                ]
+            },
+            {
+                "root_path": "/work/app-two",
+                "providers": [
+                    { "provider_id": "anthropic", "model_id": "claude/opus", "tokens": 10_000 }
+                ],
+                "daily": [{ "date": "2026-10-05", "tokens": 10_000 }]
+            }
+        ],
+        "incomplete_projects": ["/work/legacy-app"],
+    })
+}
+
+fn global_app() -> App {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.screen, Screen::GlobalStatus);
+    assert_eq!(methods(&calls), ["usage.global"]);
+    ok(&mut app, Req::UsageGlobal, global_json());
+    app
+}
+
+fn plan_app() -> App {
+    let mut app = home_app();
+    let calls = press(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.screen, Screen::Plan);
+    assert_eq!(methods(&calls), ["agent.list", "task.list"]);
+    ok(&mut app, Req::Agents, agents());
+    ok(&mut app, Req::Tasks, tasks_json());
+    app
+}
+
+#[test]
+fn view_36_plan_progress_80_columns() {
+    insta::assert_snapshot!(terminal(&plan_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_36_plan_progress_160_columns() {
+    insta::assert_snapshot!(terminal(&plan_app(), 160, 28).backend().to_string());
+}
+
+#[test]
+fn the_plan_view_opens_the_selected_agent() {
+    let mut app = plan_app();
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen, Screen::Agent);
+    assert_eq!(methods(&calls), ["agent.inspect"]);
+}
+
+#[test]
+fn view_37_branches_80_columns() {
+    insta::assert_snapshot!(terminal(&branches_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_37_branches_160_columns() {
+    insta::assert_snapshot!(terminal(&branches_app(), 160, 28).backend().to_string());
+}
+
+#[test]
+fn checking_out_a_branch_does_not_ask_for_confirmation() {
+    let mut app = branches_app();
+    press(&mut app, KeyCode::Down); // phase/p17-tui
+    let calls = press(&mut app, KeyCode::Enter);
+    assert_eq!(methods(&calls), ["git.checkout"]);
+    assert_eq!(calls[0].params, json!({ "branch": "phase/p17-tui" }));
+    // La rama actual no se puede volver a pedir.
+    press(&mut app, KeyCode::Up); // main (actual)
+    let calls = press(&mut app, KeyCode::Enter);
+    assert!(calls.is_empty());
+    // Tras el checkout la barra de estado se relee junto con las ramas.
+    let calls = ok(
+        &mut app,
+        Req::GitCheckout,
+        json!({ "branch": "phase/p17-tui" }),
+    );
+    assert_eq!(methods(&calls), ["project.status", "git.branches"]);
+}
+
+#[test]
+fn deleting_a_branch_always_asks_and_deletes_without_force() {
+    let mut app = branches_app();
+    press(&mut app, KeyCode::Down); // phase/p17-tui
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert!(calls.is_empty(), "la primera d solo pregunta");
+    assert!(app.branch_pending.is_some());
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert_eq!(methods(&calls), ["git.delete_branch"]);
+    assert_eq!(
+        calls[0].params,
+        json!({ "branch": "phase/p17-tui", "force": false })
+    );
+}
+
+#[test]
+fn deleting_the_current_branch_is_rejected() {
+    let mut app = branches_app(); // main está seleccionada y es la actual
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert!(calls.is_empty());
+    assert!(app.branch_pending.is_none());
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert!(calls.is_empty(), "ni la segunda d borra la rama en uso");
+}
+
+#[test]
+fn a_not_merged_branch_needs_a_second_confirmation_to_force() {
+    let mut app = branches_app();
+    press(&mut app, KeyCode::Down); // phase/p17-tui (sin integrar)
+    press(&mut app, KeyCode::Char('d')); // pregunta
+    press(&mut app, KeyCode::Char('d')); // intenta sin forzar
+    let calls = app.update(Msg::Reply(
+        Req::GitDelete,
+        Err(Failure {
+            code: "branch_not_merged".into(),
+            message: "phase/p17-tui".into(),
+        }),
+    ));
+    assert!(calls.is_empty());
+    assert!(
+        app.branch_pending.is_some(),
+        "queda armada la segunda confirmación"
+    );
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert_eq!(methods(&calls), ["git.delete_branch"]);
+    assert_eq!(
+        calls[0].params,
+        json!({ "branch": "phase/p17-tui", "force": true })
+    );
+}
+
+#[test]
+fn any_other_key_cancels_the_pending_delete() {
+    let mut app = branches_app();
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('d')); // pregunta
+    press(&mut app, KeyCode::Char('x')); // otra tecla: caduca
+    assert!(app.branch_pending.is_none());
+    let calls = press(&mut app, KeyCode::Char('d'));
+    assert!(calls.is_empty(), "vuelve a preguntar, no borra");
+    assert!(app.branch_pending.is_some());
+}
+
+#[test]
+fn view_38_global_status_80_columns() {
+    insta::assert_snapshot!(terminal(&global_app(), 80, 28).backend().to_string());
+}
+
+#[test]
+fn view_38_global_status_160_columns() {
+    insta::assert_snapshot!(terminal(&global_app(), 160, 28).backend().to_string());
+}
+
+#[test]
+fn global_usage_keeps_token_totals_separate_by_project() {
+    let output = terminal(&global_app(), 160, 40).backend().to_string();
+    assert!(output.contains("/work/app-one"));
+    assert!(output.contains("/work/app-two"));
+    assert!(output.contains("Total: 440000 tokens"));
+    assert!(output.contains("Total: 10000 tokens"));
+    assert!(!output.contains("Total: 450000 tokens"));
+}
+
+#[test]
+fn the_global_view_reloads_with_r() {
+    let mut app = global_app();
+    let calls = press(&mut app, KeyCode::Char('r'));
+    assert_eq!(methods(&calls), ["usage.global"]);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::Home);
 }

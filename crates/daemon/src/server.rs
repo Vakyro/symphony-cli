@@ -7,10 +7,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use rusqlite::{Connection as SqliteConnection, OpenFlags};
 use serde_json::{Value, json};
 use symphony_adapter_common::AgentEvent;
 use symphony_protocol::transport::{self, ListenerExt as _, LocalStream};
-use symphony_protocol::{Connection, Event, Message, PROTOCOL_VERSION, Request, Response};
+use symphony_protocol::{
+    Connection, DailyTokens, Event, GitBranch, GitBranchRequest, GitBranchResult, GitBranches,
+    GitDeleteBranchResult, GlobalProjectUsage, GlobalProviderUsage, GlobalUsage, Message,
+    PROTOCOL_VERSION, Request, Response,
+};
 use symphony_store::{Writer, repo};
 
 use crate::bus::{BusEvent, EventBus, EventSource};
@@ -125,6 +130,7 @@ struct State {
     runtime: crate::runtime::Runtime,
     /// Cola de operaciones pesadas (P08.S3).
     scheduling: Arc<crate::scheduling::Scheduling>,
+    objects: symphony_object_store::ObjectStore,
 }
 
 use crate::runtime::now_ms;
@@ -379,6 +385,9 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         writer: writer.handle(),
         runtime,
         scheduling,
+        objects: symphony_object_store::ObjectStore::new(
+            symphony_core::SymphonyHome::at(home).objects_dir(),
+        ),
     });
     let tracker = TaskTracker::new();
 
@@ -424,6 +433,44 @@ async fn handle(stream: LocalStream, state: Arc<State>) {
                 }
             }
             Ok(Some(Message::Subscribe(sub))) => {
+                let process_agent = sub
+                    .agent_id
+                    .clone()
+                    .filter(|_| sub.topics.iter().any(|t| t == TOPIC_AGENT_PROCESSES));
+                if let Some(agent) = process_agent {
+                    let exists = state.reader.lock().ok().is_some_and(|c| {
+                        c.query_row("SELECT 1 FROM agents WHERE id = ?1", [&agent], |_| Ok(()))
+                            .is_ok()
+                    });
+                    if !exists {
+                        let _ = conn
+                            .send(&Message::Response(Response::error(
+                                sub.id,
+                                "agent_not_found",
+                                "el agente no existe",
+                            )))
+                            .await;
+                        return;
+                    }
+                    let response = Response::ok(
+                        sub.id,
+                        json!({"topics":[TOPIC_AGENT_PROCESS_OUTPUT],"agent_id":agent}),
+                    );
+                    if conn.send(&Message::Response(response)).await.is_ok() {
+                        stream_process_output(conn, &state, &agent).await;
+                    }
+                    return;
+                }
+                if sub.topics.iter().any(|t| t == TOPIC_AGENT_PROCESSES) {
+                    let _ = conn
+                        .send(&Message::Response(Response::error(
+                            sub.id,
+                            "invalid_params",
+                            "agent.processes requiere agent_id",
+                        )))
+                        .await;
+                    return;
+                }
                 if !sub
                     .topics
                     .iter()
@@ -466,8 +513,41 @@ async fn handle(stream: LocalStream, state: Arc<State>) {
     }
 }
 
+async fn stream_process_output(mut conn: Connection<LocalStream>, state: &State, agent: &str) {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut rx = state.bus.subscribe();
+    loop {
+        let event = tokio::select! {
+            () = state.shutdown.cancelled() => return,
+            _ = conn.recv() => return,
+            ev = rx.recv() => ev,
+        };
+        let msg = match event {
+            Ok(ev) if ev.agent_id.as_deref() == Some(agent) => match &ev.event {
+                AgentEvent::ToolOutput {
+                    tool_use_id,
+                    tool,
+                    text,
+                } => Event::new(
+                    TOPIC_AGENT_PROCESS_OUTPUT,
+                    json!({"agent_id":agent,"run_id":ev.run_id,"tool_use_id":tool_use_id,"tool":tool,"text":symphony_core::redact(text).into_owned(),"occurred_at":ev.occurred_at}),
+                ),
+                _ => continue,
+            },
+            Ok(_) => continue,
+            Err(RecvError::Lagged(missed)) => Event::new(TOPIC_LAGGED, json!({"missed":missed})),
+            Err(RecvError::Closed) => return,
+        };
+        if conn.send(&Message::Event(msg)).await.is_err() {
+            return;
+        }
+    }
+}
+
 /// Tópico de los eventos canónicos de agentes (IDEA §5.3).
 pub const TOPIC_AGENT_EVENT: &str = "agent.event";
+pub const TOPIC_AGENT_PROCESSES: &str = "agent.processes";
+pub const TOPIC_AGENT_PROCESS_OUTPUT: &str = "agent.process.output";
 /// El suscriptor se atrasó y perdió eventos: tiene que releer el estado.
 pub const TOPIC_LAGGED: &str = "bus.lagged";
 
@@ -519,6 +599,10 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "hook.emit" => hook_emit(req, state).await,
         "providers.list" => providers_list(req, state),
         "usage.get" => usage_get(req, state),
+        "usage.global" => usage_global(req, state),
+        "git.branches" => git_branches(req, state),
+        "git.checkout" => git_checkout(req, state),
+        "git.delete_branch" => git_delete_branch(req, state),
         "providers.refresh" => match refresh_providers(&state.writer).await {
             Ok(()) => providers_list(req, state),
             Err(e) => Response::error(req.id, "store_error", e.to_string()),
@@ -542,6 +626,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.activity" => agent_view(req, state, |c, a| {
             crate::views::activity(c, a, 200).map(|v| json!({ "items": v }))
         }),
+        "agent.processes" => agent_view_with_objects(req, state),
         "agent.history" => agent_view(req, state, crate::views::history),
         "models.list" => read_view(req, state, |c| {
             crate::views::models(c, now_ms()).map(|v| json!({ "models": v }))
@@ -573,6 +658,8 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "provider.set_enabled" => provider_set_enabled(req, state).await,
         "project.status" => project_status(req, state).await,
         "project.init" => project_init(req).await,
+        // P17.S4: la TUI pregunta si puede animar (mascota del chat).
+        "config.ui" => config_ui(req, state),
         "merge.prepare" => merge_prepare(req, state).await,
         "merge.approve" | "merge.abort" | "merge.integrate" | "merge.resolve" => {
             merge_action(req, state).await
@@ -826,6 +913,7 @@ fn agent_list(req: Request, state: &State) -> Response {
                         "task_title": a.task_title,
                         "provider_id": a.provider_id,
                         "model_id": a.model_id,
+                        "branch": a.branch,
                     })
                 })
                 .collect();
@@ -1404,6 +1492,27 @@ fn agent_view(
     }
 }
 
+fn agent_view_with_objects(req: Request, state: &State) -> Response {
+    match resolve_agent_id(state, &req.params) {
+        Ok(id) => {
+            let id = id.to_string();
+            let result = state
+                .reader
+                .lock()
+                .ok()
+                .map(|c| crate::views::processes(&c, &id, &state.objects));
+            match result {
+                Some(Ok(processes)) => {
+                    Response::ok(req.id, json!({"agent_id":id,"processes":processes}))
+                }
+                Some(Err(e)) => Response::error(req.id, "store_error", e.to_string()),
+                None => Response::error(req.id, "store_error", "lector de la base no disponible"),
+            }
+        }
+        Err(e) => Response::error(req.id, "agent_not_found", e),
+    }
+}
+
 async fn provider_set_enabled(req: Request, state: &State) -> Response {
     let p = &req.params;
     let (Some(id), Some(enabled)) = (
@@ -1560,6 +1669,31 @@ fn fact_list(req: Request, state: &State) -> Response {
         })
         .collect();
     Response::ok(req.id, json!({ "facts": list }))
+}
+
+/// `config.ui` (P17.S4): si la TUI puede animar la mascota del chat. Manda `[ui]` de la config
+/// del usuario (`~/.symphony/config.toml`); `.symphony/project.toml` la puede pisar por proyecto.
+fn config_ui(req: Request, state: &State) -> Response {
+    let root = project_root_param(&req.params);
+    let user = symphony_core::SymphonyHome::user_for(&state.home);
+    let config = match symphony_core::load_or_create(&user) {
+        Ok(c) => c,
+        Err(e) => return Response::error(req.id, "config_error", e.to_string()),
+    };
+    // El override vive en la raíz del repo (`.symphony/project.toml`); fuera de un repo
+    // no hay project.toml que aplique.
+    let repo_root = match symphony_git::Repo::discover(&root) {
+        Ok(repo) => repo.root().to_path_buf(),
+        Err(_) => return Response::ok(req.id, json!({ "animations": config.ui.animations })),
+    };
+    let project = match symphony_core::load_project(&repo_root) {
+        Ok(p) => p,
+        Err(e) => return Response::error(req.id, "config_error", e.to_string()),
+    };
+    let animations = project.map_or(config.ui.animations, |p| {
+        p.ui.map_or(config.ui.animations, |u| u.animations)
+    });
+    Response::ok(req.id, json!({ "animations": animations }))
 }
 
 /// Launch (FLOW §4.1): ¿es un repo?, ¿está inicializado?, ¿hay algo que recuperar?
@@ -1795,6 +1929,150 @@ fn usage_get(req: Request, state: &State) -> Response {
         Some(Ok(v)) => Response::ok(req.id, json!({ "days": days, "usage": v })),
         Some(Err(e)) => Response::error(req.id, "store_error", e.to_string()),
         None => Response::error(req.id, "store_error", "lector de la base no disponible"),
+    }
+}
+
+fn usage_global(req: Request, state: &State) -> Response {
+    let user_home = symphony_core::SymphonyHome::user_for(&state.home);
+    match global_usage(user_home.root()) {
+        Ok(data) => Response::ok(req.id, json!(data)),
+        Err(error) => Response::error(req.id, "usage_global_error", error),
+    }
+}
+
+fn global_usage(user_home: &Path) -> Result<GlobalUsage, String> {
+    let registry = user_home.join("symphony.db");
+    if !registry.is_file() {
+        return Ok(GlobalUsage {
+            projects: Vec::new(),
+            incomplete_projects: Vec::new(),
+        });
+    }
+    let projects = symphony_store::split::list_projects(&registry).map_err(|e| e.to_string())?;
+    let mut project_usage = Vec::new();
+    let mut incomplete = Vec::new();
+    for (_, root) in projects {
+        let db = Path::new(&root).join(".symphony/symphony.db");
+        let conn = match SqliteConnection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(conn) => conn,
+            Err(_) => {
+                incomplete.push(root);
+                continue;
+            }
+        };
+        let rows = (|| {
+            let providers = conn.prepare(
+                "SELECT provider_id, model_id, COALESCE(SUM(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)), 0)
+                 FROM usage_records WHERE recorded_at >= CAST(strftime('%s', 'now', 'start of month') AS INTEGER) * 1000
+                 GROUP BY provider_id, model_id",
+            )?.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let daily = conn.prepare(
+                "SELECT strftime('%Y-%m-%d', recorded_at / 1000, 'unixepoch'),
+                        COALESCE(SUM(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)), 0)
+                 FROM usage_records WHERE recorded_at >= CAST(strftime('%s', 'now', 'start of month') AS INTEGER) * 1000
+                 GROUP BY 1 ORDER BY 1",
+            )?.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok::<_, rusqlite::Error>((providers, daily))
+        })();
+        let (provider_rows, daily_rows) = match rows {
+            Ok(rows) => rows,
+            Err(_) => {
+                incomplete.push(root);
+                continue;
+            }
+        };
+        project_usage.push(GlobalProjectUsage {
+            root_path: root,
+            providers: provider_rows
+                .into_iter()
+                .map(|(provider_id, model_id, tokens)| GlobalProviderUsage {
+                    provider_id,
+                    model_id,
+                    tokens: u64::try_from(tokens).unwrap_or(0),
+                })
+                .collect(),
+            daily: daily_rows
+                .into_iter()
+                .map(|(date, tokens)| DailyTokens {
+                    date,
+                    tokens: u64::try_from(tokens).unwrap_or(0),
+                })
+                .collect(),
+        });
+    }
+    Ok(GlobalUsage {
+        projects: project_usage,
+        incomplete_projects: incomplete,
+    })
+}
+
+fn git_repo(state: &State) -> Result<symphony_git::Repo, symphony_git::GitError> {
+    let root = state
+        .home
+        .parent()
+        .ok_or_else(|| symphony_git::GitError::Parse {
+            args: "rev-parse --show-toplevel".into(),
+            detail: "ruta de proyecto inválida".into(),
+        })?;
+    symphony_git::Repo::discover(root)
+}
+
+fn git_branches(req: Request, state: &State) -> Response {
+    match git_repo(state).and_then(|repo| repo.branches()) {
+        Ok(branches) => Response::ok(
+            req.id,
+            json!(GitBranches {
+                branches: branches
+                    .into_iter()
+                    .map(|b| GitBranch {
+                        name: b.name,
+                        current: b.current,
+                        ahead: b.ahead,
+                        behind: b.behind,
+                        merged: b.merged,
+                    })
+                    .collect(),
+            }),
+        ),
+        Err(error) => Response::error(req.id, "git_error", error.to_string()),
+    }
+}
+
+fn git_checkout(req: Request, state: &State) -> Response {
+    let request: GitBranchRequest = match serde_json::from_value::<GitBranchRequest>(req.params) {
+        Ok(request) if !request.branch.is_empty() => request,
+        _ => return Response::error(req.id, "invalid_params", "falta `branch`"),
+    };
+    match git_repo(state).and_then(|repo| repo.checkout(&request.branch)) {
+        Ok(()) => Response::ok(
+            req.id,
+            json!(GitBranchResult {
+                branch: request.branch
+            }),
+        ),
+        Err(error) => Response::error(req.id, "git_error", error.to_string()),
+    }
+}
+
+fn git_delete_branch(req: Request, state: &State) -> Response {
+    let request: GitBranchRequest = match serde_json::from_value::<GitBranchRequest>(req.params) {
+        Ok(request) if !request.branch.is_empty() => request,
+        _ => return Response::error(req.id, "invalid_params", "falta `branch`"),
+    };
+    match git_repo(state).and_then(|repo| repo.delete_branch(&request.branch, request.force)) {
+        Ok(()) => Response::ok(
+            req.id,
+            json!(GitDeleteBranchResult {
+                branch: request.branch,
+                deleted: true,
+            }),
+        ),
+        Err(symphony_git::GitError::BranchNotMerged(name)) => {
+            Response::error(req.id, "branch_not_merged", name)
+        }
+        Err(error) => Response::error(req.id, "git_error", error.to_string()),
     }
 }
 
@@ -2846,5 +3124,49 @@ async fn performance_set(req: Request, state: &State) -> Response {
             )
         }
         Err(e) => Response::error(req.id, "config_error", e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod global_usage_tests {
+    use super::global_usage;
+    use rusqlite::Connection;
+
+    #[test]
+    fn usage_global_reads_registered_databases_without_combining_projects() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = Connection::open(home.path().join("symphony.db")).unwrap();
+        registry
+            .execute_batch("CREATE TABLE projects(id TEXT, root_path TEXT, created_at INTEGER);")
+            .unwrap();
+        for (id, name, tokens) in [("p1", "one", 30), ("p2", "two", 12)] {
+            let root = home.path().join(name);
+            std::fs::create_dir_all(root.join(".symphony")).unwrap();
+            registry
+                .execute(
+                    "INSERT INTO projects VALUES (?1, ?2, 0)",
+                    rusqlite::params![id, root.to_string_lossy()],
+                )
+                .unwrap();
+            let db = Connection::open(root.join(".symphony/symphony.db")).unwrap();
+            db.execute_batch("CREATE TABLE usage_records(provider_id TEXT, model_id TEXT, tokens_in INTEGER, tokens_out INTEGER, recorded_at INTEGER);").unwrap();
+            db.execute("INSERT INTO usage_records VALUES ('anthropic', 'opus', ?1, 0, CAST(strftime('%s','now') AS INTEGER) * 1000)", [tokens]).unwrap();
+        }
+        drop(registry);
+
+        let data = global_usage(home.path()).unwrap();
+        assert_eq!(data.projects.len(), 2);
+        assert_eq!(data.projects[0].providers[0].tokens, 30);
+        assert_eq!(data.projects[1].providers[0].tokens, 12);
+        assert_eq!(data.projects[0].daily[0].tokens, 30);
+        assert_eq!(data.projects[1].daily[0].tokens, 12);
+        assert_ne!(data.projects[0].root_path, data.projects[1].root_path);
+        assert!(data.incomplete_projects.is_empty());
+        assert!(
+            !home
+                .path()
+                .join("one/.symphony/symphony.db-journal")
+                .exists()
+        );
     }
 }

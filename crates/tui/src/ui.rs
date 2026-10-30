@@ -1,5 +1,7 @@
 //! Render de las vistas (FLOW §18: 01–09, 12, 13, 22, 24, 30). Funciones puras de `&App`.
 
+use std::cell::RefCell;
+
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -12,19 +14,43 @@ use crate::app::{
     AgentView, App, Exec, FAILOVER, Notice, PERFORMANCE, PRIORITY, PickFor, Screen, Selection, Tab,
     ago, state_phrase,
 };
+use crate::mascot;
+use crate::theme::Theme;
 
-const ACCENT: Color = Color::Cyan;
+thread_local! {
+    static THEME: RefCell<Option<Theme>> = const { RefCell::new(None) };
+}
+
+fn current_theme() -> Theme {
+    THEME.with(|c| c.borrow().clone().unwrap_or_default())
+}
+
+fn theme_fg(color: Option<Color>) -> Style {
+    let mut s = Style::default();
+    if let Some(c) = color {
+        s = s.fg(c);
+    }
+    s
+}
 
 fn bold(s: impl Into<String>) -> Span<'static> {
     Span::styled(s.into(), Style::default().add_modifier(Modifier::BOLD))
 }
 
 fn dim(s: impl Into<String>) -> Span<'static> {
-    Span::styled(s.into(), Style::default().fg(Color::DarkGray))
+    let mut st = Style::default();
+    if let Some(c) = current_theme().muted {
+        st = st.fg(c);
+    }
+    Span::styled(s.into(), st)
 }
 
-fn colored(s: impl Into<String>, c: Color) -> Span<'static> {
-    Span::styled(s.into(), Style::default().fg(c))
+fn colored(s: impl Into<String>, c: Option<Color>) -> Span<'static> {
+    let mut st = Style::default();
+    if let Some(c) = c {
+        st = st.fg(c);
+    }
+    Span::styled(s.into(), st)
 }
 
 fn text(v: &Value) -> String {
@@ -37,33 +63,36 @@ fn num(v: &Value) -> String {
         .map_or_else(|| "—".to_string(), |n| n.to_string())
 }
 
-fn state_color(state: &str) -> Color {
+fn state_color(state: &str) -> Option<Color> {
+    let t = current_theme();
     match state {
-        "RUNNING" | "TESTING" | "READY" | "COMPLETED" => Color::Green,
-        "FAILED" | "BLOCKED" | "ERROR" | "NOT_FOUND" => Color::Red,
-        "CANCELLED" => Color::DarkGray,
-        _ => Color::Yellow,
+        "RUNNING" | "TESTING" | "READY" | "COMPLETED" => t.ok,
+        "FAILED" | "BLOCKED" | "ERROR" | "NOT_FOUND" => t.error,
+        "CANCELLED" => t.muted,
+        _ => t.warn,
     }
 }
 
 /// Marca de la fila elegida en una lista.
 fn marker(selected: bool) -> Span<'static> {
     if selected {
-        colored("▸ ", ACCENT)
+        colored("▸ ", current_theme().brand)
     } else {
         Span::raw("  ")
     }
 }
 
 fn section(title: &str) -> Line<'static> {
-    Line::from(colored(title.to_string(), ACCENT).add_modifier(Modifier::BOLD))
+    Line::from(colored(title.to_string(), current_theme().brand).add_modifier(Modifier::BOLD))
 }
 
 pub fn render(app: &App, f: &mut Frame) {
+    THEME.with(|c| *c.borrow_mut() = Some(app.theme.clone()));
     let bottom = if app.command.is_some() { 2 } else { 1 };
-    let [header, body, footer] = Layout::vertical([
+    let [header, body, status_bar, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
+        Constraint::Length(1),
         Constraint::Length(bottom),
     ])
     .areas(f.area());
@@ -88,16 +117,20 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::Tasks => "· Tareas",
         Screen::TaskDetail => "· Tarea",
         Screen::Milestones => "· Milestones",
+        Screen::Plan => "· Avance del plan",
+        Screen::Branches => "· Ramas",
+        Screen::GlobalStatus => "· Status global",
         Screen::System => "· Sistema",
         Screen::PerformanceProfile => "· Perfil de rendimiento",
         Screen::Validation => "· Validación",
         Screen::MergePreflight => "· Integración",
         Screen::ConflictReview => "· Conflictos",
         Screen::ReviewResult => "· Revisión",
+        Screen::Help => "· Atajos",
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            colored(" SYMPHONY ", ACCENT).add_modifier(Modifier::BOLD),
+            colored(" SYMPHONY ", current_theme().brand).add_modifier(Modifier::BOLD),
             bold(app.project_name().to_string()),
             Span::raw(" "),
             dim(title),
@@ -125,15 +158,21 @@ pub fn render(app: &App, f: &mut Frame) {
         Screen::Tasks => tasks(app, f, body),
         Screen::TaskDetail => task_detail(app, f, body),
         Screen::Milestones => milestones(app, f, body),
+        Screen::Plan => plan(app, f, body),
+        Screen::Branches => branches(app, f, body),
+        Screen::GlobalStatus => global_status(app, f, body),
         Screen::System => system(app, f, body),
         Screen::PerformanceProfile => performance_profile(app, f, body),
         Screen::Validation => validation(app, f, body),
         Screen::MergePreflight => merge_preflight(app, f, body),
         Screen::ConflictReview => conflict_review(app, f, body),
         Screen::ReviewResult => review_result(app, f, body),
+        Screen::Help => help(app, f, body),
     }
 
+    status_line(app, f, status_bar);
     footer_line(app, f, footer);
+    THEME.with(|c| *c.borrow_mut() = None);
 }
 
 fn hints(app: &App) -> &'static str {
@@ -151,7 +190,7 @@ fn hints(app: &App) -> &'static str {
             "Enter enviar · Tab modelo · ^Y copiar · ^E exportar · ^R revisar · ^G a main · F2 ratón · Esc"
         }
         Screen::Home => {
-            "↑↓ elegir · Enter abrir · n nuevo · t tareas · m milestones · s sistema · p proveedores · r recovery · : comando · Esc chat · q salir"
+            "↑↓ elegir · Enter abrir · n nuevo · t tareas · m milestones · a avance · b ramas · g status global · s sistema · p proveedores · r recovery · : comando · Esc chat · q salir"
         }
         Screen::NewAgent => "↑↓ campo · ←→ opción · Enter siguiente/crear · Esc cancelar",
         Screen::ModelPicker => "↑↓ elegir · Enter usar · Esc volver",
@@ -178,6 +217,11 @@ fn hints(app: &App) -> &'static str {
         Screen::Milestones => {
             "↑↓ elegir · n nuevo · a aprobar · c pedir cambios · h retener · r releer · Esc volver"
         }
+        Screen::Plan => "↑↓ elegir · Enter/a agente · r releer · Esc volver",
+        Screen::Branches => {
+            "↑↓ elegir · Enter cambiar · d borrar (d otra vez confirma) · r releer · Esc volver"
+        }
+        Screen::GlobalStatus => "r releer · Esc volver",
         Screen::System => "p cambiar perfil · r releer · Esc volver",
         Screen::PerformanceProfile => "↑↓ elegir · Enter aplicar · Esc volver",
         Screen::Validation => {
@@ -190,6 +234,7 @@ fn hints(app: &App) -> &'static str {
             "m resuelto a mano · w pedir revisor · p volver a comprobar · x abandonar · Esc"
         }
         Screen::ReviewResult => "w pedir revisión · r releer · Esc volver",
+        Screen::Help => "Esc cerrar",
     }
 }
 
@@ -197,23 +242,243 @@ fn footer_line(app: &App, f: &mut Frame, area: Rect) {
     let mut lines = Vec::new();
     if let Some(cmd) = &app.command {
         lines.push(Line::from(vec![
-            colored("> ", ACCENT),
+            colored("> ", current_theme().brand),
             Span::raw(cmd.clone()),
             Span::raw("▏"),
         ]));
     }
     lines.push(match &app.notice {
-        Some(Notice::Error(e)) => Line::from(colored(format!(" {e}"), Color::Red)),
-        Some(Notice::Info(i)) => Line::from(colored(format!(" {i}"), Color::Green)),
+        Some(Notice::Error(e)) => Line::from(colored(format!(" {e}"), current_theme().error)),
+        Some(Notice::Info(i)) => Line::from(colored(format!(" {i}"), current_theme().ok)),
         None => Line::from(dim(format!(" {}", hints(app)))),
     });
     f.render_widget(Paragraph::new(lines), area);
 }
 
+/// Barra de estado de una línea, siempre visible.
+struct StatusField {
+    id: &'static str,
+    label: Option<&'static str>,
+    value: String,
+    color: Option<Color>,
+}
+
+impl StatusField {
+    fn width(&self) -> usize {
+        let label_w = self.label.map_or(0, |l| l.chars().count() + 1); // etiqueta + espacio
+        label_w + self.value.chars().count()
+    }
+}
+
+fn status_line(app: &App, f: &mut Frame, area: Rect) {
+    let theme = current_theme();
+
+    // modelo del momento
+    let model_value = app
+        .chat_model
+        .clone()
+        .or_else(|| {
+            app.agent
+                .as_ref()
+                .and_then(|a| a.model().map(str::to_string))
+        })
+        .unwrap_or_else(|| "—".to_string());
+
+    // Proveedor del modelo: manda el catálogo (`anthropic`), porque el prefijo del id no siempre
+    // coincide (`claude/sonnet`); si el modelo no está en el catálogo, el `provider_id` del run y,
+    // como último recurso, lo de antes de la primera barra.
+    let provider = if model_value == "—" {
+        String::new()
+    } else {
+        let from_catalog = app
+            .models
+            .iter()
+            .find(|m| m["id"].as_str() == Some(model_value.as_str()))
+            .and_then(|m| m["provider_id"].as_str());
+        let from_run = app
+            .agent
+            .as_ref()
+            .filter(|a| a.model() == Some(model_value.as_str()))
+            .and_then(|a| a.inspect["current_run"]["provider_id"].as_str());
+        from_catalog
+            .or(from_run)
+            .map(str::to_string)
+            .unwrap_or_else(|| model_value.split('/').next().unwrap_or("").to_string())
+    };
+
+    // cuota
+    let mut cuota_value = "—".to_string();
+    if !provider.is_empty()
+        && let Some(p) = app
+            .providers
+            .iter()
+            .find(|p| p["id"].as_str() == Some(&provider))
+    {
+        let h = &p["health"];
+        if let Some(rem) = h["remaining"].as_f64() {
+            let pct = (rem * 100.0).round() as i64;
+            let mut text = format!("{pct} %");
+            // «reinicia en …» solo cuando la barra va ancha: en 80 columnas se come el resto.
+            if area.width >= 100
+                && let Some(reset) = h["reset_at"].as_i64()
+                && reset > app.now_ms
+            {
+                text = format!("{text} (reinicia en {})", ago(reset, app.now_ms));
+            }
+            cuota_value = text;
+        }
+    }
+
+    // carpeta
+    let folder_path = app
+        .project
+        .get("root")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| app.cwd.clone());
+    let folder = std::path::Path::new(&folder_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or(folder_path);
+
+    // rama
+    let branch = app
+        .project
+        .get("branch")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("—")
+        .to_string();
+
+    let mut fields = vec![
+        StatusField {
+            id: "modelo",
+            label: Some("modelo"),
+            value: model_value.clone(),
+            color: theme.brand,
+        },
+        StatusField {
+            id: "cuota",
+            label: Some("cuota"),
+            value: cuota_value,
+            color: theme.muted,
+        },
+        StatusField {
+            id: "carpeta",
+            label: None,
+            value: folder,
+            color: theme.muted,
+        },
+        StatusField {
+            id: "rama",
+            label: Some("rama"),
+            value: branch,
+            color: theme.muted,
+        },
+        StatusField {
+            id: "tokens",
+            label: Some("tokens"),
+            value: "—".to_string(),
+            color: theme.muted,
+        },
+        StatusField {
+            id: "modo",
+            label: Some("modo"),
+            value: "—".to_string(),
+            color: theme.muted,
+        },
+    ];
+
+    // Responsivo por ancho: umbrales fijos.
+    if area.width < 110 {
+        fields.retain(|f| f.id != "modo" && f.id != "tokens" && f.id != "carpeta");
+    }
+    if area.width < 80 {
+        fields.retain(|f| f.id != "rama");
+    }
+
+    let sep = "  |  ";
+    let sep_w = sep.chars().count();
+
+    let total_width = |fs: &[StatusField]| -> usize {
+        fs.iter().map(StatusField::width).sum::<usize>() + fs.len().saturating_sub(1) * sep_w
+    };
+
+    // Caída de campos de derecha a izquierda por prioridad.
+    let drop_priority = ["modo", "tokens", "carpeta", "rama"];
+    while total_width(&fields) > usize::from(area.width) && fields.len() > 2 {
+        let mut idx = None;
+        for pid in &drop_priority {
+            if let Some(i) = fields.iter().position(|f| f.id == *pid) {
+                idx = Some(i);
+                break;
+            }
+        }
+        match idx {
+            Some(i) => {
+                fields.remove(i);
+            }
+            None => break,
+        }
+    }
+
+    // Recorte del modelo si aún no cabe.
+    let other_w: usize = fields
+        .iter()
+        .filter(|f| f.id != "modelo")
+        .map(StatusField::width)
+        .sum();
+    let sep_count = fields.len().saturating_sub(1);
+    let available = usize::from(area.width)
+        .saturating_sub(other_w)
+        .saturating_sub(sep_count * sep_w);
+    if let Some(mf) = fields.iter_mut().find(|f| f.id == "modelo")
+        && mf.width() > available
+    {
+        let prefix = "modelo ";
+        let prefix_w = prefix.chars().count();
+        if available <= prefix_w {
+            mf.value = "…".to_string();
+        } else {
+            let avail_value = available.saturating_sub(prefix_w);
+            let chars: Vec<char> = mf.value.chars().collect();
+            if chars.len() + prefix_w <= available {
+                // ya cabe, nada
+            } else if avail_value <= 1 {
+                mf.value = "…".to_string();
+            } else {
+                let take = avail_value.saturating_sub(1);
+                let trunc: String = chars.into_iter().take(take).collect();
+                mf.value = format!("{trunc}…");
+            }
+        }
+    }
+
+    // Construcción de la línea (sin wrap).
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, ffield) in fields.iter().enumerate() {
+        if i > 0 {
+            spans.push(colored(sep.to_string(), theme.muted));
+        }
+        if let Some(label) = ffield.label {
+            spans.push(colored(format!("{label} "), theme.muted));
+        }
+        spans.push(colored(ffield.value.clone(), ffield.color));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 fn boxed(title: &str) -> Block<'static> {
+    let mut st = Style::default();
+    if let Some(c) = current_theme().border {
+        st = st.fg(c);
+    }
     Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(st)
         .title(Span::styled(
             format!(" {title} "),
             Style::default().add_modifier(Modifier::BOLD),
@@ -231,15 +496,50 @@ fn paragraph(f: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) 
 
 // --- 01 Launch --------------------------------------------------------------
 
+pub const LAUNCH_ART: &[&str] = &[
+    "   *     .-.     *",
+    "         (o o)",
+    "          |=|",
+    "         /| |\\",
+    "        / | | \\  *",
+    "       '  | |  ' /",
+    "          | |",
+    "         /   \\",
+];
+
 fn launch(app: &App, f: &mut Frame, area: Rect) {
     let check = |done: bool| {
         if done {
-            colored("listo", Color::Green)
+            colored("listo", current_theme().ok)
         } else {
             dim("…")
         }
     };
-    let mut lines = vec![
+    let art_lines: Vec<Line<'static>> = if area.width < 66 || area.height < 20 {
+        let inner = area.width.saturating_sub(2) as usize;
+        let label = "SYMPHONY";
+        let pad = inner.saturating_sub(label.len()) / 2;
+        vec![
+            Line::from(vec![
+                Span::raw(" ".repeat(pad)),
+                colored(label.to_string(), current_theme().brand).add_modifier(Modifier::BOLD),
+            ]),
+            Line::raw(""),
+        ]
+    } else {
+        let inner = area.width.saturating_sub(2) as usize;
+        let mut v: Vec<Line<'static>> = Vec::new();
+        for l in LAUNCH_ART {
+            let pad = inner.saturating_sub(l.chars().count()) / 2;
+            v.push(Line::from(vec![
+                Span::raw(" ".repeat(pad)),
+                colored(l.to_string(), current_theme().brand),
+            ]));
+        }
+        v.push(Line::raw(""));
+        v
+    };
+    let status_lines = vec![
         Line::from(vec![
             Span::raw("Proyecto:  "),
             bold(if app.loaded() {
@@ -257,6 +557,8 @@ fn launch(app: &App, f: &mut Frame, area: Rect) {
             check(!app.providers.is_empty()),
         ]),
     ];
+    let mut lines = art_lines;
+    lines.extend(status_lines);
     if app.loaded() && !app.initialized() {
         lines.push(Line::raw(""));
         lines.push(Line::raw(
@@ -271,6 +573,25 @@ fn launch(app: &App, f: &mut Frame, area: Rect) {
             bold("[q]"),
             Span::raw(" Salir"),
         ]));
+        lines.push(Line::raw(""));
+        lines.push(section("PARA EMPEZAR"));
+        for (k, v) in [
+            (
+                "i",
+                "configurar el proyecto (nombre, rendimiento y failover)",
+            ),
+            ("o", "abrir sin configurar"),
+            (
+                ":",
+                "barra de comandos (new, tasks, stats, providers, system...)",
+            ),
+            ("q", "salir"),
+        ] {
+            lines.push(Line::from(vec![
+                bold(k.to_string()),
+                Span::raw(format!("        {}", v)),
+            ]));
+        }
     } else {
         lines.push(Line::from(vec![
             Span::raw("Restaurando sesión…                "),
@@ -317,7 +638,7 @@ fn choice(options: &[&str], chosen: usize) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, o) in options.iter().enumerate() {
         if i == chosen {
-            spans.push(colored(format!("(•) {o}  "), ACCENT));
+            spans.push(colored(format!("(•) {o}  "), current_theme().brand));
         } else {
             spans.push(dim(format!("( ) {o}  ")));
         }
@@ -363,14 +684,14 @@ fn first_run(app: &App, f: &mut Frame, area: Rect) {
     if ready == 0 {
         lines.push(Line::from(colored(
             "  Ningún proveedor listo: podrás configurarlos en el siguiente paso.",
-            Color::Yellow,
+            current_theme().warn,
         )));
     }
     lines.push(Line::raw(""));
     lines.push(field(
         "",
         Line::from(if fr.field == 3 {
-            colored("[ Entrar a Symphony ]", ACCENT).add_modifier(Modifier::BOLD)
+            colored("[ Entrar a Symphony ]", current_theme().brand).add_modifier(Modifier::BOLD)
         } else {
             Span::raw("[ Entrar a Symphony ]")
         }),
@@ -396,12 +717,13 @@ fn provider_advice(state: &str, name: &str) -> String {
 }
 
 /// Color de un estado de salud (FLOW §12.2).
-fn health_color(state: &str) -> Color {
+fn health_color(state: &str) -> Option<Color> {
+    let t = current_theme();
     match state {
-        "HEALTHY" => Color::Green,
-        "EXHAUSTED" | "AUTH_ERROR" | "OFFLINE" => Color::Red,
-        "UNKNOWN" => Color::DarkGray,
-        _ => Color::Yellow,
+        "HEALTHY" => t.ok,
+        "EXHAUSTED" | "AUTH_ERROR" | "OFFLINE" => t.error,
+        "UNKNOWN" => t.muted,
+        _ => t.warn,
     }
 }
 
@@ -517,7 +839,7 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
                 if enabled {
                     state_color(&state)
                 } else {
-                    Color::DarkGray
+                    current_theme().muted
                 },
             ),
             colored(
@@ -525,7 +847,7 @@ fn providers(app: &App, f: &mut Frame, area: Rect) {
                 if enabled && state == "READY" {
                     health_color(&health_state)
                 } else {
-                    Color::DarkGray
+                    current_theme().muted
                 },
             ),
             dim(format!("{:<21} ", quota_text(health))),
@@ -622,9 +944,9 @@ fn explain_route(app: &App, f: &mut Frame, area: Rect) {
                 colored(
                     format!("{:<10} ", if eligible { "elegible" } else { "descartado" }),
                     if eligible {
-                        Color::Green
+                        current_theme().ok
                     } else {
-                        Color::DarkGray
+                        current_theme().muted
                     },
                 ),
                 Span::raw(format!(
@@ -691,6 +1013,55 @@ fn wrap(s: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Envuelve los fragmentos conservando el color incluso al cortar una palabra.
+fn marked_lines(content: &str, width: usize) -> Vec<Vec<Span<'static>>> {
+    let theme = current_theme();
+    let chars: Vec<_> = crate::markers::parse(content)
+        .into_iter()
+        .flat_map(|(text, role)| {
+            let color = role.and_then(|r| theme.color(r));
+            text.chars().map(move |c| (c, color))
+        })
+        .collect();
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for src in chars.split(|(c, _)| *c == '\n') {
+        let mut line = Vec::new();
+        for word in src.split(|(c, _)| *c == ' ') {
+            let mut word = word;
+            while word.len() > width {
+                if !line.is_empty() {
+                    out.push(std::mem::take(&mut line));
+                }
+                out.push(word[..width].to_vec());
+                word = &word[width..];
+            }
+            if !line.is_empty() && line.len() + 1 + word.len() > width {
+                out.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push((' ', word.first().and_then(|(_, color)| *color)));
+            }
+            line.extend_from_slice(word);
+        }
+        out.push(line);
+    }
+    out.into_iter()
+        .map(|line| {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            for (c, color) in line {
+                let style = theme_fg(color);
+                if let Some(last) = spans.last_mut().filter(|s| s.style == style) {
+                    last.content.to_mut().push(c);
+                } else {
+                    spans.push(Span::styled(c.to_string(), style));
+                }
+            }
+            spans
+        })
+        .collect()
+}
+
 /// Prompt de un handoff: lo ve el modelo nuevo, no el usuario (FLOW §13.4 ya marca el cambio).
 // ponytail: se reconoce por su frase inicial (crates/context/src/handoff.rs); si cambia, hay que
 // actualizarla acá o el chat mostraría el handoff entero.
@@ -704,26 +1075,33 @@ fn message_lines(m: &Value, width: usize) -> Vec<Line<'static>> {
     match m["role"].as_str().unwrap_or("") {
         "EXECUTOR_CHANGE" => {
             for l in wrap(content, width) {
-                lines.push(Line::from(colored(l, Color::Magenta)));
+                lines.push(Line::from(colored(l, current_theme().accent)));
             }
         }
         "USER" if content.starts_with(HANDOFF_PROMPT) => return lines,
         role => {
             let (who, color) = match role {
-                "USER" => ("tú", ACCENT),
-                "ASSISTANT" => ("agente", Color::Green),
-                _ => ("sistema", Color::DarkGray),
+                "USER" => ("tú", current_theme().brand),
+                "ASSISTANT" => ("agente", current_theme().ok),
+                _ => ("sistema", current_theme().muted),
             };
-            for (i, l) in wrap(content, width.saturating_sub(9))
-                .into_iter()
-                .enumerate()
-            {
+            let body_width = width.saturating_sub(9);
+            let body = if role == "ASSISTANT" && content.contains("[[symphony:") {
+                marked_lines(content, body_width)
+            } else {
+                wrap(content, body_width)
+                    .into_iter()
+                    .map(|l| vec![Span::raw(l)])
+                    .collect()
+            };
+            for (i, mut spans) in body.into_iter().enumerate() {
                 let prefix = if i == 0 {
                     format!("{who:>7} │ ")
                 } else {
                     "        │ ".into()
                 };
-                lines.push(Line::from(vec![colored(prefix, color), Span::raw(l)]));
+                spans.insert(0, colored(prefix, color));
+                lines.push(Line::from(spans));
             }
         }
     }
@@ -734,9 +1112,9 @@ fn message_lines(m: &Value, width: usize) -> Vec<Line<'static>> {
 /// Una herramienta que usó el agente, en una línea tenue.
 fn tool_line(t: &Value, width: usize) -> Line<'static> {
     let (mark, color) = match t["status"].as_str().unwrap_or("") {
-        "DONE" => ("✓", Color::Green),
-        "FAILED" | "DENIED" => ("✗", Color::Red),
-        _ => ("…", Color::Yellow),
+        "DONE" => ("✓", current_theme().ok),
+        "FAILED" | "DENIED" => ("✗", current_theme().error),
+        _ => ("…", current_theme().warn),
     };
     let cmd = t["command"].as_str().unwrap_or("").replace('\n', " ");
     let tool = t["tool"].as_str().unwrap_or("?");
@@ -787,7 +1165,7 @@ fn suggestion_lines(s: Option<&Value>, keys: &str, width: usize) -> Vec<Line<'st
             } else {
                 format!("  {l}")
             },
-            Color::Cyan,
+            current_theme().accent,
         )));
     }
     out.push(Line::from(dim(format!("  {keys}"))));
@@ -824,7 +1202,7 @@ fn working_line(app: &App, view: &AgentView) -> Line<'static> {
     Line::from(vec![
         colored(
             format!("{} ", SPINNER[app.frame as usize % SPINNER.len()]),
-            Color::Yellow,
+            current_theme().warn,
         ),
         dim(format!("{what}… {secs} s")),
     ])
@@ -847,17 +1225,19 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
     match (&app.chat_model, current) {
         (Some(next), Some(cur)) if next != cur => {
             model.push(dim("  →  "));
-            model.push(colored(next.clone(), ACCENT).add_modifier(Modifier::BOLD));
+            model.push(colored(next.clone(), current_theme().brand).add_modifier(Modifier::BOLD));
             model.push(dim("  (cambia al enviar)"));
         }
         (Some(next), None) => {
-            model.push(colored(next.clone(), ACCENT).add_modifier(Modifier::BOLD));
+            model.push(colored(next.clone(), current_theme().brand).add_modifier(Modifier::BOLD));
             model.push(dim("  (primer mensaje)"));
         }
         _ => {}
     }
     model.push(dim("   Rama: symphony/chat"));
-    let head = vec![
+    // P17.S4: la mascota (mini piano) solo en el chat principal y solo mientras trabaja.
+    let mascot_on = app.ui_animations && view.is_some_and(|v| v.state() == "RUNNING");
+    let mut head = vec![
         if view.is_some() {
             Line::from(vec![
                 bold("CHAT  "),
@@ -869,8 +1249,11 @@ fn chat(app: &App, f: &mut Frame, area: Rect) {
         },
         Line::from(model),
     ];
+    if mascot_on {
+        head.extend(mascot::piano_lines(app.tick_count(), &current_theme()));
+    }
     let [top, body, input] = Layout::vertical([
-        Constraint::Length(4),
+        Constraint::Length(if mascot_on { 7 } else { 4 }),
         Constraint::Min(3),
         Constraint::Length(4),
     ])
@@ -979,7 +1362,7 @@ fn skill_popup(app: &App, f: &mut Frame, body: Rect) {
                 dim(text(&m["description"])),
             ]);
             if selected {
-                row.style(Style::default().fg(ACCENT))
+                row.style(theme_fg(current_theme().brand))
             } else {
                 row
             }
@@ -1019,14 +1402,14 @@ fn home(app: &App, f: &mut Frame, area: Rect) {
             format!(
                 "⚠ {recovery} problema(s) por recuperar: pulsa r para abrir el Recovery Center."
             ),
-            Color::Yellow,
+            current_theme().warn,
         )));
     }
     let attention = app.providers_needing_attention();
     if attention > 0 {
         lines.push(Line::from(colored(
             format!("⚠ {attention} proveedor(es) necesitan atención: pulsa p."),
-            Color::Yellow,
+            current_theme().warn,
         )));
     }
     if !app.initialized() && app.loaded() {
@@ -1101,7 +1484,7 @@ fn home(app: &App, f: &mut Frame, area: Rect) {
             if waiting > 0 {
                 lines.push(Line::from(colored(
                     format!("  {waiting} operación(es) esperando turno: s para ver por qué."),
-                    Color::Yellow,
+                    current_theme().warn,
                 )));
             }
         }
@@ -1117,7 +1500,7 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
     let na = &app.new_agent;
     let pick = |on: bool, label: String| {
         if on {
-            colored(format!("(•) {label}"), ACCENT)
+            colored(format!("(•) {label}"), current_theme().brand)
         } else {
             dim(format!("( ) {label}"))
         }
@@ -1162,7 +1545,7 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
         field(
             "",
             Line::from(if na.field == 4 {
-                colored("[ Crear agente ]", ACCENT).add_modifier(Modifier::BOLD)
+                colored("[ Crear agente ]", current_theme().brand).add_modifier(Modifier::BOLD)
             } else {
                 Span::raw("[ Crear agente ]")
             }),
@@ -1173,12 +1556,12 @@ fn new_agent(app: &App, f: &mut Frame, area: Rect) {
 }
 
 /// FLOW §8.1: el estado que se ve junto a cada modelo.
-fn model_status(m: &Value) -> (String, Color) {
+fn model_status(m: &Value) -> (String, Option<Color>) {
     if !m["available"].as_bool().unwrap_or(false) {
-        return (text(&m["setup_state"]), Color::Yellow);
+        return (text(&m["setup_state"]), current_theme().warn);
     }
     match m["health"].as_str().unwrap_or("UNKNOWN") {
-        "HEALTHY" | "UNKNOWN" | "PROBING" => ("DISPONIBLE".into(), Color::Green),
+        "HEALTHY" | "UNKNOWN" | "PROBING" => ("DISPONIBLE".into(), current_theme().ok),
         other => (other.to_string(), health_color(other)),
     }
 }
@@ -1288,7 +1671,7 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
                 .map(|(i, t)| format!("{} {}", i + 1, t.title())),
         )
         .select(Tab::ALL.iter().position(|t| *t == a.tab))
-        .highlight_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        .highlight_style(theme_fg(current_theme().brand).add_modifier(Modifier::BOLD)),
         tabs,
     );
     match a.tab {
@@ -1297,7 +1680,28 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
         Tab::Activity => activity(app, f, body),
         Tab::Changes => changes(app, f, body),
         Tab::History => history(app, f, body),
+        Tab::Processes => processes(app, f, body),
     }
+}
+
+fn processes(app: &App, f: &mut Frame, area: Rect) {
+    let Some(a) = &app.agent else {
+        return;
+    };
+    let mut lines = vec![Line::raw("ESTADO      INICIO         COMANDO")];
+    lines.extend(
+        crate::processes::rows(&a.processes)
+            .into_iter()
+            .map(crate::processes::line),
+    );
+    lines.push(Line::raw(""));
+    lines.push(section("SALIDA EN VIVO (solo lectura)"));
+    lines.extend(
+        a.process_output
+            .lines()
+            .map(|line| Line::raw(line.to_string())),
+    );
+    paragraph(f, area, "Procesos", lines);
 }
 
 fn overview(app: &App, f: &mut Frame, area: Rect) {
@@ -1308,7 +1712,7 @@ fn overview(app: &App, f: &mut Frame, area: Rect) {
     if a.state() == "READY" && a.inspect["runs_count"].as_i64() == Some(0) {
         lines.push(Line::from(colored(
             "Este agente todavía no tiene executor: pulsa s para elegir un modelo y arrancarlo.",
-            Color::Yellow,
+            current_theme().warn,
         )));
         lines.push(Line::raw(""));
     }
@@ -1388,15 +1792,15 @@ fn activity(app: &App, f: &mut Frame, area: Rect) {
         if it["kind"] == "checkpoint" {
             lines.push(Line::from(vec![
                 when,
-                colored(format!("checkpoint #{}", it["seq"]), Color::Magenta),
+                colored(format!("checkpoint #{}", it["seq"]), current_theme().accent),
                 dim(format!("  {}", it["current_step"].as_str().unwrap_or(""))),
             ]));
         } else {
             let status = it["status"].as_str().unwrap_or("");
             let (mark, color) = match status {
-                "DONE" => ("✓", Color::Green),
-                "FAILED" | "DENIED" => ("✗", Color::Red),
-                _ => ("…", Color::Yellow),
+                "DONE" => ("✓", current_theme().ok),
+                "FAILED" | "DENIED" => ("✗", current_theme().error),
+                _ => ("…", current_theme().warn),
             };
             let exit = it["exit_code"]
                 .as_i64()
@@ -1424,30 +1828,63 @@ fn activity(app: &App, f: &mut Frame, area: Rect) {
 
 fn changes(app: &App, f: &mut Frame, area: Rect) {
     let Some(a) = &app.agent else { return };
-    let mut lines: Vec<Line> = a
+    let stats = crate::app::diff_stats(&a.diff);
+
+    let diff_lines: Vec<Line<'static>> = a
         .diff
         .lines()
         .map(|l| {
             let color = if l.starts_with("+++") || l.starts_with("---") {
-                Color::White
+                Some(Color::White)
             } else if l.starts_with('+') {
-                Color::Green
+                current_theme().ok
             } else if l.starts_with('-') {
-                Color::Red
+                current_theme().error
             } else if l.starts_with("@@") {
-                ACCENT
+                current_theme().accent
             } else {
-                Color::Reset
+                Some(Color::Reset)
             };
             Line::from(colored(l.to_string(), color))
         })
         .collect();
-    if lines.is_empty() {
-        lines.push(Line::from(dim("Sin cambios contra la base.")));
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if !stats.is_empty() {
+        for s in &stats {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::raw(s.path.clone()),
+                Span::raw("  "),
+                colored(format!("+{}", s.added), current_theme().ok),
+                Span::raw(" "),
+                colored(format!("\u{2212}{}", s.removed), current_theme().error),
+            ]));
+        }
+        lines.push(Line::raw(""));
     }
+    if diff_lines.is_empty() && stats.is_empty() {
+        lines.push(Line::from(dim("Sin cambios contra la base.")));
+    } else {
+        lines.extend(diff_lines);
+    }
+
+    let title = if stats.is_empty() {
+        "Cambios".to_string()
+    } else {
+        let n = stats.len();
+        let total_added: usize = stats.iter().map(|s| s.added).sum();
+        let total_removed: usize = stats.iter().map(|s| s.removed).sum();
+        let archivo = if n == 1 { "archivo" } else { "archivos" };
+        format!(
+            "Cambios · {} {} +{} \u{2212}{}",
+            n, archivo, total_added, total_removed
+        )
+    };
+
     f.render_widget(
         Paragraph::new(lines)
-            .block(boxed("Cambios"))
+            .block(boxed(&title))
             .scroll((a.scroll, 0)),
         area,
     );
@@ -1491,7 +1928,7 @@ fn history(app: &App, f: &mut Frame, area: Rect) {
                 text(&c["from_model"]),
                 c["to_model"].as_str().unwrap_or("(esperando proveedor)")
             ),
-            Color::Magenta,
+            current_theme().accent,
         )));
         lines.push(Line::from(dim(format!(
             "     Motivo: {why} · {age} · hace {}",
@@ -1515,7 +1952,10 @@ fn history(app: &App, f: &mut Frame, area: Rect) {
 fn recovery(app: &App, f: &mut Frame, area: Rect) {
     let mut lines = Vec::new();
     if app.recovery.is_empty() {
-        lines.push(Line::from(colored("Nada que recuperar.", Color::Green)));
+        lines.push(Line::from(colored(
+            "Nada que recuperar.",
+            current_theme().ok,
+        )));
         lines.push(Line::from(dim("Esc para volver al inicio.")));
     }
     for (i, it) in app.recovery.iter().enumerate() {
@@ -1524,7 +1964,7 @@ fn recovery(app: &App, f: &mut Frame, area: Rect) {
             .map_or_else(|| "proyecto".to_string(), |n| format!("agente #{n}"));
         lines.push(Line::from(vec![
             marker(i == app.selected),
-            colored(format!("{:<20} ", text(&it["kind"])), Color::Yellow),
+            colored(format!("{:<20} ", text(&it["kind"])), current_theme().warn),
             bold(format!("{who:<11}")),
             dim(format!(
                 " hace {}",
@@ -1647,7 +2087,7 @@ fn context_object(app: &App, f: &mut Frame, area: Rect) {
 
 fn switch_span(item: &Value) -> Span<'static> {
     if item["enabled"].as_bool() == Some(true) {
-        colored("[on ] ", Color::Green)
+        colored("[on ] ", current_theme().ok)
     } else {
         dim("[off] ")
     }
@@ -1713,7 +2153,10 @@ fn shared_mcp(app: &App, f: &mut Frame, area: Rect) {
         }
     }
     for w in &app.shared_warnings {
-        lines.push(Line::from(colored(format!("aviso: {w}"), Color::Yellow)));
+        lines.push(Line::from(colored(
+            format!("aviso: {w}"),
+            current_theme().warn,
+        )));
     }
     lines.push(Line::raw(""));
     lines.push(Line::from(dim(
@@ -1880,12 +2323,13 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn status_color(status: &str) -> Color {
+fn status_color(status: &str) -> Option<Color> {
+    let t = current_theme();
     match status {
-        "DONE" | "PASS" | "APPROVED" | "MERGED" | "READY" => Color::Green,
-        "FAILED" | "FAIL" | "BLOCKED" | "CANCELLED" | "ABORTED" | "REJECT" => Color::Red,
-        "RUNNING" | "OPEN" | "TESTING" => Color::Cyan,
-        _ => Color::Yellow,
+        "DONE" | "PASS" | "APPROVED" | "MERGED" | "READY" => t.ok,
+        "FAILED" | "FAIL" | "BLOCKED" | "CANCELLED" | "ABORTED" | "REJECT" => t.error,
+        "RUNNING" | "OPEN" | "TESTING" => t.accent,
+        _ => t.warn,
     }
 }
 
@@ -2041,6 +2485,203 @@ fn milestones(app: &App, f: &mut Frame, area: Rect) {
     paragraph(f, area, "Milestones", lines);
 }
 
+/// 36 Avance del plan (P17.S6): % del plan, fases (milestones) y agentes con rama y tarea.
+fn plan(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let (done, total) = crate::plan::progress(&app.tasks);
+    let pct = crate::plan::percent(done, total);
+    lines.push(Line::from(vec![
+        bold(format!("Plan {done}/{total} ({pct}%) ")),
+        colored(
+            crate::plan::bar(done, total, 24),
+            if pct == 100 {
+                current_theme().ok
+            } else {
+                current_theme().accent
+            },
+        ),
+    ]));
+    lines.push(Line::raw(""));
+
+    lines.push(section("FASES"));
+    let phases = crate::plan::phases(&app.tasks);
+    if phases.is_empty() {
+        lines.push(Line::from(dim(
+            "  Sin tareas todavía: crea un agente con n desde Inicio.",
+        )));
+    }
+    for (name, d, t) in phases {
+        lines.push(Line::from(vec![
+            Span::raw(format!("  {:<24} ", truncate(&name, 24))),
+            colored(crate::plan::bar(d, t, 12), current_theme().accent),
+            Span::raw(format!("  {d}/{t}")),
+        ]));
+    }
+    lines.push(Line::raw(""));
+
+    lines.push(section("AGENTES"));
+    if app.agents.is_empty() {
+        lines.push(Line::from(dim("  Ninguno todavía.")));
+    }
+    for (i, a) in app.agents.iter().enumerate() {
+        let state = text(&a["state"]);
+        let branch = a["branch"].as_str().unwrap_or("—");
+        let task = format!(
+            "{} {}",
+            text(&a["task_code"]),
+            truncate(&text(&a["task_title"]), 28)
+        );
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            Span::raw(format!("#{} ", num(&a["number"]))),
+            colored(format!("{state:<18} "), state_color(&state)),
+            colored(
+                format!("{:<28} ", truncate(branch, 28)),
+                current_theme().accent,
+            ),
+            Span::raw(task),
+        ]));
+    }
+    paragraph(f, area, "Avance del plan", lines);
+}
+
+/// 37 Ramas (P17.S6): estado de cada rama; Enter cambia sin confirmar y `d` borra
+/// con confirmación (la frase del pie es la pregunta, como con `x` al detener).
+fn branches(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.branches.is_empty() {
+        lines.push(Line::from(dim("Cargando ramas…")));
+        return paragraph(f, area, "Ramas", lines);
+    }
+    lines.push(Line::from(dim(format!(
+        "  {:<30} {:<14} {}",
+        "RAMA", "ESTADO", "DIVERGENCIA"
+    ))));
+    for (i, b) in app.branches.iter().enumerate() {
+        let name = text(&b["name"]);
+        let (label, _current) = crate::branches::state_label(b);
+        let color = if b["current"].as_bool().unwrap_or(false) {
+            current_theme().ok
+        } else if label == "sin integrar" {
+            current_theme().warn
+        } else {
+            current_theme().muted
+        };
+        lines.push(Line::from(vec![
+            marker(i == app.selected),
+            Span::raw(if b["current"].as_bool().unwrap_or(false) {
+                format!("* {name:<28} ")
+            } else {
+                format!("  {name:<28} ")
+            }),
+            colored(format!("{label:<14} "), color),
+            dim(crate::branches::divergence(b)),
+        ]));
+    }
+    paragraph(f, area, "Ramas", lines);
+}
+
+/// 38 Status global (P17.S6): uso por proyecto, sin combinar sus contadores (ADR-0022).
+fn global_status(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let Some(g) = app.global.as_ref() else {
+        lines.push(Line::from(dim("Cargando…")));
+        return paragraph(f, area, "Status global", lines);
+    };
+    lines.push(section("USO DEL MES POR PROYECTO"));
+    let projects = g["projects"].as_array().cloned().unwrap_or_default();
+    if projects.is_empty() {
+        lines.push(Line::from(dim("  Sin uso registrado este mes.")));
+    }
+    for project in projects {
+        lines.push(Line::from(bold(format!(
+            "  {}",
+            text(&project["root_path"])
+        ))));
+        let mut models: Vec<Value> = project["providers"].as_array().cloned().unwrap_or_default();
+        models.sort_by(|a, b| {
+            b["tokens"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&a["tokens"].as_u64().unwrap_or(0))
+        });
+        let month_tokens: u64 = models
+            .iter()
+            .map(|m| m["tokens"].as_u64().unwrap_or(0))
+            .sum();
+        for model in models {
+            let tokens = model["tokens"].as_u64().unwrap_or(0);
+            lines.push(Line::from(vec![
+                Span::raw(format!(
+                    "    {:<12} {:<24} ",
+                    truncate(&text(&model["provider_id"]), 12),
+                    truncate(&text(&model["model_id"]), 24)
+                )),
+                colored(format!("{tokens:>10} tok"), current_theme().accent),
+            ]));
+        }
+        lines.push(Line::from(dim(format!("    Total: {month_tokens} tokens"))));
+
+        let daily_map: std::collections::BTreeMap<String, u64> = project["daily"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| {
+                d["date"]
+                    .as_str()
+                    .map(|date| (date.to_string(), d["tokens"].as_u64().unwrap_or(0)))
+            })
+            .collect();
+        let dates: Vec<String> = daily_map.keys().cloned().collect();
+        match crate::heatmap::month_of(&dates) {
+            Some((year, month)) => {
+                lines.push(Line::from(dim(format!(
+                    "    CALOR · {}",
+                    crate::heatmap::month_label(year, month)
+                ))));
+                let weeks = crate::heatmap::month_grid(year, month, &daily_map);
+                for row in 0..7 {
+                    let mut spans = vec![dim(format!("    {} ", crate::heatmap::WEEKDAYS[row]))];
+                    for week in &weeks {
+                        match &week.0[row] {
+                            Some(day) => {
+                                let color = match day.level {
+                                    0 => current_theme().muted,
+                                    4 => current_theme().brand,
+                                    _ => current_theme().accent,
+                                };
+                                spans.push(colored(
+                                    format!("{} ", crate::heatmap::glyph(day.level)),
+                                    color,
+                                ));
+                            }
+                            None => spans.push(Span::raw("  ")),
+                        }
+                    }
+                    lines.push(Line::from(spans));
+                }
+            }
+            None => lines.push(Line::from(dim("    Sin uso registrado este mes."))),
+        }
+        lines.push(Line::raw(""));
+    }
+
+    let incomplete: Vec<String> = g["incomplete_projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.as_str().map(str::to_string))
+        .collect();
+    if !incomplete.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("SIN DATOS COMPLETOS"));
+        for p in incomplete {
+            lines.push(Line::from(dim(format!("  {p}: sin base de uso legible."))));
+        }
+    }
+    paragraph(f, area, "Status global", lines);
+}
+
 fn bar(pct: f64, width: usize) -> String {
     let filled = ((pct.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
     format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
@@ -2065,7 +2706,14 @@ fn system(app: &App, f: &mut Frame, area: Rect) {
                 let over = target.is_some_and(|t| v > t);
                 Line::from(vec![
                     Span::raw(format!("  {name:<5} ")),
-                    colored(bar(v, 20), if over { Color::Red } else { Color::Green }),
+                    colored(
+                        bar(v, 20),
+                        if over {
+                            current_theme().error
+                        } else {
+                            current_theme().ok
+                        },
+                    ),
                     Span::raw(format!(" {v:>3.0}%")),
                     dim(target.map_or(String::new(), |t| format!(" / objetivo {t:.0}%"))),
                 ])
@@ -2144,7 +2792,7 @@ fn performance_profile(app: &App, f: &mut Frame, area: Rect) {
         lines.push(Line::from(vec![
             marker(i == app.perf_sel),
             if i == app.perf_sel {
-                colored(format!("{mark} {name}"), ACCENT)
+                colored(format!("{mark} {name}"), current_theme().brand)
             } else {
                 Span::raw(format!("{mark} {name}"))
             },
@@ -2292,7 +2940,7 @@ fn merge_preflight(app: &App, f: &mut Frame, area: Rect) {
     if conflicts > 0 {
         lines.push(Line::from(colored(
             format!("  {conflicts} archivo(s) en conflicto: c para revisarlos."),
-            Color::Red,
+            current_theme().error,
         )));
     }
     if let Some(r) = m["reviews"].as_array().and_then(|r| r.first()) {
@@ -2323,7 +2971,7 @@ fn conflict_review(app: &App, f: &mut Frame, area: Rect) {
     } else {
         lines.push(Line::from(colored(
             "La tarea no entra limpia en la rama del chat.",
-            Color::Red,
+            current_theme().error,
         )));
         lines.push(Line::raw(""));
         lines.push(Line::from(dim(format!(
@@ -2395,7 +3043,7 @@ fn review_result(app: &App, f: &mut Frame, area: Rect) {
             )));
         }
         if let Some(e) = r["findings"]["error"].as_str() {
-            lines.push(Line::from(colored(format!("  {e}"), Color::Red)));
+            lines.push(Line::from(colored(format!("  {e}"), current_theme().error)));
         }
         lines.push(Line::raw(""));
     }
@@ -2408,4 +3056,76 @@ fn review_result(app: &App, f: &mut Frame, area: Rect) {
         &format!("Revisión{}", flow_agent_label(app)),
         lines,
     );
+}
+
+// --- Help --------------------------------------------------------------------
+
+fn help(app: &App, f: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec![
+        bold("Symphony"),
+        Span::raw(format!("  v{}", crate::app::SYMPHONY_VERSION)),
+    ]));
+    if !app.news.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("ANUNCIOS LOCALES (.symphony/anuncios.md)"));
+        for n in &app.news {
+            lines.push(Line::from(dim(n.clone())));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("ATAJOS"));
+    for (k, v) in [
+        (
+            "?",
+            "abre esta ayuda (en cualquier pantalla salvo el agente)",
+        ),
+        ("Esc / q", "volver o salir"),
+        ("j/k o ↑/↓", "mover la selección"),
+        ("Enter", "abrir / confirmar"),
+        (": o /", "barra de comandos"),
+    ] {
+        lines.push(Line::from(vec![bold(format!("{:<12}", k)), Span::raw(v)]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("HOME"));
+    for (k, v) in [
+        ("n", "nuevo agente"),
+        ("t", "tareas"),
+        ("m", "milestones"),
+        ("a", "avance del plan"),
+        ("b", "ramas de git"),
+        ("g", "status global"),
+        ("s", "sistema"),
+        ("p", "proveedores"),
+        ("r", "recovery"),
+        ("c", "contexto"),
+    ] {
+        lines.push(Line::from(vec![bold(format!("{:<12}", k)), Span::raw(v)]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("CHAT / AGENTE"));
+    for (k, v) in [
+        ("Tab", "cambiar modelo"),
+        ("^Y", "copiar"),
+        ("^E", "exportar"),
+        ("^R", "revisar"),
+        ("^G", "integrar a main"),
+        ("F2", "ratón"),
+        ("m", "mensaje"),
+        ("p", "pausa"),
+        ("s", "modelo"),
+        ("v", "validación"),
+        ("g", "integrar"),
+        ("d", "diff"),
+        ("x", "detener"),
+    ] {
+        lines.push(Line::from(vec![bold(format!("{:<12}", k)), Span::raw(v)]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(dim(
+        "Sin telemetría: los avisos se leen solo del repo local.",
+    )));
+    lines.push(Line::from(dim("Esc para cerrar.")));
+    paragraph(f, area, "Atajos", lines);
 }

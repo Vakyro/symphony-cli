@@ -1,11 +1,17 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-28 · por opencode-go/deepseek-v4-pro (orquestación con Symphony, solo opencode-go)
-**Fase actual:** P13 · Endurecimiento y pre-release — **cerrada y mergeada a `main`** (tag `p13-done`). P16.S0 adelantado en `phase/p16-validacion`.
-**Paso actual:** S3 ✅ (soak de 4 h aprobado) · S5 ✅ (`server.md` completo: A + #51 watchdog/colisiones + #52 plazos IPC) · S8 ✅ (gate 733 ✅ · `deny` ✅ · merge `--no-ff` · tag `p13-done` · push).
-**Estado del paso:** cerrado.
-**En curso por:** opencode-go/deepseek-v4-pro (orquestador), con delegación a agentes Symphony sobre `opencode-go`.
-**Siguiente:** rebasar `phase/p16-validacion` sobre `main` → P16.S2–S7 → P17–P20 (delegado a agentes opencode-go). Pendientes menores: benchmark que declare disco libre, desviación de ADR-0021 (`PASS` en vez de `SKIPPED`).
+**Actualizado:** 2026-10-30 · por codex/gpt-6.1
+**Fase actual:** P17 · TUI; revisión de cierre ejecutada, pendiente de integrar.
+**Paso actual:** P17.S7 · revisión del diff de cierre: corregida la mezcla de contadores entre proyectos contra ADR-0022.
+**Estado del paso:** `nextest` de protocol (17), daemon --lib (38) y tui (148) en verde; clippy `-D warnings` de protocol, daemon y tui en verde. No se ejecutó `cargo xtask check`; merge y tag `p17-done` siguen a cargo del integrador.
+**Responsable:** codex/gpt-6.1.
+**Siguiente:** integrar la revisión y ejecutar el gate de fase; después P18.S1 (auditoría del router y del handoff, benchmark fijo antes/después) → P19 → P20 → cierre de P16. Meta de P18: reducir tokens un 40 %, según `docs/progress/DECISIONES-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
+**Seguimientos:** S5 conserva el test de socket IPC con fake-agent y la revisión de parsers fuera de hooks; S6 conserva la limitación del registro global y difiere a P19 el avance por fases de cada agente. La revisión encontró además dos puntos bajos, anotados en «Revisión de cierre» de `docs/phases/P17-tui.md`.
+**P16:** sigue pendiente del veredicto de uso, de S4 en `main` y de P18–P20 para completar los docs as-built y publicar.
+
+**Handoff 2026-10-29 · P17.S5 (cerrado):** integrado el trabajo del agente 065 (cherry-pick) en el worktree `agent-068`; corregidos clippy (`let-else` → `?` en `recorder.rs`) y el contract suite del fake_adapter (`ToolOutput`). Verdes: clippy `-D warnings` de protocol/daemon/testkit/adapter-common; `cargo nextest run` de los cuatro crates (excluido el binario `daemon`, flaky en Windows) y el L2 `shell_tool_output_is_listed_and_streamed_for_its_agent` por filtro de nombre. Aviso: al correr tests dentro del harness hay que quitar `SYMPHONY_USER_HOME` del ambiente (si no, los tests de plugins fallan; ver `docs/progress/LEARNINGS.md`). Quedan como seguimiento: test de socket IPC end-to-end con fake-agent como proveedor configurado, y revisar parsers de proveedores para emitir `ToolOutput` fuera de hooks. Decisión registrada en `docs/phases/P17-tui.md`. Siguiente: P17.S6.
+
+**Hotfix del 2026-10-28 (después del merge de P13):** el CI de `main` quedó en rojo en `check (ubuntu/macos/windows)` y `coverage` por el mismo test, `agent_create_rejects_an_invalid_depends_on`: sin `model`/`profile` el daemon usa `DecideLater` y comprueba primero que haya proveedores, así que en un entorno sin CLIs de proveedor devolvía `no_eligible_provider` donde el test esperaba `not_a_repo`. El test ya acepta los dos fallos posteriores a la validación de parámetros (`9af3668`, gate 733 ✅, pusheado).
 
 **Cierre de la jornada (detalle en `docs/progress/CIERRE-2026-10-27.md`):** qué salió bien, qué falló, qué se arregló y qué falta. Resumen: integrados #48 (guardia de aislamiento), #49 (freno por disco), #50 (permisos, `depends_on`, `usage.get`). **2026-10-28:** integrados #51 y #52, arreglado el test inestable del watcher y los `LEAK` del CLI, verificado ADR-0021, gate y `deny` en verde, P13 mergeada a `main`.
 
@@ -14,9 +20,9 @@
 **Plan hasta v1.0 (ADR-0014, aceptado por delegación de Leo):** orden **P11.5 → P12 → P14 → P15 → P15.5 → P13 → P16** (P15.5 añadida el 2026-10-23). El agente corre de forma continua: al cerrar un paso sigue con el siguiente y al cerrar una fase (PLAN §4.6) sigue con la siguiente del orden. Lo que necesita a Leo (⛔) se anota abajo en «Para Leo» y se sigue con lo siguiente que no dependa de eso. **Nunca esperar.**
 
 ## Salud del repo
-- `cargo xtask check`: ✅ **733 tests, 0 fallos, 0 leaky** (2026-10-28, rama de P13; el gate quita `SYMPHONY_LIVE`, nunca corre live).
-- `cargo deny check`: ✅ en la rama `phase/p13-endurecimiento` (tokio 1.54.1 por RUSTSEC-2026-0386); en `main` el job `deny` sigue en rojo hasta que esa rama se integre.
-- CI en `main`: 🔴 solo el job `deny` (aviso nuevo contra tokio 1.53.1, publicado después de P14); los demás ✅. Arreglo ya hecho en la rama de P13 (P13.S1), pendiente de integrar.
+- `cargo xtask check`: ✅ **733 tests, 0 fallos, 0 leaky** (2026-10-28, `main` con el merge de P13 y el hotfix del test de `depends_on`).
+- `cargo deny check`: ✅ `advisories, bans, licenses, sources ok` (rama de P13 y `main`).
+- CI en `main`: 🟡 el run del merge de P13 salió en rojo por un test dependiente de la máquina; el run del hotfix va en verde en `docs`, `deny`, `coverage`, `msrv`, `fuzz` y `gui`, con los tres `check` en curso al escribir esto.
 - Tests conocidos en rojo: ninguno.
 
 ## Cola de trabajo (en orden)
@@ -45,7 +51,11 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos (incluidos #51 y #52 de `server.md`), ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · ✅ S8 cierre (`p13-done`, 2026-10-28: gate 733 ✅, `deny` ✅, merge a `main`; `v0.9.0` local)
 
-**P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasar sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · 🟡 S4 `install-check.yml` · 🟡 S5 anexo de desviaciones
+**P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ cerrada documentalmente: S1 tema y barra · S2 streaming y ediciones · S3 arranque · S4 mini piano · S5 procesos observados y pestaña TUI · S6 IPC y vistas de avance, ramas y status global · S8 marcadores explícitos · S7 cierre. Gate, merge y tag: integrador. Política configurable del harness: fuera de P17.
+
+**P18 · Contexto y ahorro de tokens:** siguiente fase; empezar por S1 y fijar el benchmark de tokens antes de los recortes.
+
+**P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasada sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · ✅ S3 benchmark medido con guard de disco · 🟡 S4 `install-check.yml` (espera estar en `main`; el trigger ya no se dispara desde `main`) · 🟡 S5 anexo de desviaciones
 
 **P16 · Validación final** (`phase/p16-validacion`): S1 checklist · S2 E2E (fake-agents) · S3 benchmark · S4 instalación limpia en CI · S5 docs as-built · S6 release ⛔ · S7 retrospectiva
 
@@ -66,7 +76,15 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
+- **2026-10-29 · Las 53 preguntas de producto: respondidas por Leo.** Todas las decisiones quedan en docs/progress/ROADMAP-2026-10-29.md (orden P17->P18->P19->P20->P16, merge a main sin OK, tags pNN-done pusheados, mascota = mini piano, status global, 40 % de reduccion de tokens, Flintstone por defecto, 3 tareas por sesion con /compact automatico, Laya como backend de decision con personalizacion y umbrales 0.9/0.6, perfiles elegidos por el modelo de decision, /orchester con plan aprobado, editor con guardado y nano tal cual, Habbo fuera del plan). Tags v* solo con OK escrito; homebrew autorizado (Vakyro/homebrew-symphony).
+- **2026-10-28 · P16.S4 no puede correr hasta que el workflow esté en `main`.** GitHub devuelve 404 al lanzar `install-check.yml` desde una rama de fase (`gh workflow run ... --ref phase/p16-validacion`): un workflow que no existe en la rama por defecto no se puede despachar. Está en `phase/p16-validacion` (ya pusheada) y se lanzará con `run_id` de un CI que sí tenga los artefactos `dist-*`. De paso se corrigió que el `workflow_run` se dispararía también en `main`, donde `release-dry-run` no corre y no hay artefactos: el primer CI verde de `main` habría salido en rojo.
+- **2026-10-28 · P20.S4 (móvil) ya está cubierto.** La guía `docs/book/src/uso-remoto-ssh.md` (P13.S6) describe Tailscale + SSH + tmux y el trabajo por comandos en pantallas pequeñas, que es exactamente lo que pide P20.S4; no hace falta código nuevo. Solo queda releerla cuando se cierre P20.
+- **2026-10-28 · Cuota de opencode-go agotada.** El run del primer delegado de P17 devolvió `provider.quota: Go usage limit exceeded status=429`; el proveedor queda `EXHAUSTED` y el reinicio estimado fue 23:28 local. Mientras tanto se delegó a los modelos **free** de opencode-go (`beam-free`), que no gastan la cuota Go y funcionan. Dos cosas que conviene decidir: (1) los modelos free son más flojos, así que el trabajo se revisa más; (2) Symphony bloquea **todo** el proveedor cuando la cuota Go se agota, aunque los modelos free tengan su propia cuota — si quieres, se afina para que la salud sea por modelo en vez de por proveedor.
+- **2026-10-28 · `WAITING_PROVIDER` no se reanuda solo.** Cuando un agente se queda sin proveedor, Symphony abre un ítem de recuperación y espera; el estado `EXHAUSTED` sin hora de reinicio pasa a `PROBING` a los 30 min (`EXHAUSTED_PROBE_MS`), pero el agente no vuelve a intentarlo: hay que `symphony resume` o `switch`. `providers refresh` no limpia la salud. Si prefieres que se reintente solo, es un cambio pequeño en el scheduler.
 - **2026-10-27 · Backlog nuevo (P17–P20): respondido por Leo.** P17–P20 van antes de v1.0.0. Jev no se usa: se evaluará una versión ligera de código abierto que Leo describirá después. Móvil por Tailscale + SSH + tmux, sin app ni web (P20.S4).
+- **2026-10-29 · P19.S1: investigación documentada.** Se añadió a PLAN.md (S1 de P19) el detalle de Jev (TypeSafe AI, System One, clasificador con Choice/Score/Noul, probabilidades calibradas) y 7 alternativas open-source (Laya, Kev, Von, NanoJev, Nimble, SemIf, Rizzo Flow) con licencia, tamaño, runtime y latencia. Pendiente de Leo: (1) elegir el backend por defecto, (2) el umbral de confianza para la cascada (decisión barata → código determinista → modelo de frontera), (3) confirmar el requisito de **personalización**: el usuario puede usar el modelo que tenga instalado en su máquina (Jev, una alternativa open-source o uno propio), no necesariamente Jev ni una versión open-source fija. Symphony solo define el contrato `estado + preguntas tipadas → decisiones tipadas + probabilidades` y un adaptador por backend. ADR pendiente.
+- **2026-10-29 · Ideas futuras de Leo documentadas.** Se registraron en PLAN.md (Ideas futuras) y en la bitacora de P17 cuatro ideas: (1) version cooperativa en linea de Symphony (invitar companeros/amigos, cada uno suma proveedores/cuentas/modelos/tokens; requiere ADR de transporte, auth, aislamiento y cuotas), (2) context compaction con Jev o equivalente (preservando mas contenido importante: decisiones, constraints, archivos tocados), (3) documentar cuando usar git merge vs git rebase, (4) ingenieria de grafos en los agentes (linea de produccion con nodos/etapas y aristas/dependencias, reintentos, paralelismo, checkpoint por nodo). Ninguna implementada; quedan como backlog.
+- **2026-10-29 · Idea futura de Leo (adicional):** Symphony con su propia linea de agentes basados en LLMs ya existentes - un agente para codigo, uno para tareas sencillas, uno para investigacion, etc. - cada uno con system prompt, herramientas y perfil optimizados para su rol. Requiere ADR de roles, prompts y seleccion automatica por tipo de tarea; complementa los perfiles @best-coding/@best-reasoning de P19.S2 y el planeador P19.S3. Sin codigo por ahora.
 - **2026-10-28 · #51, #52 y ADR-0021: revisados e integrados** (Leo autorizó hacerlo en vez de dejarlo en documento). #51 (`5e46112`, `fe4ec5d`) y #52 (`1840654`) están en `main`. ADR-0021 coincide con su implementación; única desviación menor y no bloqueante: sin archivos que revisar el check devuelve `PASS` con resumen, no `SKIPPED` como decía el ADR. Si prefieres `SKIPPED`, es un cambio de dos líneas en `files_check.rs`.
 - **2026-10-27 · Noche de dogfooding:** reporte completo en `docs/progress/REPORTE-2026-10-27.md`.
 - **Publicar v0.9.0 / v1.0.0:** el pipeline de cargo-dist está listo en dry run; pushear un tag `v*` publica (y para Homebrew hace falta crear el repo `Vakyro/homebrew-symphony`).
@@ -98,6 +116,7 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 - P11.5.S9.2 · Handoff entre modelos a media tarea en los cuatro modos de contexto con proveedores reales (Claude/Codex): con OpenCode gratuito dio 429 en 3 corridas. Comando: `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_handoff` (ya existe para otros pares).
 
 ## Handoff para el siguiente agente
+- **Vigente (2026-10-30):** cierre documental P17.S7 listo. Integrar el commit, correr el gate de fase con entorno de pruebas aislado y completar merge/tag; después P18.S1. No se ejecutó Cargo en esta sesión. Los apuntes de P13 que siguen son históricos y no son la próxima acción.
 - **Antes de tocar nada:** `git status` y `git log --oneline 441dfd6..HEAD` en `phase/p13-endurecimiento`. Hay 8 commits locales sin pushear desde la noche anterior.
 - **Agentes vivos:** #51 y #52 corren en Kimi y escriben en sus worktrees (`.symphony/worktrees/…/agent-05N`). No integrar a ciegas: revisar `git log` y el diff de cada uno.
 - **Integrar con cherry-pick** (no con merge del worktree): el worktree de #51 salió de una base anterior a #50.
@@ -127,4 +146,14 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P14 | ✅ | p14-done |
 | P15 | ✅ (revisión visual → Para Leo) | p15-done |
 | P15.5 | ✅ (ADR-0018, 0019, 0020) | p155-done |
-| P13, P16 | ⏳ en ese orden (ADR-0014) | |
+| P13 | ✅ | p13-done |
+| P17 | ✅ cierre documental; integración pendiente | — |
+| P18 | Siguiente: S1 | — |
+| P16 | Cierre después de P20 | — |
+
+## Ola 0 — decisiones del 2026-10-29
+
+- P17.S4 queda definido como un mini piano de una octava; no incluye fuegos artificiales.
+- P20.S3, la vista Habbo, sale del plan y queda registrada como idea futura.
+- P19 usa Laya por defecto, con backend enchufable; Symphony no trae Python.
+- Antigravity está sin cuota durante aproximadamente 48 horas desde el 2026-10-29.

@@ -149,6 +149,11 @@ pub enum AgentEvent {
         ok: bool,
         exit_code: Option<i32>,
     },
+    ToolOutput {
+        tool_use_id: Option<String>,
+        tool: String,
+        text: String,
+    },
     FileModified {
         tool: String,
         path: Option<String>,
@@ -191,6 +196,7 @@ impl AgentEvent {
                 ..
             } => "CommandFinished",
             Self::ToolFinished { .. } => "ToolFinished",
+            Self::ToolOutput { .. } => "ToolOutput",
             Self::FileModified { .. } => "FileModified",
             Self::ProviderError(_) => "ProviderError",
             Self::Quota(_) => "QuotaUpdated",
@@ -288,7 +294,7 @@ pub fn harness_on(req: &SpawnRequest) -> bool {
 pub const HARNESS_PROMPT: &str = "You are working inside Symphony. Your tools are the MCP tools \
 read, write, edit, glob, grep and shell (server symphony-context); other built-in tools are not available. \
 Paths are relative to your working directory. Read a file before editing it, and use shell for git, builds, \
-tests and anything else.";
+tests and anything else. In chat replies, use [[symphony:title]], [[symphony:bullet]], [[symphony:highlight]], [[symphony:warning]], [[symphony:error]] or [[symphony:table]] spans when a visual distinction helps; leave ordinary text unmarked.";
 
 /// El broker (`symphony mcp serve`) en el mismo ejecutable que el hook, con las variables del
 /// agente que tiene que ver (`SYMPHONY_*`: ningún CLI se las pasa solo a un servidor MCP) y el
@@ -487,5 +493,13 @@ mod tests {
         assert!(is_internal_env(ENV_PLUGIN_DIR));
         assert!(!is_internal_env("SYMPHONY_AGENT_ID"));
         assert!(!is_internal_env("CARGO_TARGET_DIR"));
+    }
+
+    #[test]
+    fn harness_prompt_teaches_chat_markers() {
+        for marker in ["title", "bullet", "highlight", "warning", "error", "table"] {
+            assert!(HARNESS_PROMPT.contains(&format!("[[symphony:{marker}]]")));
+        }
+        assert!(HARNESS_PROMPT.contains("leave ordinary text unmarked"));
     }
 }

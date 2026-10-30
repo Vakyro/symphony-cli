@@ -4,6 +4,75 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Contratos de status global (el versionado de wire es `PROTOCOL_VERSION`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlobalUsage {
+    pub projects: Vec<GlobalProjectUsage>,
+    pub incomplete_projects: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlobalProjectUsage {
+    pub root_path: String,
+    pub providers: Vec<GlobalProviderUsage>,
+    pub daily: Vec<DailyTokens>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlobalProviderUsage {
+    pub provider_id: String,
+    pub model_id: String,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DailyTokens {
+    pub date: String,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitBranch {
+    pub name: String,
+    pub current: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    pub merged: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitBranchRequest {
+    pub branch: String,
+    /// Segunda confirmación de la TUI para borrar una rama no integrada (P17.S6).
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitBranches {
+    pub branches: Vec<GitBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitBranchResult {
+    pub branch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitDeleteBranchResult {
+    pub branch: String,
+    pub deleted: bool,
+}
+
 use crate::ProtocolError;
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -66,6 +135,8 @@ pub struct Subscribe {
     pub protocol: u32,
     pub id: String,
     pub topics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 impl Request {
@@ -121,6 +192,20 @@ impl Subscribe {
             protocol: PROTOCOL_VERSION,
             id: id.into(),
             topics,
+            agent_id: None,
+        }
+    }
+
+    pub fn for_agent(
+        id: impl Into<String>,
+        topics: Vec<String>,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            protocol: PROTOCOL_VERSION,
+            id: id.into(),
+            topics,
+            agent_id: Some(agent_id.into()),
         }
     }
 }
@@ -159,6 +244,11 @@ mod tests {
             )),
             Message::Event(Event::new("agent.state", json!({"state": "RUNNING"}))),
             Message::Subscribe(Subscribe::new("01K", vec!["agent.*".into()])),
+            Message::Subscribe(Subscribe::for_agent(
+                "01L",
+                vec!["agent.processes".into()],
+                "01A",
+            )),
         ];
         for m in msgs {
             assert_eq!(Message::from_bytes(&m.to_bytes().unwrap()).unwrap(), m);
@@ -178,6 +268,30 @@ mod tests {
         assert_eq!(
             v,
             json!({"type": "request", "protocol": 1, "id": "01J", "method": "agent.pause", "params": {"agent_id": "01A"}})
+        );
+    }
+
+    #[test]
+    fn process_subscription_wire_shape_is_versioned_and_agent_scoped() {
+        let bytes = Message::Subscribe(Subscribe::for_agent(
+            "s1",
+            vec!["agent.processes".into()],
+            "a1",
+        ))
+        .to_bytes()
+        .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value,
+            json!({"type":"subscribe","protocol":1,"id":"s1","topics":["agent.processes"],"agent_id":"a1"})
+        );
+        assert_eq!(
+            Message::from_bytes(&bytes).unwrap(),
+            Message::Subscribe(Subscribe::for_agent(
+                "s1",
+                vec!["agent.processes".into()],
+                "a1"
+            ))
         );
     }
 

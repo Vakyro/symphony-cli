@@ -4,35 +4,23 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use symphony_plugins::protocol::ProtocolError;
 use symphony_plugins::{Kind, Manifest, Plugin, PluginError, ValidateInput, discover};
 
-/// `fake-plugin` al día (paquete testkit). Vive en el mismo `target/<perfil>/` que este test.
+/// `fake-plugin` al día (paquete testkit). La ruta la emite cargo: con `build.build-dir`
+/// (caché compartido del harness) los `deps/` no cuelgan del ejecutable de este test.
 fn fake_plugin() -> PathBuf {
     static BUILT: OnceLock<PathBuf> = OnceLock::new();
     BUILT
         .get_or_init(|| {
-            let status = Command::new(env!("CARGO"))
-                .args([
-                    "build",
-                    "-q",
-                    "-p",
-                    "symphony-testkit",
-                    "--bin",
-                    "fake-plugin",
-                ])
-                .status()
-                .expect("cargo build fake-plugin");
-            assert!(status.success());
-            let exe = std::env::current_exe().unwrap();
-            let profile_dir = exe.parent().unwrap().parent().unwrap();
-            symphony_testkit::pinned_bin(
-                &profile_dir.join(format!("fake-plugin{}", std::env::consts::EXE_SUFFIX)),
+            symphony_testkit::build_and_pin(
+                "fake-plugin",
+                &["-p", "symphony-testkit", "--bin", "fake-plugin"],
             )
+            .expect("cargo build fake-plugin")
         })
         .clone()
 }

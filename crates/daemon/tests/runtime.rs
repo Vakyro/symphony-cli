@@ -201,6 +201,53 @@ content = "arreglado\n"
 "#;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn shell_tool_output_is_listed_and_streamed_for_its_agent() {
+    let script = if cfg!(windows) {
+        "[[step]]\nkind='run'\ncommand=['cmd','/C','echo','P17_SHELL_OUTPUT']\n"
+    } else {
+        "[[step]]\nkind='run'\ncommand=['sh','-c','printf P17_SHELL_OUTPUT']\n"
+    };
+    let e = env(script, None).await;
+    let mut output_events = e.bus.subscribe();
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "shell observado",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let (run, _) = created.run.unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let conn = e.writer.reader().unwrap();
+    let processes = symphony_daemon::views::processes(
+        &conn,
+        &created.agent_id.to_string(),
+        &ObjectStore::new(e.home.join("objects")),
+    )
+    .unwrap();
+    assert_eq!(processes.as_array().unwrap().len(), 1, "{processes}");
+    assert!(
+        processes[0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("P17_SHELL_OUTPUT")
+    );
+    let mut observed = false;
+    while let Ok(event) = output_events.try_recv() {
+        if event.agent_id.as_deref() == Some(created.agent_id.to_string().as_str())
+            && matches!(&event.event, AgentEvent::ToolOutput { text, .. } if text.contains("P17_SHELL_OUTPUT"))
+            && event.run_id.as_deref() == Some(run.to_string().as_str())
+        {
+            observed = true;
+        }
+    }
+    assert!(observed, "no llegó ToolOutput por el bus del agente");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn exact_model_creates_everything_and_runs_the_executor() {
     let e = env(WORK, None).await;
     let created = e
