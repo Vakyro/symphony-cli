@@ -2,9 +2,9 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA (cierre documental S7; gate, merge y tag a cargo del integrador) |
 | Rama | phase/p17-tui (sale de `main` el 2026-10-28, después del hotfix del CI) |
-| Inicio / cierre | 2026-10-28 / — |
+| Inicio / cierre | 2026-10-28 / 2026-10-30 |
 | Agentes que trabajaron | opencode-go (delegación desde Symphony) |
 | Tag | — |
 | Docs usados | PLAN § P17, `docs/research/backlog-2026-10-27.md` § Interfaz |
@@ -93,6 +93,8 @@
 - **Qué se hizo:** se integró la mascota en `crates/tui/src/mascot.rs`, usando el tick existente de 1 s. Respeta `SYMPHONY_NO_ANIM`, `NO_COLOR`, `TERM=dumb` y `[ui].animations`; se añadieron snapshots a 80 y 160 columnas y pruebas de aislamiento del chat.
 - **Corrección:** `home_app()` no respondía el nuevo `config.ui`, dejando `inflight` ocupado y haciendo que `bus_events_refresh_on_the_next_tick_without_piling_up` devolviera cero llamadas. El test ahora responde la llamada inicial; no se relajó la aserción porque el comportamiento correcto sigue siendo refrescar una vez en el siguiente tick.
 - **Verificado:** `unset SYMPHONY_LIVE; cargo nextest run -p symphony-core` → 73 ✅; `unset SYMPHONY_LIVE; cargo nextest run -p symphony-tui --test views` → 101 ✅; `unset SYMPHONY_LIVE; cargo clippy -p symphony-core -p symphony-tui --all-targets -- -D warnings` ✅. No se ejecutaron de nuevo los tests del binario `daemon`.
+
+### P17.S2 · Streaming y resumen de ediciones — ✅ (`00e3bd1`)
 - **Objetivo:** streaming de la respuesta, pensamientos, ediciones con `+N −M` y archivos tocados.
 - **Verificación:** test L2 con `fake-agent` que emite deltas y diffs.
 - **Agente:** opencode-go/beam-free (delegado) + revisión del orquestador.
@@ -149,6 +151,27 @@
 - **Pruebas:** tests puros de los tres módulos (rejilla de octubre 2026, niveles, transiciones de `delete_key`, % y fases) y en `views.rs`: snapshots a 80 y 160 columnas de las tres vistas + interacción (checkout sin confirmar, la actual no se borra, borrar pregunta, `branch_not_merged` exige la segunda confirmación con `force: true`, otra tecla caduca la confirmación). Los snapshots de Inicio solo cambian en la línea de atajos nuevos.
 - **Verificado:** `cargo nextest run -p symphony-tui` → 143 ✅; `-p symphony-store` → 73 ✅; `-p symphony-daemon --lib` + `-p symphony-protocol` → 54 ✅; `cargo clippy -p symphony-tui -p symphony-store -p symphony-daemon -p symphony-protocol -- -D warnings` ✅; `cargo fmt --all -- --check` ✅. No se corrió el binario `daemon` ni `cargo xtask check`.
 - **Pendiente / notas:** el % del plan es de tareas (DONE/total); el avance por fases del `.symphony/plan/*.md` de cada agente no se expone por IPC y queda para el planeador (P19). La línea de agente en Avance se corta visualmente a 80 columnas (el párrafo envuelve, como en el resto de vistas).
+
+### P17.S7 · Cierre documental — ✅ (2026-10-30)
+
+- **Agente:** codex/gpt-6. Reanudación del worktree del executor anterior; al comenzar estaba limpio.
+- **Resultado:** P17 cerrada documentalmente con S8 terminado; siguiente fase P18.S1, auditoría del router y del handoff con benchmark fijo antes/después.
+- **Trazabilidad:** commits comprobados con `git log --oneline main..HEAD` en este worktree:
+
+| Paso | Commits | Resultado |
+|---|---|---|
+| S4 | `d27e1bd` (parcial), `4a3c31a` (terminado) | Mini piano de una octava, frases y animación configurable en el chat principal. Sustituye el ejemplo inicial de fuegos artificiales por decisión de Leo. |
+| S5 | `30e9682` (daemon), `bcf8084` (TUI) | Vista derivada de `tool_calls` y salida observada; pestaña Procesos con suscripción de solo lectura, sin stdin. |
+| S6 | `bdf5a84` (IPC), `c411dfc` (TUI) | Uso global local de solo lectura, avance del plan, ramas y heatmap; checkout directo y borrado con confirmación, segunda confirmación para forzar. |
+| S8 | `8af6100` (ADR), `7088649` (TUI), `90ec440` (harness y libro) | Seis marcadores explícitos, colores del tema y delimitadores conservados en el transcript. |
+| Integración | `30a2b40`, `9131432` | Correcciones tras integrar S4–S6 y del guard del shell ante expresiones de sed/grep. |
+
+- **Decisión S5:** el daemon no ejecuta el shell del agente; observa lo reportado por el proveedor. Por eso `agent.processes` deriva de `tool_calls`, no de nuevos procesos administrados ni de una tabla nueva.
+- **ADR-0022:** [status global](../adr/0022-status-global.md), incorporado en `e1b3bee`, enmienda ADR-0018: lectura local de proyectos registrados en `~/.symphony`, sin consolidar bases, modificar datos ni enviar telemetría. El registro depende actualmente del respaldo de `migrate split`, como se indica en S6.
+- **ADR-0023:** [marcadores de color](../adr/0023-marcadores-de-color-del-chat.md): el agente marca y la TUI colorea; sintaxis inválida literal, sin parser Markdown ni heurísticas.
+- **Seguimientos conservados:** S5 mantiene pendiente el test de socket IPC con fake-agent configurado y la cobertura de parsers fuera de hooks; P19 recibe el avance por fases de cada agente. No se presentan como verificados en este cierre.
+- **Verificación de esta sesión:** revisión documental y del historial; sin Cargo ni pruebas live por instrucción expresa. Las cifras de pruebas de cada paso son registros anteriores, no nuevas ejecuciones.
+- **Integración:** el integrador debe correr el gate de fase y efectuar merge a `main` y tag `p17-done`; esta tarea solo entrega el commit documental y no acredita esas operaciones.
 
 ## Backlog / ideas futuras de P17 (documentadas, no implementadas)
 

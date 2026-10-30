@@ -2,6 +2,8 @@
 
 Registro append-only. Una línea al inicio y un resumen al cierre de cada sesión.
 
+- 2026-10-30 · codex/gpt-6 · inicio y cierre · P17.S7: retomado el worktree limpio del executor anterior; cierre documental de P17 con commits de S4/S5/S6/S8 comprobados en `git log main..HEAD`, decisiones de S5 y ADR-0022/0023, STATUS con siguiente P18.S1 y aprendizajes del dogfooding. Solo los cuatro documentos pedidos; sin Cargo ni live. Gate, merge y tag de fase a cargo del integrador.
+
 - 2026-10-29 · codex/gpt-6 · inicio y pausa · P17.S5 daemon replanteada: implementación parcial de salida observada y vistas IPC; nextest del daemon falló dos veces en tests no relacionados, con LEAK en una cancelación. Pendiente completar IPC L2 con fake-agent y clippy.
 
 - 2026-09-24 06:00 · claude-code/opus-5.5 · P00.S0 · prevalidación (herramientas existentes + Test D manual) · sin repo todavía

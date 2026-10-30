@@ -1,14 +1,13 @@
 # STATUS — Symphony CLI
 
-**Handoff P17.S8 (2026-10-30):** marcadores del ADR-0023 implementados en TUI; el prompt de `symphony-adapter-common` ahora los recomienda en respuestas del chat y el mdBook documenta sintaxis y uso. Nextest y clippy del crate en verde. Pendiente integración y gate de fase; detalle en `docs/phases/P17-tui.md`.
-
-
-**Actualizado:** 2026-10-30 · por codex/gpt-6.1
-**Fase actual:** P17 · TUI al día (rama `phase/p17-tui`). P13 **cerrada y mergeada** (`p13-done`); P16 en `phase/p16-validacion`, rebasada sobre `main` y a la espera de Leo (veredicto de uso) y de P17–P20 para los docs as-built.
-**Paso actual:** P17.S5 · pestaña TUI de procesos terminada. Queda integrar P17.S6 con sus vistas y cerrar S7. Plan completo de lo pendiente con las decisiones de Leo del 2026-10-29 en **`docs/progress/ROADMAP-2026-10-29.md`**. P16: S0–S1 ✅, S2/S3 medidos, S3 con guard de disco ✅, S4 esperando estar en `main`.
-**Estado del paso:** terminado y verificado en este worktree; pendiente de integración por el orquestador.
-**En curso por:** codex/gpt-5.x.
-**Siguiente:** integrar IPC global y ramas con vistas TUI de P17.S6; continuar S5 y cerrar S7 (merge y tag `p17-done`) → P18 → P19 → P20 → P16 (v0.9.0 → v1.0.0; tags `v*` solo con OK escrito de Leo).
+**Actualizado:** 2026-10-30 · por codex/gpt-6
+**Fase actual:** P17 · TUI al día **cerrada documentalmente**; siguiente P18 · Contexto y ahorro de tokens.
+**Paso actual:** P17.S7 terminado: bitácora con commits de S4, S5, S6 y S8, decisiones ADR-0022/0023 y aprendizajes del dogfooding.
+**Estado del paso:** solo documentación; sin ejecutar Cargo. Gate de fase, merge a `main` y tag `p17-done` quedan a cargo del integrador y no se acreditan en esta sesión.
+**Responsable del cierre documental:** codex/gpt-6, retomando el worktree del executor anterior.
+**Siguiente:** integrar este cierre y verificar la fase; después P18.S1 (auditoría del router y del handoff, benchmark fijo antes/después) → P19 → P20 → cierre de P16. Meta de P18: reducir tokens un 40 %, según `docs/progress/DECISIONES-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
+**Seguimientos:** S5 conserva el test de socket IPC con fake-agent y la revisión de parsers fuera de hooks; S6 conserva la limitación del registro global y difiere a P19 el avance por fases de cada agente. Detalle en `docs/phases/P17-tui.md`.
+**P16:** sigue pendiente del veredicto de uso, de S4 en `main` y de P18–P20 para completar los docs as-built y publicar.
 
 **Handoff 2026-10-29 · P17.S5 (cerrado):** integrado el trabajo del agente 065 (cherry-pick) en el worktree `agent-068`; corregidos clippy (`let-else` → `?` en `recorder.rs`) y el contract suite del fake_adapter (`ToolOutput`). Verdes: clippy `-D warnings` de protocol/daemon/testkit/adapter-common; `cargo nextest run` de los cuatro crates (excluido el binario `daemon`, flaky en Windows) y el L2 `shell_tool_output_is_listed_and_streamed_for_its_agent` por filtro de nombre. Aviso: al correr tests dentro del harness hay que quitar `SYMPHONY_USER_HOME` del ambiente (si no, los tests de plugins fallan; ver `docs/progress/LEARNINGS.md`). Quedan como seguimiento: test de socket IPC end-to-end con fake-agent como proveedor configurado, y revisar parsers de proveedores para emitir `ToolOutput` fuera de hooks. Decisión registrada en `docs/phases/P17-tui.md`. Siguiente: P17.S6.
 
@@ -52,7 +51,9 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos (incluidos #51 y #52 de `server.md`), ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · ✅ S8 cierre (`p13-done`, 2026-10-28: gate 733 ✅, `deny` ✅, merge a `main`; `v0.9.0` local)
 
-**P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ S1 tema y barra de estado · ✅ S2 chat estilo Claude Code · ✅ S3 arranque (arte, «para empezar», atajos con `?`, recuadro de versión local) · ✅ S4 mascota · ✅ S6 IPC daemon (uso global y ramas) · pendientes S5, vistas TUI de S6 y S7 · backlog documentado: S8 renderizado rico del chat (colores por importancia) y política configurable de Symphony/harness (fuera de P17, nueva fase).
+**P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ cerrada documentalmente: S1 tema y barra · S2 streaming y ediciones · S3 arranque · S4 mini piano · S5 procesos observados y pestaña TUI · S6 IPC y vistas de avance, ramas y status global · S8 marcadores explícitos · S7 cierre. Gate, merge y tag: integrador. Política configurable del harness: fuera de P17.
+
+**P18 · Contexto y ahorro de tokens:** siguiente fase; empezar por S1 y fijar el benchmark de tokens antes de los recortes.
 
 **P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasada sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · ✅ S3 benchmark medido con guard de disco · 🟡 S4 `install-check.yml` (espera estar en `main`; el trigger ya no se dispara desde `main`) · 🟡 S5 anexo de desviaciones
 
@@ -115,6 +116,7 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 - P11.5.S9.2 · Handoff entre modelos a media tarea en los cuatro modos de contexto con proveedores reales (Claude/Codex): con OpenCode gratuito dio 429 en 3 corridas. Comando: `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_handoff` (ya existe para otros pares).
 
 ## Handoff para el siguiente agente
+- **Vigente (2026-10-30):** cierre documental P17.S7 listo. Integrar el commit, correr el gate de fase con entorno de pruebas aislado y completar merge/tag; después P18.S1. No se ejecutó Cargo en esta sesión. Los apuntes de P13 que siguen son históricos y no son la próxima acción.
 - **Antes de tocar nada:** `git status` y `git log --oneline 441dfd6..HEAD` en `phase/p13-endurecimiento`. Hay 8 commits locales sin pushear desde la noche anterior.
 - **Agentes vivos:** #51 y #52 corren en Kimi y escriben en sus worktrees (`.symphony/worktrees/…/agent-05N`). No integrar a ciegas: revisar `git log` y el diff de cada uno.
 - **Integrar con cherry-pick** (no con merge del worktree): el worktree de #51 salió de una base anterior a #50.
@@ -144,7 +146,10 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 | P14 | ✅ | p14-done |
 | P15 | ✅ (revisión visual → Para Leo) | p15-done |
 | P15.5 | ✅ (ADR-0018, 0019, 0020) | p155-done |
-| P13, P16 | ⏳ en ese orden (ADR-0014) | |
+| P13 | ✅ | p13-done |
+| P17 | ✅ cierre documental; integración pendiente | — |
+| P18 | Siguiente: S1 | — |
+| P16 | Cierre después de P20 | — |
 
 ## Ola 0 — decisiones del 2026-10-29
 

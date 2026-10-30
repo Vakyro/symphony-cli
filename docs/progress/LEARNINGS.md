@@ -176,6 +176,13 @@ Una sola sesión cubrió P11.S2–S6, P10 completa y P09.S1–S10, con una compa
 - **Un benchmark que necesita disco libre debe decirlo:** falló con 1,8 GB sin mensaje útil; pasó con 16 GB.
 - **Un run marcado `FAILED` puede traer código bueno:** #48 quedó `FAILED` con su commit sin hacer. Revisar el worktree antes de descartar.
 
+## Dogfooding de P17 (2026-10-29–30)
+- **Antigravity sin cuota durante unas 48 h desde el 2026-10-29:** no confundir disponibilidad del CLI con cuota disponible; retomar el mismo worktree con otro executor conserva el avance.
+- **Codex `gpt-6.1-sol` bloqueado por el guard del shell al editar con scripts:** el guard confundía expresiones de sed/grep con rutas absolutas. `9131432` corrige ese falso positivo; preferir las herramientas de edición del harness para cambios puntuales y respetar el aislamiento.
+- **Kimi a veces termina con código 75 y deja trabajo sin commit:** revisar siempre `git status`, el diff y el historial antes de reiniciar o descartar una tarea. El código de salida no demuestra que no haya trabajo aprovechable.
+- **Tests del binario daemon con timeouts de 42 s:** se observaron con daemons del usuario vivos o variables `SYMPHONY_*` heredadas. El integrador debe aislar el entorno de pruebas; en particular, `SYMPHONY_USER_HOME` puede cargar plugins reales y `SYMPHONY_LIVE` debe quitarse antes de Cargo. No atribuir automáticamente estos fallos al cambio ni detener daemons del usuario sin coordinarlo.
+- **Cierre documental y gate son comprobaciones distintas:** esta sesión no ejecutó Cargo por instrucción expresa; los resultados previos de cada paso permanecen en la bitácora y el gate final corresponde al integrador.
+
 ## Orquestación con Symphony (2026-10-28)
 - **Una sesión de agente no aguanta el gate completo:** #54 murió a los 59 min con `NO_HEARTBEAT` (exit 1) después de encadenar varias corridas de `nextest --workspace`. El agente arregla y verifica **como mucho el crate afectado** (`-p <crate>`); el gate completo lo corre el orquestador. Si un agente tiene que correr el gate, que sea su última acción y con el trabajo ya commiteado.
 - **Los `SYMPHONY_*` heredados contaminan los tests del CLI:** si el orquestador corre los tests desde dentro de un agente, `hook_emit`, `hook_scheduler` y MCP leen el home / el socket de la sesión y fallan (0 eventos frente a 20). Limpiar `SYMPHONY_*` (y `CARGO_BUILD_BUILD_DIR`) antes de `cargo xtask check`; si no, hay que depurar fallos que no existen.
