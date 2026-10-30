@@ -1,16 +1,22 @@
 //! Servidor IPC del daemon: una sola instancia por directorio de Symphony,
 //! métodos `ping`, `status` y `shutdown`, timeout por request y apagado ordenado.
 
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use rusqlite::{Connection as SqliteConnection, OpenFlags};
 use serde_json::{Value, json};
 use symphony_adapter_common::AgentEvent;
 use symphony_protocol::transport::{self, ListenerExt as _, LocalStream};
-use symphony_protocol::{Connection, Event, Message, PROTOCOL_VERSION, Request, Response};
+use symphony_protocol::{
+    Connection, DailyTokens, Event, GitBranch, GitBranchRequest, GitBranchResult, GitBranches,
+    GitDeleteBranchResult, GlobalProviderUsage, GlobalUsage, Message, PROTOCOL_VERSION, Request,
+    Response,
+};
 use symphony_store::{Writer, repo};
 
 use crate::bus::{BusEvent, EventBus, EventSource};
@@ -594,6 +600,10 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "hook.emit" => hook_emit(req, state).await,
         "providers.list" => providers_list(req, state),
         "usage.get" => usage_get(req, state),
+        "usage.global" => usage_global(req, state),
+        "git.branches" => git_branches(req, state),
+        "git.checkout" => git_checkout(req, state),
+        "git.delete_branch" => git_delete_branch(req, state),
         "providers.refresh" => match refresh_providers(&state.writer).await {
             Ok(()) => providers_list(req, state),
             Err(e) => Response::error(req.id, "store_error", e.to_string()),
@@ -1922,6 +1932,153 @@ fn usage_get(req: Request, state: &State) -> Response {
     }
 }
 
+fn usage_global(req: Request, state: &State) -> Response {
+    let user_home = symphony_core::SymphonyHome::user_for(&state.home);
+    match global_usage(user_home.root()) {
+        Ok(data) => Response::ok(req.id, json!(data)),
+        Err(error) => Response::error(req.id, "usage_global_error", error),
+    }
+}
+
+fn global_usage(user_home: &Path) -> Result<GlobalUsage, String> {
+    let registry = user_home.join("symphony.db");
+    if !registry.is_file() {
+        return Ok(GlobalUsage {
+            providers: Vec::new(),
+            daily: Vec::new(),
+            incomplete_projects: Vec::new(),
+        });
+    }
+    let projects = symphony_store::split::list_projects(&registry).map_err(|e| e.to_string())?;
+    let mut providers = BTreeMap::<(String, String), u64>::new();
+    let mut daily = BTreeMap::<String, u64>::new();
+    let mut incomplete = Vec::new();
+    for (_, root) in projects {
+        let db = Path::new(&root).join(".symphony/symphony.db");
+        let conn = match SqliteConnection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(conn) => conn,
+            Err(_) => {
+                incomplete.push(root);
+                continue;
+            }
+        };
+        let rows = (|| {
+            let providers = conn.prepare(
+                "SELECT provider_id, model_id, COALESCE(SUM(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)), 0)
+                 FROM usage_records WHERE recorded_at >= CAST(strftime('%s', 'now', 'start of month') AS INTEGER) * 1000
+                 GROUP BY provider_id, model_id",
+            )?.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let daily = conn.prepare(
+                "SELECT strftime('%Y-%m-%d', recorded_at / 1000, 'unixepoch'),
+                        COALESCE(SUM(COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)), 0)
+                 FROM usage_records WHERE recorded_at >= CAST(strftime('%s', 'now', 'start of month') AS INTEGER) * 1000
+                 GROUP BY 1 ORDER BY 1",
+            )?.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok::<_, rusqlite::Error>((providers, daily))
+        })();
+        let (provider_rows, daily_rows) = match rows {
+            Ok(rows) => rows,
+            Err(_) => {
+                incomplete.push(root);
+                continue;
+            }
+        };
+        for (provider, model, tokens) in provider_rows {
+            let total = providers.entry((provider, model)).or_default();
+            *total = total.saturating_add(u64::try_from(tokens).unwrap_or(0));
+        }
+        for (date, tokens) in daily_rows {
+            let total = daily.entry(date).or_default();
+            *total = total.saturating_add(u64::try_from(tokens).unwrap_or(0));
+        }
+    }
+    Ok(GlobalUsage {
+        providers: providers
+            .into_iter()
+            .map(|((provider_id, model_id), tokens)| GlobalProviderUsage {
+                provider_id,
+                model_id,
+                tokens,
+            })
+            .collect(),
+        daily: daily
+            .into_iter()
+            .map(|(date, tokens)| DailyTokens { date, tokens })
+            .collect(),
+        incomplete_projects: incomplete,
+    })
+}
+
+fn git_repo(state: &State) -> Result<symphony_git::Repo, symphony_git::GitError> {
+    let root = state
+        .home
+        .parent()
+        .ok_or_else(|| symphony_git::GitError::Parse {
+            args: "rev-parse --show-toplevel".into(),
+            detail: "ruta de proyecto inválida".into(),
+        })?;
+    symphony_git::Repo::discover(root)
+}
+
+fn git_branches(req: Request, state: &State) -> Response {
+    match git_repo(state).and_then(|repo| repo.branches()) {
+        Ok(branches) => Response::ok(
+            req.id,
+            json!(GitBranches {
+                branches: branches
+                    .into_iter()
+                    .map(|b| GitBranch {
+                        name: b.name,
+                        current: b.current,
+                        ahead: b.ahead,
+                        behind: b.behind,
+                        merged: b.merged,
+                    })
+                    .collect(),
+            }),
+        ),
+        Err(error) => Response::error(req.id, "git_error", error.to_string()),
+    }
+}
+
+fn git_checkout(req: Request, state: &State) -> Response {
+    let request: GitBranchRequest = match serde_json::from_value::<GitBranchRequest>(req.params) {
+        Ok(request) if !request.branch.is_empty() => request,
+        _ => return Response::error(req.id, "invalid_params", "falta `branch`"),
+    };
+    match git_repo(state).and_then(|repo| repo.checkout(&request.branch)) {
+        Ok(()) => Response::ok(
+            req.id,
+            json!(GitBranchResult {
+                branch: request.branch
+            }),
+        ),
+        Err(error) => Response::error(req.id, "git_error", error.to_string()),
+    }
+}
+
+fn git_delete_branch(req: Request, state: &State) -> Response {
+    let request: GitBranchRequest = match serde_json::from_value::<GitBranchRequest>(req.params) {
+        Ok(request) if !request.branch.is_empty() => request,
+        _ => return Response::error(req.id, "invalid_params", "falta `branch`"),
+    };
+    match git_repo(state).and_then(|repo| repo.delete_branch(&request.branch, false)) {
+        Ok(()) => Response::ok(
+            req.id,
+            json!(GitDeleteBranchResult {
+                branch: request.branch,
+                deleted: true,
+            }),
+        ),
+        Err(symphony_git::GitError::BranchNotMerged(name)) => {
+            Response::error(req.id, "branch_not_merged", name)
+        }
+        Err(error) => Response::error(req.id, "git_error", error.to_string()),
+    }
+}
+
 fn providers_list(req: Request, state: &State) -> Response {
     let cfg = state.bus.health_config();
     let listed = state
@@ -1933,6 +2090,47 @@ fn providers_list(req: Request, state: &State) -> Response {
         Some(Ok(v)) => Response::ok(req.id, json!({ "providers": v })),
         Some(Err(e)) => Response::error(req.id, "store_error", e.to_string()),
         None => Response::error(req.id, "store_error", "lector de la base no disponible"),
+    }
+}
+
+#[cfg(test)]
+mod global_usage_tests {
+    use super::global_usage;
+    use rusqlite::Connection;
+
+    #[test]
+    fn usage_global_reads_and_aggregates_registered_project_databases() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = Connection::open(home.path().join("symphony.db")).unwrap();
+        registry
+            .execute_batch("CREATE TABLE projects(id TEXT, root_path TEXT, created_at INTEGER);")
+            .unwrap();
+        for (id, name, tokens) in [("p1", "one", 30), ("p2", "two", 12)] {
+            let root = home.path().join(name);
+            std::fs::create_dir_all(root.join(".symphony")).unwrap();
+            registry
+                .execute(
+                    "INSERT INTO projects VALUES (?1, ?2, 0)",
+                    rusqlite::params![id, root.to_string_lossy()],
+                )
+                .unwrap();
+            let db = Connection::open(root.join(".symphony/symphony.db")).unwrap();
+            db.execute_batch("CREATE TABLE usage_records(provider_id TEXT, model_id TEXT, tokens_in INTEGER, tokens_out INTEGER, recorded_at INTEGER);").unwrap();
+            db.execute("INSERT INTO usage_records VALUES ('anthropic', 'opus', ?1, 0, CAST(strftime('%s','now') AS INTEGER) * 1000)", [tokens]).unwrap();
+        }
+        drop(registry);
+
+        let data = global_usage(home.path()).unwrap();
+        assert_eq!(data.providers[0].tokens, 42);
+        assert_eq!(data.daily.len(), 1);
+        assert_eq!(data.daily[0].tokens, 42);
+        assert!(data.incomplete_projects.is_empty());
+        assert!(
+            !home
+                .path()
+                .join("one/.symphony/symphony.db-journal")
+                .exists()
+        );
     }
 }
 

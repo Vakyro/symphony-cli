@@ -115,6 +115,13 @@
 - **Verificado:** `cargo nextest run -p symphony-tui` → 101 ✅; `clippy --all-targets -D warnings` ✅;
   `cargo fmt --all -- --check` ✅.
 
+### P17.S6 · IPC global y ramas de Git (daemon) — ✅
+- **Agente:** codex/gpt-6.1.
+- **Qué se hizo:** `usage.global` lee el registro `~/.symphony/symphony.db` y abre cada DB de proyecto en `SQLITE_OPEN_READ_ONLY`; agrega tokens del mes por proveedor/modelo y por fecha (`YYYY-MM-DD`). Proyectos sin DB o con esquema incompleto aparecen en `incomplete_projects`. `git.branches` devuelve ramas locales con current, ahead/behind respecto al upstream y si están integradas en HEAD; `git.checkout` cambia la rama; `git.delete_branch` nunca fuerza y devuelve `branch_not_merged` si no está integrada.
+- **Contrato:** structs serde públicos en `symphony-protocol`, bajo `PROTOCOL_VERSION` existente; no cambia la versión wire.
+- **Pruebas:** `cargo nextest run -p symphony-git branch_status_checkout_and_safe_delete` y `cargo nextest run -p symphony-daemon --lib usage_global_reads_and_aggregates_registered_project_databases` ✅. `cargo clippy -p symphony-daemon -- -D warnings` ✅. No se ejecutó el binario `daemon` ni `cargo xtask check`, como pidió la tarea.
+- **Límite conocido:** la lista de proyectos disponible en el home es la tabla `projects` del respaldo `symphony.db` dejado por `migrate split`; si se elimina ese respaldo no existe aún otro registro global que permita descubrir proyectos automáticamente.
+
 ## Backlog / ideas futuras de P17 (documentadas, no implementadas)
 
 - **S8 · Renderizado rico del chat (pendiente):** colores en las respuestas estilo OpenCode. Un MD temporal que vive solo durante la sesión, con colores asignados por importancia (info/warn/error). Dos opciones a decidir con ADR corto: (A) colorear todo el markdown del asistente (requiere parser como pulldown-cmark, justificar dependencia en STACK) o (B) solo bloques especiales marcados por el agente (protocolo documentado en el harness). Decidir si el color lo asigna el agente o la TUI por heurística, y si el MD se persiste en el transcript o solo en memoria. No confundir con el tema de la TUI (S1), ya implementado.

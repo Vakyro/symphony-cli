@@ -29,6 +29,8 @@ pub enum GitError {
     Parse { args: String, detail: String },
     #[error("no se pudieron soltar los enlaces del worktree: {0}")]
     Unlink(#[source] std::io::Error),
+    #[error("la rama `{0}` no está integrada en HEAD y no se borró")]
+    BranchNotMerged(String),
 }
 
 /// Un repositorio (o worktree) sobre el que se corren comandos.
@@ -47,6 +49,15 @@ pub struct WorktreeInfo {
     pub bare: bool,
     pub locked: bool,
     pub prunable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchInfo {
+    pub name: String,
+    pub current: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    pub merged: bool,
 }
 
 /// Estado de un archivo según `git status --porcelain=v2 -z`.
@@ -400,6 +411,64 @@ impl Repo {
         Ok((!b.is_empty()).then_some(b))
     }
 
+    /// Ramas locales con divergencia respecto al upstream y si ya están integradas en HEAD.
+    pub fn branches(&self) -> Result<Vec<BranchInfo>, GitError> {
+        let current = self.current_branch()?;
+        let refs = self.text([
+            "for-each-ref",
+            "--format=%(refname:short)%09%(upstream:short)%09x",
+            "refs/heads",
+        ])?;
+        refs.lines()
+            .map(|line| {
+                let mut fields = line.splitn(3, '\t');
+                let (Some(name), Some(upstream), Some(_)) =
+                    (fields.next(), fields.next(), fields.next())
+                else {
+                    return Err(GitError::Parse {
+                        args: "for-each-ref".into(),
+                        detail: line.into(),
+                    });
+                };
+                let (ahead, behind) = if upstream.is_empty() {
+                    (0, 0)
+                } else {
+                    let counts = self.text([
+                        "rev-list",
+                        "--left-right",
+                        "--count",
+                        &format!("{upstream}...{name}"),
+                    ])?;
+                    let mut counts = counts.split_whitespace();
+                    let behind = counts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                    let ahead = counts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                    (ahead, behind)
+                };
+                let merged = match git_cmd(
+                    Some(&self.root),
+                    ["merge-base", "--is-ancestor", name, "HEAD"],
+                ) {
+                    Ok(_) => true,
+                    Err(GitError::Failed { code, .. }) if code == "1" => false,
+                    Err(error) => return Err(error),
+                };
+                Ok(BranchInfo {
+                    name: name.into(),
+                    current: current.as_deref() == Some(name),
+                    ahead,
+                    behind,
+                    merged,
+                })
+            })
+            .collect()
+    }
+
+    pub fn checkout(&self, branch: &str) -> Result<(), GitError> {
+        self.run(["check-ref-format", "--branch", branch])?;
+        self.run(["checkout", branch])?;
+        Ok(())
+    }
+
     /// `git worktree add -b <branch> <path> <base>`: worktree nuevo con rama nueva.
     pub fn worktree_add(
         &self,
@@ -489,7 +558,19 @@ impl Repo {
     }
 
     pub fn delete_branch(&self, branch: &str, force: bool) -> Result<(), GitError> {
-        self.run(["branch", if force { "-D" } else { "-d" }, branch])?;
+        if !force {
+            match git_cmd(
+                Some(&self.root),
+                ["merge-base", "--is-ancestor", branch, "HEAD"],
+            ) {
+                Ok(_) => {}
+                Err(GitError::Failed { code, .. }) if code == "1" => {
+                    return Err(GitError::BranchNotMerged(branch.into()));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.run(["branch", if force { "-D" } else { "-d" }, "--", branch])?;
         Ok(())
     }
 

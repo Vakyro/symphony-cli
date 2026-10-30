@@ -1,11 +1,11 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-29 · por codex/gpt-5.x
+**Actualizado:** 2026-10-29 · por codex/gpt-6.1
 **Fase actual:** P17 · TUI al día (rama `phase/p17-tui`). P13 **cerrada y mergeada** (`p13-done`); P16 en `phase/p16-validacion`, rebasada sobre `main` y a la espera de Leo (veredicto de uso) y de P17–P20 para los docs as-built.
-**Paso actual:** P17.S4 terminado (mascota: **mini piano de una octava que se toca solo**, solo en el chat principal). Plan completo de lo pendiente con las decisiones de Leo del 2026-10-29 en **`docs/progress/ROADMAP-2026-10-29.md`**. P16: S0–S1 ✅, S2/S3 medidos, S3 con guard de disco ✅, S4 esperando estar en `main`.
+**Paso actual:** P17.S6 · IPC daemon de uso global y ramas de Git terminado. Queda integrar con las vistas TUI y completar S5/S7. Plan completo de lo pendiente con las decisiones de Leo del 2026-10-29 en **`docs/progress/ROADMAP-2026-10-29.md`**. P16: S0–S1 ✅, S2/S3 medidos, S3 con guard de disco ✅, S4 esperando estar en `main`.
 **Estado del paso:** terminado y verificado en este worktree; pendiente de integración por el orquestador.
-**En curso por:** opencode-go/deepseek-v4-pro (orquestador), con delegación a agentes Symphony.
-**Siguiente:** P17.S4 → S5 → S6 → S8 → S7 (cierre con merge y tag `p17-done` pusheado) → P18 → P19 → P20 → P16 (v0.9.0 → v1.0.0; tags `v*` solo con OK escrito de Leo).
+**En curso por:** codex/gpt-6.1.
+**Siguiente:** integrar IPC global y ramas con vistas TUI de P17.S6; continuar S5 y cerrar S7 (merge y tag `p17-done`) → P18 → P19 → P20 → P16 (v0.9.0 → v1.0.0; tags `v*` solo con OK escrito de Leo).
 
 **Handoff 2026-10-29 · P17.S5 (cerrado):** integrado el trabajo del agente 065 (cherry-pick) en el worktree `agent-068`; corregidos clippy (`let-else` → `?` en `recorder.rs`) y el contract suite del fake_adapter (`ToolOutput`). Verdes: clippy `-D warnings` de protocol/daemon/testkit/adapter-common; `cargo nextest run` de los cuatro crates (excluido el binario `daemon`, flaky en Windows) y el L2 `shell_tool_output_is_listed_and_streamed_for_its_agent` por filtro de nombre. Aviso: al correr tests dentro del harness hay que quitar `SYMPHONY_USER_HOME` del ambiente (si no, los tests de plugins fallan; ver `docs/progress/LEARNINGS.md`). Quedan como seguimiento: test de socket IPC end-to-end con fake-agent como proveedor configurado, y revisar parsers de proveedores para emitir `ToolOutput` fuera de hooks. Decisión registrada en `docs/phases/P17-tui.md`. Siguiente: P17.S6.
 
@@ -49,7 +49,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P13 · Endurecimiento y pre-release** (`phase/p13-endurecimiento`): ✅ S1 seguridad · ✅ S2 fuzzing (30 min por target en WSL, 2 crashes de `redact` arreglados, corpus y job corto en CI) · ✅ S3 checkpoint corrupto, writer a media transacción y soak de 4 h (963 tandas, 470 reinicios, RSS 25 → 27 MB, 2026-10-27) · ✅ S4 retención y harness E2E · ✅ S5 auditorías de 10 áreas con sus arreglos (incluidos #51 y #52 de `server.md`), ponytail-audit, typos/lychee/mdbook bloqueantes, cobertura · ✅ S6 mdBook · ✅ S7 cargo-dist en dry run · ✅ S8 cierre (`p13-done`, 2026-10-28: gate 733 ✅, `deny` ✅, merge a `main`; `v0.9.0` local)
 
-**P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ S1 tema y barra de estado · ✅ S2 chat estilo Claude Code · ✅ S3 arranque (arte, «para empezar», atajos con `?`, recuadro de versión local) · ✅ S4 mascota · pendientes S5–S7 · backlog documentado: S8 renderizado rico del chat (colores por importancia) y política configurable de Symphony/harness (fuera de P17, nueva fase).
+**P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ S1 tema y barra de estado · ✅ S2 chat estilo Claude Code · ✅ S3 arranque (arte, «para empezar», atajos con `?`, recuadro de versión local) · ✅ S4 mascota · ✅ S6 IPC daemon (uso global y ramas) · pendientes S5, vistas TUI de S6 y S7 · backlog documentado: S8 renderizado rico del chat (colores por importancia) y política configurable de Symphony/harness (fuera de P17, nueva fase).
 
 **P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasada sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · ✅ S3 benchmark medido con guard de disco · 🟡 S4 `install-check.yml` (espera estar en `main`; el trigger ya no se dispara desde `main`) · 🟡 S5 anexo de desviaciones
 

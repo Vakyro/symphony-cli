@@ -4,6 +4,65 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Contratos de status global (el versionado de wire es `PROTOCOL_VERSION`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlobalUsage {
+    pub providers: Vec<GlobalProviderUsage>,
+    pub daily: Vec<DailyTokens>,
+    pub incomplete_projects: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlobalProviderUsage {
+    pub provider_id: String,
+    pub model_id: String,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DailyTokens {
+    pub date: String,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitBranch {
+    pub name: String,
+    pub current: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    pub merged: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitBranchRequest {
+    pub branch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitBranches {
+    pub branches: Vec<GitBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitBranchResult {
+    pub branch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitDeleteBranchResult {
+    pub branch: String,
+    pub deleted: bool,
+}
+
 use crate::ProtocolError;
 
 pub const PROTOCOL_VERSION: u32 = 1;

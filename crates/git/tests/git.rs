@@ -74,6 +74,43 @@ fn branch_naming() {
 }
 
 #[test]
+fn branch_status_checkout_and_safe_delete() {
+    let (_dir, root) = repo();
+    let r = Repo::at(&root);
+    git(&root, &["branch", "merged"]);
+    git(&root, &["checkout", "-q", "-b", "unmerged"]);
+    std::fs::write(root.join("new.txt"), "branch\n").unwrap();
+    git(&root, &["add", "new.txt"]);
+    git(&root, &["commit", "-q", "-m", "unmerged"]);
+    r.checkout("main").unwrap();
+
+    let branches = r.branches().unwrap();
+    assert!(
+        branches
+            .iter()
+            .any(|b| b.name == "main" && b.current && b.merged)
+    );
+    assert!(
+        branches
+            .iter()
+            .any(|b| b.name == "unmerged" && !b.current && !b.merged)
+    );
+    assert!(
+        branches
+            .iter()
+            .any(|b| b.name == "merged" && !b.current && b.merged)
+    );
+    assert!(
+        matches!(r.delete_branch("unmerged", false), Err(symphony_git::GitError::BranchNotMerged(name)) if name == "unmerged")
+    );
+    assert!(r.branch_exists("unmerged").unwrap());
+    r.checkout("unmerged").unwrap();
+    r.checkout("main").unwrap();
+    r.delete_branch("merged", false).unwrap();
+    assert!(!r.branch_exists("merged").unwrap());
+}
+
+#[test]
 fn worktree_lifecycle_with_spaces() {
     let (dir, root) = repo();
     let r = Repo::at(&root);
