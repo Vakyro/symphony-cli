@@ -67,6 +67,12 @@
 - **S3b (`af30a90`):** `?` abre `Screen::Help` (recuerda la pantalla de origen para volver con `Esc` o `q`) en todas las pantallas salvo el agente (donde `?` ya explica el routing), `FirstRun`/`NewAgent`/`ProviderSetup` (entrada de texto) y la barra de comandos. El recuadro muestra la versión del crate (`env!("CARGO_PKG_VERSION")`) y, si existe, `.symphony/anuncios.md` (hasta 8 líneas), leído una sola vez al arrancar y sin red ni telemetría.
 - **Pruebas:** dos nuevas en `views.rs` (el arte cabe y se oculta en un terminal pequeño; el bloque «PARA EMPEZAR» sale en el proyecto no inicializado y no en el inicializado). Los snapshots `view_01_launch_*` solo cambian en el arte y el bloque nuevo.
 - **Verificado:** `cargo nextest run -p symphony-tui` → 103 ✅; `clippy --all-targets -D warnings` ✅; `fmt` ✅.
+
+### P17.S4 · Mascota — ✅
+- **Objetivo:** mini piano de una octava, con 7 teclas blancas, 5 negras y frases rotativas; solo en el chat principal mientras el agente trabaja.
+- **Qué se hizo:** se integró la mascota en `crates/tui/src/mascot.rs`, usando el tick existente de 1 s. Respeta `SYMPHONY_NO_ANIM`, `NO_COLOR`, `TERM=dumb` y `[ui].animations`; se añadieron snapshots a 80 y 160 columnas y pruebas de aislamiento del chat.
+- **Corrección:** `home_app()` no respondía el nuevo `config.ui`, dejando `inflight` ocupado y haciendo que `bus_events_refresh_on_the_next_tick_without_piling_up` devolviera cero llamadas. El test ahora responde la llamada inicial; no se relajó la aserción porque el comportamiento correcto sigue siendo refrescar una vez en el siguiente tick.
+- **Verificado:** `unset SYMPHONY_LIVE; cargo nextest run -p symphony-core` → 73 ✅; `unset SYMPHONY_LIVE; cargo nextest run -p symphony-tui --test views` → 101 ✅; `unset SYMPHONY_LIVE; cargo clippy -p symphony-core -p symphony-tui --all-targets -- -D warnings` ✅. No se ejecutaron de nuevo los tests del binario `daemon`.
 - **Objetivo:** streaming de la respuesta, pensamientos, ediciones con `+N −M` y archivos tocados.
 - **Verificación:** test L2 con `fake-agent` que emite deltas y diffs.
 - **Agente:** opencode-go/beam-free (delegado) + revisión del orquestador.

@@ -164,6 +164,7 @@ fn home_app() -> App {
     let mut app = App::new("/work/arete-mobile");
     app.now_ms = NOW;
     app.start();
+    ok(&mut app, Req::UiConfig, json!({ "animations": true }));
     ok(&mut app, Req::Providers, providers());
     ok(&mut app, Req::ProjectStatus, status(true, 0));
     ok(&mut app, Req::Agents, agents());

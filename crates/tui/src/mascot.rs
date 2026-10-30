@@ -4,7 +4,7 @@
 //!
 //! Se apaga con la variable de entorno `SYMPHONY_NO_ANIM`, con `NO_COLOR`, con una
 //! terminal sin animación (`TERM=dumb`) o con `[ui] animations = false` en la config
-//! (`~/.symphony/config.toml`, pisible por `.symphony/project.toml`; la TUI lo pregunta
+//! (`~/.symphony/config.toml`, sobrescribible por `.symphony/project.toml`; la TUI lo pregunta
 //! al daemon con `config.ui`).
 
 use ratatui::style::{Modifier, Style};
