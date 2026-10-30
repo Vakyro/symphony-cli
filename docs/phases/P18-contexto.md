@@ -102,5 +102,24 @@ Comando de baseline arriba; conteos completos en `docs/research/tokens-p18-base.
 ## Estado final
 P18.S1 parte 2 sigue incompleta: recortes implementados en el commit anterior, pero con una regresión confirmada en el contrato de conversación. Benchmark posterior pendiente; no se afirma alcanzar el 40 %. No se inició otra fase.
 
+## Pausa del 2026-10-30 (orquestador)
+
+Leo paró el trabajo al final del día. Estado de la rama `phase/p18-contexto`:
+
+| Paso | Estado | Commit |
+|---|---|---|
+| S1 benchmark fijo | ✅ | `96b6719` |
+| S1 recortes | 🟡 recorte chico (objetivo/plan no se repiten); test de handoff en rojo; cifra antes/después sin medir | `933fba9`, `ac90131` |
+| S2 Flintstone por defecto | ✅ | `8d9fca6` |
+| S3 `/compact` automático | ⏸ primer intento (#91) paró sin código; segundo (#95, Kimi) se colgó: el proceso de Kimi murió y el daemon lo siguió viendo RUNNING. Su WIP quedó en `a84603d` (rama `symphony/7fkbtvmy/agent-095`, 13 archivos, +464), sin verificar ni integrar | — |
+| S4 grafo al iniciar | ✅ (Rust, `crates/daemon/src/project_graph.rs`) | `a440358` |
+| S5 `/init` | ✅ | `610eae7` |
+| S6 segundo cerebro | ✅ (`.symphony/brain/`, ignorado) | `e66ad7c` |
+| Enmienda ADR-0013 D2 | ✅ | `16f8227` |
+
+**El benchmark no sirve para la meta del 40 %:** sus fixtures son sintéticos (mensajes de 800 «x», diff de «x»), así que ningún compresor puede mostrar ahorro. Hay que rehacerlo con contenido realista (tool calls, salidas largas de cargo, diffs unificados, logs repetidos, hechos ya presentes en el checkpoint) antes de recortar más.
+
+**Para retomar:** (1) S3 a partir de `a84603d` (`git cherry-pick a84603d`, terminar y verificar); (2) arreglar el test de handoff y rehacer el benchmark realista; (3) gate completo; (4) revisión de cierre; (5) docs, merge y `p18-done`.
+
 ## Notas para el siguiente agente
 El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-base.md`. No lanzar CLIs reales; el benchmark es sintético y local.

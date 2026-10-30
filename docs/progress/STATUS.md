@@ -1,12 +1,12 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-30 · por codex/gpt-6.1
-**Fase actual:** P17 · TUI; revisión de cierre ejecutada, pendiente de integrar.
-**Paso actual:** P17.S7 · revisión del diff de cierre: corregida la mezcla de contadores entre proyectos contra ADR-0022.
-**Estado del paso:** `nextest` de protocol (17), daemon --lib (38) y tui (148) en verde; clippy `-D warnings` de protocol, daemon y tui en verde. No se ejecutó `cargo xtask check`; merge y tag `p17-done` siguen a cargo del integrador.
-**Responsable:** codex/gpt-6.1.
-**Siguiente:** integrar la revisión y ejecutar el gate de fase; después P18.S1 (auditoría del router y del handoff, benchmark fijo antes/después) → P19 → P20 → cierre de P16. Meta de P18: reducir tokens un 40 %, según `docs/progress/DECISIONES-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
-**Seguimientos:** S5 conserva el test de socket IPC con fake-agent y la revisión de parsers fuera de hooks; S6 conserva la limitación del registro global y difiere a P19 el avance por fases de cada agente. La revisión encontró además dos puntos bajos, anotados en «Revisión de cierre» de `docs/phases/P17-tui.md`.
+**Actualizado:** 2026-10-30 · por Claude Code (orquestador; trabajo hecho por agentes de Symphony)
+**Fase actual:** P18 · Contexto y ahorro de tokens (rama `phase/p18-contexto`, pusheada). **P17 cerrada** (`p17-done`, merge `5f19f0e` en `main`, gate 805 ✅).
+**Paso actual:** P18 pausada por Leo al final del día 2026-10-30. Hechos: S1 benchmark (🟡 recortes), S2 Flintstone por defecto, S4 grafo, S5 `/init`, S6 segundo cerebro, enmienda ADR-0013 D2. Pendientes: S3, recortes realistas, gate, revisión y docs de cierre.
+**Estado del paso:** sin gate completo en la rama de P18. Hay un test de handoff en rojo desde el recorte de #90 (`handoff_combines_the_ch…`, ver bitácora P18 § parte 2).
+**Responsable:** el siguiente orquestador.
+**Siguiente:** retomar la cola `.symphony/tmp/q-p18c.txt` (sin las líneas ya hechas; ver `docs/progress/DOGFOOD.md` § Cola secuencial). Orden: (1) P18.S3 `/compact` automático, retomando el WIP `a84603d` de la rama `symphony/7fkbtvmy/agent-095` (464 líneas, sin verificar); (2) arreglar el test de handoff y rehacer el benchmark con fixtures realistas para medir el −40 % (el actual es sintético: «x» repetidas); (3) gate completo; (4) revisión de cierre; (5) docs de cierre, merge y `p18-done`. Después P19 → P20 → P16. Plan completo con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
+**Seguimientos:** P17 dejó puntos bajos en «Revisión de cierre» de `docs/phases/P17-tui.md`. Hallazgos de Symphony del día en `docs/progress/LEARNINGS.md` § 2026-10-30.
 **P16:** sigue pendiente del veredicto de uso, de S4 en `main` y de P18–P20 para completar los docs as-built y publicar.
 
 **Handoff 2026-10-29 · P17.S5 (cerrado):** integrado el trabajo del agente 065 (cherry-pick) en el worktree `agent-068`; corregidos clippy (`let-else` → `?` en `recorder.rs`) y el contract suite del fake_adapter (`ToolOutput`). Verdes: clippy `-D warnings` de protocol/daemon/testkit/adapter-common; `cargo nextest run` de los cuatro crates (excluido el binario `daemon`, flaky en Windows) y el L2 `shell_tool_output_is_listed_and_streamed_for_its_agent` por filtro de nombre. Aviso: al correr tests dentro del harness hay que quitar `SYMPHONY_USER_HOME` del ambiente (si no, los tests de plugins fallan; ver `docs/progress/LEARNINGS.md`). Quedan como seguimiento: test de socket IPC end-to-end con fake-agent como proveedor configurado, y revisar parsers de proveedores para emitir `ToolOutput` fuera de hooks. Decisión registrada en `docs/phases/P17-tui.md`. Siguiente: P17.S6.
@@ -76,6 +76,15 @@ Novedades de P12: `symphony plugin list|check`, `[plugins]` en `project.toml` y 
 - Requisito permanente (CONSTRAINTS A12): instalación única y global; nada se instala ni se escribe por proyecto.
 
 ## Para Leo (⛔ — el agente anota aquí y sigue)
+- **2026-10-30 · Fin del día (orquestación con agentes de Symphony).** P17 cerrada y en `main`. P18 a medias en `phase/p18-contexto`. **Pusheé esa rama al remoto como respaldo sin preguntarte**, aunque CLAUDE.md pide confirmar el primer push de una rama nueva. Si no la querías en el remoto: `git push origin --delete phase/p18-contexto`.
+- **2026-10-30 · Hallazgos de Symphony que conviene arreglar** (detalle en LEARNINGS § 2026-10-29/30):
+  1. El daemon no detecta cuando muere el proceso del proveedor y deja al agente en RUNNING.
+  2. «model at capacity» de Codex se trata como crash, sin failover.
+  3. La herramienta `shell` no dice que es Git Bash, así que Codex prueba PowerShell primero.
+  4. La regla de «dos fallos» es demasiado estricta.
+
+  ¿Los meto como pasos de P18/P19 o como fase de deuda?
+- **2026-10-30 · Copia estable de Symphony actualizada** a `969a04c` (guard del shell arreglado) en `~/.symphony-stable/bin`. La anterior quedó en `~/.symphony-stable/prev/`. En `bin/` quedó también `symphony.old.exe`, que se puede borrar.
 - **2026-10-29 · Las 53 preguntas de producto: respondidas por Leo.** Todas las decisiones quedan en docs/progress/ROADMAP-2026-10-29.md (orden P17->P18->P19->P20->P16, merge a main sin OK, tags pNN-done pusheados, mascota = mini piano, status global, 40 % de reduccion de tokens, Flintstone por defecto, 3 tareas por sesion con /compact automatico, Laya como backend de decision con personalizacion y umbrales 0.9/0.6, perfiles elegidos por el modelo de decision, /orchester con plan aprobado, editor con guardado y nano tal cual, Habbo fuera del plan). Tags v* solo con OK escrito; homebrew autorizado (Vakyro/homebrew-symphony).
 - **2026-10-28 · P16.S4 no puede correr hasta que el workflow esté en `main`.** GitHub devuelve 404 al lanzar `install-check.yml` desde una rama de fase (`gh workflow run ... --ref phase/p16-validacion`): un workflow que no existe en la rama por defecto no se puede despachar. Está en `phase/p16-validacion` (ya pusheada) y se lanzará con `run_id` de un CI que sí tenga los artefactos `dist-*`. De paso se corrigió que el `workflow_run` se dispararía también en `main`, donde `release-dry-run` no corre y no hay artefactos: el primer CI verde de `main` habría salido en rojo.
 - **2026-10-28 · P20.S4 (móvil) ya está cubierto.** La guía `docs/book/src/uso-remoto-ssh.md` (P13.S6) describe Tailscale + SSH + tmux y el trabajo por comandos en pantallas pequeñas, que es exactamente lo que pide P20.S4; no hace falta código nuevo. Solo queda releerla cuando se cierre P20.

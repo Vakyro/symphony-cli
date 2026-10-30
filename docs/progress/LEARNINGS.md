@@ -189,3 +189,19 @@ Una sola sesión cubrió P11.S2–S6, P10 completa y P09.S1–S10, con una compa
 - **`daemon stop` no espera al proceso, solo al lock:** en Windows el proceso sigue destruyendo su runtime un instante y nextest lo ve vivo → `LEAK`. Un guard que capture el PID, pare, espere y haga `taskkill /F /T` lo cierra; hay que correr también en el `Drop` para que cubra las aserciones que fallan.
 - **`nextest` marca `LEAK` sin fallar ningún test:** el resumen puede decir `733 passed` y el gate salir en rojo. El motivo está en las líneas `LEAK` del log, no en el resumen.
 - **El gate no corre con el daemon del repo vivo:** `symphonyd.exe` en ejecución ocupa `target/debug/symphonyd.exe` y clippy falla con `failed to remove file`. Parar el daemon del proyecto (`symphony daemon stop`) antes de `cargo xtask check`, no después.
+
+## 2026-10-29/30 · Orquestación de P17–P18 con agentes de Symphony
+
+- **El daemon no detecta la muerte del proceso del proveedor:** #95 (Kimi) quedó en RUNNING más de una hora sin proceso de Kimi vivo. Hace falta un watchdog que compare el PID del executor con el estado del run.
+- **«Selected model is at capacity» de Codex (`server_overloaded`) sale como `codex terminó con código 1`:** se clasifica como crash, no como transitorio, y no hay failover. El adaptador de Codex debe reconocerlo.
+- **El guard del shell rechazaba expresiones de `sed`/`grep`:** palabras como `/^fn/,/^}/p` o `/### 4\.6/,/### 4\.7/p` se tomaban como rutas absolutas fuera del worktree. Bloqueó a Codex en 4 corridas (#70, #71, #80, #84). Arreglado en `9131432` y `969a04c`: una palabra que empieza por `/` y contiene metacaracteres de regex (`^ $ + ? { } [ ] \ , #`) no es una ruta. `/etc/passwd` se sigue rechazando.
+- **Codex en Windows prueba primero PowerShell** (`Get-Location`) aunque el shell del harness sea Git Bash. La descripción de la herramienta `shell` debería decir qué shell es.
+- **La regla «parar tras dos fallos» hace que los agentes se rindan pronto:** con un rechazo del guard y un error de sintaxis ya paran sin hacer nada.
+- **Kimi a veces sale con código 75 y deja el trabajo sin commit.** El rescate que funcionó: commit `wip` en su worktree y un agente nuevo que primero hace cherry-pick del `wip` y luego lo termina y verifica.
+- **Un agente que termina sin cambios (todo verde) no es un fallo:** distinguir `COMPLETED` sin commit de `FAILED`.
+- **Las tareas de planteamiento equivocado se detectan bien:** gpt-6-luna paró en P17.S5 porque el daemon no ejecuta el shell del agente. Replantear la tarea fue mejor que insistir.
+- **Las revisiones de cierre pueden sobrecorregir:** la de P17 subió el protocolo IPC a v2 por un método nuevo que nunca se publicó. Revisar los cambios de versión de protocolo antes de integrar.
+- **Un benchmark de tokens con texto sintético no mide recortes:** con mensajes de «x» ningún compresor ahorra. Las fixtures tienen que parecerse al contenido real.
+- **Cuotas:** en un día se agotaron Antigravity (48 h), Kimi (unas horas), Codex, Copilot y OpenCode. Kimi volvió primero. Antes de lanzar una cola, mirar `symphony providers`.
+- **RAM:** con 16 GB, dos compilaciones en paralelo más el gate dejan la máquina sin memoria, y Claude Code mata sus procesos en segundo plano. Hay que trabajar con un solo agente compilando.
+- **Los agentes heredan `SYMPHONY_*`** y los tests del CLI y del daemon fallan dentro de un agente. Hay que hacer `unset` de todas antes de cargo (ya estaba anotado; volvió a pasar en #78, #90 y #94).
