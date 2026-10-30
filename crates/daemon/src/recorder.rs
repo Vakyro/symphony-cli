@@ -27,9 +27,9 @@ pub struct Recorder {
 #[derive(Default)]
 struct Open {
     /// (run, tool_use_id) → (tool call, ¿ya terminó?).
-    by_use_id: HashMap<(RunId, String), (ToolCallId, bool)>,
+    by_use_id: HashMap<(RunId, String), (ToolCallId, bool, bool)>,
     /// Tool calls sin `tool_use_id`, por (run, herramienta), en orden de llegada.
-    unkeyed: HashMap<(RunId, String), VecDeque<ToolCallId>>,
+    unkeyed: HashMap<(RunId, String), VecDeque<(ToolCallId, bool)>>,
     /// Último mensaje del usuario de cada run.
     last_user: HashMap<RunId, String>,
 }
@@ -84,7 +84,7 @@ impl Recorder {
         match open.by_use_id.entry((run, tool_use_id.to_string())) {
             Entry::Occupied(_) => false,
             Entry::Vacant(e) => {
-                e.insert((id, false));
+                e.insert((id, false, false));
                 true
             }
         }
@@ -130,13 +130,14 @@ impl Recorder {
                         if open.by_use_id.contains_key(&(run, use_id.clone())) {
                             return None;
                         }
-                        open.by_use_id.insert((run, use_id.clone()), (id, false));
+                        open.by_use_id
+                            .insert((run, use_id.clone()), (id, false, false));
                     }
                     None => open
                         .unkeyed
                         .entry((run, tool.clone()))
                         .or_default()
-                        .push_back(id),
+                        .push_back((id, false)),
                 }
                 let call = repo::NewToolCall {
                     id,
@@ -170,14 +171,14 @@ impl Recorder {
                             e.get_mut().1 = true;
                             (e.get().0, true)
                         }
-                        Entry::Vacant(e) => (e.insert((ToolCallId::new(), true)).0, false),
+                        Entry::Vacant(e) => (e.insert((ToolCallId::new(), true, false)).0, false),
                     },
                     None => match open
                         .unkeyed
                         .get_mut(&(run, tool.clone()))
                         .and_then(VecDeque::pop_front)
                     {
-                        Some(id) => (id, true),
+                        Some((id, _)) => (id, true),
                         None => (ToolCallId::new(), false),
                     },
                 };
@@ -196,6 +197,68 @@ impl Recorder {
                         repo::insert_tool_call(t, call, now)?;
                     }
                     Ok(repo::finish_tool_call(t, id, ok, exit_code, now)?)
+                }))
+            }
+            AgentEvent::ToolOutput {
+                tool_use_id,
+                tool,
+                text,
+            } => {
+                let run = run?;
+                if symphony_adapter_common::hooks::tool_kind(tool) != ToolKind::Command {
+                    return None;
+                }
+                let id = match tool_use_id {
+                    Some(use_id) => {
+                        let entry = open.by_use_id.get_mut(&(run, use_id.clone()))?;
+                        if entry.2 {
+                            return None;
+                        }
+                        entry.2 = true;
+                        Some(entry.0)
+                    }
+                    None => open.unkeyed.get(&(run, tool.clone())).and_then(|ids| {
+                        ids.front().filter(|(_, output)| !output).map(|(id, _)| *id)
+                    }),
+                }?;
+                if tool_use_id.is_none()
+                    && let Some((_, saved)) = open
+                        .unkeyed
+                        .get_mut(&(run, tool.clone()))
+                        .and_then(VecDeque::front_mut)
+                {
+                    *saved = true;
+                }
+                let (id, agent, project, run, text) = (
+                    id,
+                    agent,
+                    project,
+                    run,
+                    symphony_core::redact(text).into_owned(),
+                );
+                let objects = self.objects.clone();
+                Some(Box::new(move |t| {
+                    let stored = objects
+                        .put(t, text.as_bytes(), Some("text/plain"))
+                        .map_err(sql_err)?;
+                    objects.add_ref(t, &stored.hash).map_err(sql_err)?;
+                    let object = ContextObjectId::new();
+                    repo::insert_context_object(
+                        t,
+                        object,
+                        &format!("ctx://tool-output/{id}"),
+                        project,
+                        Some(agent),
+                        Some(run),
+                        "TOOL_OUTPUT",
+                        &stored.hash,
+                        now,
+                    )?;
+                    t.execute(
+                        "UPDATE tool_calls SET output_object_id = ?2 WHERE id = ?1",
+                        rusqlite::params![id.to_string(), object.to_string()],
+                    )?;
+                    Ok(())
                 }))
             }
             // Los errores que no obligan a cambiar de executor (límites temporales, red…) no pasan

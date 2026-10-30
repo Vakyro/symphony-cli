@@ -210,13 +210,24 @@ impl ProviderAdapter for FakeAdapter {
                     .and_then(Value::as_i64)
                     .and_then(|c| i32::try_from(c).ok());
                 let ok = v.get("ok").and_then(Value::as_bool).unwrap_or(false);
-                vec![AgentEvent::ToolFinished {
+                let mut events = vec![AgentEvent::ToolFinished {
                     tool_use_id: s(&v, "id"),
                     kind: tool_kind(&tool),
-                    tool,
+                    tool: tool.clone(),
                     ok,
                     exit_code,
-                }]
+                }];
+                if tool_kind(&tool) == symphony_adapter_common::ToolKind::Command {
+                    let output = v.get("output").map(|o| o.to_string()).unwrap_or_default();
+                    if !output.is_empty() {
+                        events.push(AgentEvent::ToolOutput {
+                            tool_use_id: s(&v, "id"),
+                            tool,
+                            text: output,
+                        });
+                    }
+                }
+                events
             }
             (Some("error"), _) => s(&v, "error")
                 .and_then(|e| self.parse_error(&e))

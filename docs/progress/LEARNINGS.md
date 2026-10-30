@@ -2,6 +2,11 @@
 
 Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 
+## Entorno / harness (2026-10-29, P17.S5)
+
+- **Correr `cargo nextest` dentro del harness de Symphony sin quitar `SYMPHONY_USER_HOME` rompe los tests de plugins del daemon** de forma determinista: el daemon hijo hereda la variable y `SymphonyHome::user_for` resuelve el dir de plugins al home real del usuario, no al temporal del test («`todo-check` no está instalado en ~/.symphony/plugins»). En scripts: `Remove-Item Env:SYMPHONY_USER_HOME` antes de correr los tests. Aplica a cualquier agente que ejecute la suite dentro de Symphony.
+- **Los `handoff_matrix_*` y tests de dependencias/plan de `symphony-daemon::runtime` son sensibles a la carga en Windows:** bajo nextest con paralelismo completo fallan de forma intermitente y rotando (estado que no llega a transicionar, «falta el qué seguía»). Pasan al reintentarlos sueltos. Antes de diagnosticar un fallo de este binario, re-correr el test aislado.
+
 ## Prevalidación (P00.S0) — detalle en `docs/research/prevalidacion.md` §2.3
 
 - **H1 · Los CLIs headless no siempre dejan TODOs estructurados.** `claude -p` no usó TodoWrite y `codex exec` no produjo `todo_list`; ambos escribieron el plan como texto. El checkpoint toma el **último mensaje del asistente** como fuente del "qué seguía" y usa TODOs estructurados solo si existen.

@@ -11,6 +11,15 @@
 
 ## Pasos
 
+### P17.S5 · Herramientas shell observadas por el daemon — ✅ (2026-10-29)
+- **Decisión:** el daemon no ejecuta el shell del agente; el CLI proveedor ejecuta las herramientas. No existe un proceso shell administrado que Symphony pueda interceptar. Esta parte construye una vista derivada de los eventos `ToolRequested`/`ToolFinished` y salida reportada por el proveedor, persistidos vía `tool_calls` y `context_objects` (`TOOL_OUTPUT`), sin tabla nueva. IPC: `agent.processes` es una vista derivada de los `tool_calls` shell (no una tabla de procesos), y `agent.process.output` es una suscripción de **solo lectura** por agente, **sin stdin** ni shell interactiva.
+- **Alcance:** agregado `AgentEvent::ToolOutput`, parseo común de `tool_response`, almacenamiento redactado en object store, lista `agent.processes` derivada de tool calls shell, `Subscribe` versionado con `agent_id` opcional y tópicos `agent.processes` / `agent.process.output`; fake-agent L2 valida adapter → bus → recorder → vista y salida en vivo por bus. No hay stdin ni shell interactiva.
+- **Fuera de alcance:** interceptar el shell del daemon (P15.5.S4 pendiente) no aplica porque el CLI proveedor es quien lo ejecuta. No se crean procesos gestionados ni filas nuevas.
+- **Pendiente (seguimiento):** test de socket IPC end-to-end donde el fake-agent del test sea el proveedor configurado del daemon; revisar parsers de proveedores que reportan resultados fuera de hooks para emitir `ToolOutput` cuando esté disponible.
+- **Verificación:** clippy `-D warnings` de los cuatro crates (protocol, daemon, testkit, adapter-common) en verde (let-else con `?` en `recorder.rs`; contract suite del fake_adapter ajustado a `ToolOutput`). `cargo nextest run` de los cuatro crates excluyendo el binario `daemon` (flaky en Windows): 201/204 en la corrida completa y los 3 que fallaron por carga (rotan) pasaron al reintentarlos sueltos; el test L2 `shell_tool_output_is_listed_and_streamed_for_its_agent` pasa por filtro de nombre.
+- **Nota de entorno:** al correr los tests **dentro** del harness de Symphony hay que quitar `SYMPHONY_USER_HOME` del ambiente: si está heredada, el daemon de los tests descubre plugins en el home real del usuario y los tests de plugins fallan deterministas («`todo-check` no está instalado»). Ver `docs/progress/LEARNINGS.md`.
+- **Estado:** cerrado; pendientes de seguimiento anotados arriba.
+
 ### P17.S1 · Tema y barra de estado — ✅ (`30c0bfe`, `98283c9`)
 - **Objetivo:** paleta morada apagada en un módulo de tema, sin colores sueltos por `ui.rs`; barra
   de estado siempre visible con modelo:proveedor, uso de la sesión de 5 h y semanal con hora de

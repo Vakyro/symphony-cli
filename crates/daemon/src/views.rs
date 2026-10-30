@@ -90,6 +90,59 @@ pub fn activity(conn: &Connection, agent: &str, limit: u32) -> rusqlite::Result<
     Ok(Value::Array(items.into_iter().map(|(_, v)| v).collect()))
 }
 
+/// Comandos del agente con salida, derivados de `tool_calls` (P17.S5).
+pub fn processes(
+    conn: &Connection,
+    agent: &str,
+    objects: &symphony_object_store::ObjectStore,
+) -> rusqlite::Result<Value> {
+    let mut stmt = conn.prepare(
+        "SELECT tc.id, tc.run_id, tc.tool_name, tc.command, tc.status, tc.exit_code,
+                tc.requested_at, tc.started_at, tc.finished_at, co.blob_hash
+         FROM tool_calls tc LEFT JOIN context_objects co ON co.id = tc.output_object_id
+         WHERE tc.agent_id = ?1 AND lower(tc.tool_name) IN ('bash','exec_command','shell','run_command') ORDER BY tc.requested_at",
+    )?;
+    let rows = stmt.query_map([agent], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, Option<i64>>(5)?,
+            r.get::<_, i64>(6)?,
+            r.get::<_, Option<i64>>(7)?,
+            r.get::<_, Option<i64>>(8)?,
+            r.get::<_, Option<String>>(9)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (
+            id,
+            run_id,
+            tool,
+            command,
+            status,
+            exit_code,
+            requested_at,
+            started_at,
+            finished_at,
+            hash,
+        ) = row?;
+        let output = hash
+            .map(|h| objects.get(&h))
+            .transpose()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            .map(|b| String::from_utf8_lossy(&b).into_owned());
+        Ok(
+            json!({"id":id,"run_id":run_id,"tool":tool,"command":command,"status":status,
+                  "exit_code":exit_code,"requested_at":requested_at,"started_at":started_at,
+                  "finished_at":finished_at,"output":output}),
+        )
+    })
+    .collect()
+}
+
 /// Vista History (12): runs del agente y cambios de executor con su motivo.
 pub fn history(conn: &Connection, agent: &str) -> rusqlite::Result<Value> {
     let mut runs = conn.prepare(

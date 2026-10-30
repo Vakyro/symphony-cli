@@ -66,6 +66,8 @@ pub struct Subscribe {
     pub protocol: u32,
     pub id: String,
     pub topics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 impl Request {
@@ -121,6 +123,20 @@ impl Subscribe {
             protocol: PROTOCOL_VERSION,
             id: id.into(),
             topics,
+            agent_id: None,
+        }
+    }
+
+    pub fn for_agent(
+        id: impl Into<String>,
+        topics: Vec<String>,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            protocol: PROTOCOL_VERSION,
+            id: id.into(),
+            topics,
+            agent_id: Some(agent_id.into()),
         }
     }
 }
@@ -159,6 +175,11 @@ mod tests {
             )),
             Message::Event(Event::new("agent.state", json!({"state": "RUNNING"}))),
             Message::Subscribe(Subscribe::new("01K", vec!["agent.*".into()])),
+            Message::Subscribe(Subscribe::for_agent(
+                "01L",
+                vec!["agent.processes".into()],
+                "01A",
+            )),
         ];
         for m in msgs {
             assert_eq!(Message::from_bytes(&m.to_bytes().unwrap()).unwrap(), m);
@@ -178,6 +199,30 @@ mod tests {
         assert_eq!(
             v,
             json!({"type": "request", "protocol": 1, "id": "01J", "method": "agent.pause", "params": {"agent_id": "01A"}})
+        );
+    }
+
+    #[test]
+    fn process_subscription_wire_shape_is_versioned_and_agent_scoped() {
+        let bytes = Message::Subscribe(Subscribe::for_agent(
+            "s1",
+            vec!["agent.processes".into()],
+            "a1",
+        ))
+        .to_bytes()
+        .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value,
+            json!({"type":"subscribe","protocol":1,"id":"s1","topics":["agent.processes"],"agent_id":"a1"})
+        );
+        assert_eq!(
+            Message::from_bytes(&bytes).unwrap(),
+            Message::Subscribe(Subscribe::for_agent(
+                "s1",
+                vec!["agent.processes".into()],
+                "a1"
+            ))
         );
     }
 

@@ -125,6 +125,7 @@ struct State {
     runtime: crate::runtime::Runtime,
     /// Cola de operaciones pesadas (P08.S3).
     scheduling: Arc<crate::scheduling::Scheduling>,
+    objects: symphony_object_store::ObjectStore,
 }
 
 use crate::runtime::now_ms;
@@ -379,6 +380,9 @@ pub async fn serve(home: &Path, shutdown: CancellationToken) -> Result<(), Daemo
         writer: writer.handle(),
         runtime,
         scheduling,
+        objects: symphony_object_store::ObjectStore::new(
+            symphony_core::SymphonyHome::at(home).objects_dir(),
+        ),
     });
     let tracker = TaskTracker::new();
 
@@ -424,6 +428,44 @@ async fn handle(stream: LocalStream, state: Arc<State>) {
                 }
             }
             Ok(Some(Message::Subscribe(sub))) => {
+                let process_agent = sub
+                    .agent_id
+                    .clone()
+                    .filter(|_| sub.topics.iter().any(|t| t == TOPIC_AGENT_PROCESSES));
+                if let Some(agent) = process_agent {
+                    let exists = state.reader.lock().ok().is_some_and(|c| {
+                        c.query_row("SELECT 1 FROM agents WHERE id = ?1", [&agent], |_| Ok(()))
+                            .is_ok()
+                    });
+                    if !exists {
+                        let _ = conn
+                            .send(&Message::Response(Response::error(
+                                sub.id,
+                                "agent_not_found",
+                                "el agente no existe",
+                            )))
+                            .await;
+                        return;
+                    }
+                    let response = Response::ok(
+                        sub.id,
+                        json!({"topics":[TOPIC_AGENT_PROCESS_OUTPUT],"agent_id":agent}),
+                    );
+                    if conn.send(&Message::Response(response)).await.is_ok() {
+                        stream_process_output(conn, &state, &agent).await;
+                    }
+                    return;
+                }
+                if sub.topics.iter().any(|t| t == TOPIC_AGENT_PROCESSES) {
+                    let _ = conn
+                        .send(&Message::Response(Response::error(
+                            sub.id,
+                            "invalid_params",
+                            "agent.processes requiere agent_id",
+                        )))
+                        .await;
+                    return;
+                }
                 if !sub
                     .topics
                     .iter()
@@ -466,8 +508,41 @@ async fn handle(stream: LocalStream, state: Arc<State>) {
     }
 }
 
+async fn stream_process_output(mut conn: Connection<LocalStream>, state: &State, agent: &str) {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut rx = state.bus.subscribe();
+    loop {
+        let event = tokio::select! {
+            () = state.shutdown.cancelled() => return,
+            _ = conn.recv() => return,
+            ev = rx.recv() => ev,
+        };
+        let msg = match event {
+            Ok(ev) if ev.agent_id.as_deref() == Some(agent) => match &ev.event {
+                AgentEvent::ToolOutput {
+                    tool_use_id,
+                    tool,
+                    text,
+                } => Event::new(
+                    TOPIC_AGENT_PROCESS_OUTPUT,
+                    json!({"agent_id":agent,"run_id":ev.run_id,"tool_use_id":tool_use_id,"tool":tool,"text":symphony_core::redact(text).into_owned(),"occurred_at":ev.occurred_at}),
+                ),
+                _ => continue,
+            },
+            Ok(_) => continue,
+            Err(RecvError::Lagged(missed)) => Event::new(TOPIC_LAGGED, json!({"missed":missed})),
+            Err(RecvError::Closed) => return,
+        };
+        if conn.send(&Message::Event(msg)).await.is_err() {
+            return;
+        }
+    }
+}
+
 /// Tópico de los eventos canónicos de agentes (IDEA §5.3).
 pub const TOPIC_AGENT_EVENT: &str = "agent.event";
+pub const TOPIC_AGENT_PROCESSES: &str = "agent.processes";
+pub const TOPIC_AGENT_PROCESS_OUTPUT: &str = "agent.process.output";
 /// El suscriptor se atrasó y perdió eventos: tiene que releer el estado.
 pub const TOPIC_LAGGED: &str = "bus.lagged";
 
@@ -542,6 +617,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.activity" => agent_view(req, state, |c, a| {
             crate::views::activity(c, a, 200).map(|v| json!({ "items": v }))
         }),
+        "agent.processes" => agent_view_with_objects(req, state),
         "agent.history" => agent_view(req, state, crate::views::history),
         "models.list" => read_view(req, state, |c| {
             crate::views::models(c, now_ms()).map(|v| json!({ "models": v }))
@@ -1401,6 +1477,27 @@ fn agent_view(
         Ok(id) => {
             let id = id.to_string();
             read_view(req, state, |c| f(c, &id))
+        }
+        Err(e) => Response::error(req.id, "agent_not_found", e),
+    }
+}
+
+fn agent_view_with_objects(req: Request, state: &State) -> Response {
+    match resolve_agent_id(state, &req.params) {
+        Ok(id) => {
+            let id = id.to_string();
+            let result = state
+                .reader
+                .lock()
+                .ok()
+                .map(|c| crate::views::processes(&c, &id, &state.objects));
+            match result {
+                Some(Ok(processes)) => {
+                    Response::ok(req.id, json!({"agent_id":id,"processes":processes}))
+                }
+                Some(Err(e)) => Response::error(req.id, "store_error", e.to_string()),
+                None => Response::error(req.id, "store_error", "lector de la base no disponible"),
+            }
         }
         Err(e) => Response::error(req.id, "agent_not_found", e),
     }

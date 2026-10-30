@@ -149,6 +149,11 @@ pub enum AgentEvent {
         ok: bool,
         exit_code: Option<i32>,
     },
+    ToolOutput {
+        tool_use_id: Option<String>,
+        tool: String,
+        text: String,
+    },
     FileModified {
         tool: String,
         path: Option<String>,
@@ -191,6 +196,7 @@ impl AgentEvent {
                 ..
             } => "CommandFinished",
             Self::ToolFinished { .. } => "ToolFinished",
+            Self::ToolOutput { .. } => "ToolOutput",
             Self::FileModified { .. } => "FileModified",
             Self::ProviderError(_) => "ProviderError",
             Self::Quota(_) => "QuotaUpdated",

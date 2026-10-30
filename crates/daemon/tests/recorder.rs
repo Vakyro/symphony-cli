@@ -64,6 +64,14 @@ async fn duplicates_from_hook_and_stream_are_recorded_once() {
         ev(EventSource::JsonStream, requested(Some("toolu_1"), secret)),
         ev(EventSource::Hook, requested(Some("toolu_1"), secret)),
         ev(EventSource::Hook, finished(Some("toolu_1"), true)),
+        ev(
+            EventSource::JsonStream,
+            AgentEvent::ToolOutput {
+                tool_use_id: Some("toolu_1".into()),
+                tool: "Bash".into(),
+                text: "salida fake".into(),
+            },
+        ),
         ev(EventSource::JsonStream, finished(Some("toolu_1"), false)),
         // Sin id: se empareja por orden de llegada.
         ev(EventSource::Hook, requested(None, "npm test")),
@@ -99,6 +107,20 @@ async fn duplicates_from_hook_and_stream_are_recorded_once() {
         "comando sin redactar: {first}"
     );
     assert_eq!(calls[0].1, "DONE", "gana el primer final");
+    let listed = symphony_daemon::views::processes(
+        &conn,
+        &agent.to_string(),
+        &ObjectStore::new(dir.path().join("objects")),
+    )
+    .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 4);
+    let shell = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["output"] == "salida fake")
+        .unwrap();
+    assert!(!shell["command"].as_str().unwrap().contains("sk-ant-api03"));
     assert_eq!(
         calls[1..]
             .iter()
@@ -114,7 +136,7 @@ async fn duplicates_from_hook_and_stream_are_recorded_once() {
     let events: i64 = conn
         .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(events, 11);
+    assert_eq!(events, 12);
     drop(bus);
     writer.shutdown();
 }
