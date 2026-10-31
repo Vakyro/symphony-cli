@@ -1,11 +1,11 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-31 · por claude/opus-5.5 · P18.S1 parte 3 cerrada (benchmark realista + recortes)
-**Fase actual:** P18 · Contexto y ahorro de tokens (rama `phase/p18-contexto`, pusheada). **P17 cerrada** (`p17-done`, merge `5f19f0e` en `main`, gate 805 ✅).
-**Paso actual:** P18 en curso (S3 ✅ el 2026-10-31). Hechos: S1 benchmark realista y recortes (meta −40 % solo en same_provider), S2 Flintstone por defecto, S3 sesiones cortas con compactación automática, S4 grafo, S5 `/init`, S6 segundo cerebro, enmienda ADR-0013 D2. Pendientes: gate, revisión y docs de cierre (S7).
-**Estado del paso:** sin gate completo en P18. S1 parte 3 hecha: fixtures realistas en `fixtures/handoff-p18/`, BALANCED −30,5 % / −34,2 % / −2,6 % / −74,4 % por ruta (tabla en `docs/research/tokens-p18-base.md`); symphony-context 57 passed, clippy y fmt limpios; L2 `handoff_` 14 passed. `cpu_keeps_beating_after_a_busy_child_ends` (binario daemon) sigue inestable en Windows y ajeno a S1. Ver bitácora P18 § parte 3.
-**Responsable:** el siguiente orquestador.
-**Siguiente:** retomar la cola `.symphony/tmp/q-p18c.txt` (sin las líneas ya hechas; ver `docs/progress/DOGFOOD.md` § Cola secuencial). Orden: (1) decidir si se aceptan las cifras de S1 bajo el 40 % en rotation/fallback/manual (ver bitácora P18); (2) gate completo; (3) revisión de cierre; (4) docs de cierre, merge y `p18-done`. Después P19 → P20 → P16. Plan completo con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
+**Actualizado:** 2026-10-31 · por kimi-code/kimi-for-coding · P18.S7: cierre documental de P18
+**Fase actual:** **P18 cerrada documentalmente** (rama `phase/p18-contexto`, pusheada; gate, merge `--no-ff` y tag `p18-done` a cargo del integrador). **P17 cerrada** (`p17-done`, merge `5f19f0e` en `main`, gate 805 ✅).
+**Paso actual:** P18 completa (S1–S7): S1 benchmark realista y recortes del handoff (meta −40 % cumplida solo en same_provider), S2 Flintstone por defecto, S3 sesiones cortas con compactación automática (enmienda ADR-0013 D2), S4 grafo al iniciar, S5 `/init`, S6 segundo cerebro, S7 revisión de cierre (4 medios arreglados) y docs de cierre. Detalle y commits en la bitácora `docs/phases/P18-contexto.md`.
+**Estado del paso:** cierre documental hecho, sin gate completo en P18 (lo corre el integrador). Cifras S1 (BALANCED, antes → después): rotation_context −30,5 %, fallback_quota −34,2 %, manual_switch −2,6 %, same_provider −74,4 % (tabla en `docs/research/tokens-p18-base.md`). Decisión abierta para el orquestador: aceptar las cifras bajo el 40 % en rotation/fallback/manual o seguir recortando (no se forzó con pérdida).
+**Responsable:** el integrador (gate, merge y tag de P18); después el orquestador de P19.
+**Siguiente:** (1) integrador: gate completo de `phase/p18-contexto`, merge `--no-ff` a `main`, tag y push `p18-done`. (2) Orquestador: iniciar **P19** (orquestación automática, `phase/p19-orquestacion`; S1 ya tiene la investigación en PLAN, pendiente de Leo el backend de decisión y el umbral de confianza; S2–S7 no dependen de eso). Después P20 → cierre de P16. Plan con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
 **Seguimientos:** P17 dejó puntos bajos en «Revisión de cierre» de `docs/phases/P17-tui.md`. Hallazgos de Symphony del día en `docs/progress/LEARNINGS.md` § 2026-10-30.
 **P16:** sigue pendiente del veredicto de uso, de S4 en `main` y de P18–P20 para completar los docs as-built y publicar.
 
@@ -53,7 +53,7 @@ Detalle de cada paso (qué y **Verifica**) en el PLAN. Bitácora de la fase en `
 
 **P17 · TUI al día** (`phase/p17-tui`, `docs/phases/P17-tui.md`): ✅ cerrada documentalmente: S1 tema y barra · S2 streaming y ediciones · S3 arranque · S4 mini piano · S5 procesos observados y pestaña TUI · S6 IPC y vistas de avance, ramas y status global · S8 marcadores explícitos · S7 cierre. Gate, merge y tag: integrador. Política configurable del harness: fuera de P17.
 
-**P18 · Contexto y ahorro de tokens:** S1 en curso (benchmark fijado, recortes con regresión confirmada en `handoff_combines_the_checkpoint_with_live_git`, pendiente corrección y medición); S2 (flintstone) ✅; **S3 (sesiones cortas con compactación automática, enmienda ADR-0013 D2) ✅** (tercer intento: WIP `a84603d` del agente 95 revisado, corregido el contador —la base se borraba antes de leerse— y verificado: daemon 167/168 con el único fallo preexistente de S1, TUI 149, clippy y fmt verdes; medición L3 pendiente del OK de Leo); S4 (grafo al iniciar) ✅; S5 (`/init` de Symphony) ✅; S6 (segundo cerebro en `.symphony/brain/`, daemon) ✅ — ver bitácora. Falta S7 (cierre). Aviso repetido: correr los tests con `SYMPHONY_*` fuera del ambiente o fallan los de plugins/transformer (interferencia documentada en LEARNINGS).
+**P18 · Contexto y ahorro de tokens:** ✅ cerrada documentalmente — S1 (benchmark fijo `96b6719`, recortes con regresión corregida y benchmark realista: BALANCED −30,5 % / −34,2 % / −2,6 % / −74,4 % por ruta; meta −40 % solo en same_provider) · S2 (flintstone) ✅ · S3 (sesiones cortas con compactación automática, enmienda ADR-0013 D2) ✅ · S4 (grafo al iniciar) ✅ · S5 (`/init`) ✅ · S6 (segundo cerebro en `.symphony/brain/`) ✅ · S7 (revisión de cierre con 4 medios arreglados + cierre documental) ✅ — detalle en `docs/phases/P18-contexto.md`. Pendiente del integrador: gate, merge y `p18-done`. Aviso repetido: correr los tests con `SYMPHONY_*` fuera del ambiente o fallan los de plugins/transformer (interferencia documentada en LEARNINGS).
 
 **P16 · adelantado** (`phase/p16-validacion`, sale de P13; rebasada sobre `main` tras el merge): ✅ S0 check `files` (ADR-0021) · ✅ S1 checklist · ✅ S3 benchmark medido con guard de disco · 🟡 S4 `install-check.yml` (espera estar en `main`; el trigger ya no se dispara desde `main`) · 🟡 S5 anexo de desviaciones
 
@@ -126,6 +126,10 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 
 ## Handoff para el siguiente agente
 
+### P18.S7 · cierre documental · 2026-10-31 · kimi-code/kimi-for-coding · agent-103
+
+P18 cerrada documentalmente (bitácora, STATUS, SESSIONS, LEARNINGS; commit `docs: [P18.S7] cierre de P18`). Los handoffs de S1 y S3 de abajo ya quedaron resueltos (recortes verificados y benchmark realista publicado; `/compact` integrado desde el WIP `a84603d`). Acción inmediata: el integrador corre el gate completo de `phase/p18-contexto`, mergea `--no-ff` a `main` y crea/pushea `p18-done`; después arranca P19. No se ejecutó Cargo en esta sesión. Decisión abierta registrada en el encabezado: aceptar o no las cifras de S1 bajo el 40 % en rotation/fallback/manual.
+
 ### P18.S1 parte 3 · fase 1 · 2026-10-31 · codex/gpt-6 · agent-097
 
 Corrección en `crates/context/src/handoff.rs`: al referenciar mensajes multilínea idénticos al checkpoint se conserva su primera línea; solo se sustituye si la representación completa ahorra caracteres. Test L2 original intacto, pasó solo (1 passed, 110 skipped). Test nuevo de apertura, ahorro, conservación del plan y modos RAW/SAFE. Primera suite: 35 passed, 1 failed por espacio final en la fixture nueva; corregido el dato sin relajar la aserción. Segunda suite: 166 passed, 1 failed, 3 skipped, 53 no ejecutados; falla `cpu_keeps_beating_after_a_busy_child_ends` con `NO_HEARTBEAT` frente a `COMPLETED`. No se investigó su causa ni se modificó ese test. Todas las llamadas Cargo con SYMPHONY_* y CARGO_BUILD_BUILD_DIR eliminadas. Parada tras dos intentos, plan temporal [!]; pendientes clippy acotado y suite completa aprobada. No se inició fase 2 (fixtures/línea base), ni fase 3 (recortes/tabla). Reanudar la validación requiere nueva sesión autorizada. Sin xtask ni live; sin cambio de rama asignada.
@@ -165,7 +169,7 @@ Segundo intento realizado con autorización y entorno SYMPHONY_* aislado: el tra
 | P15.5 | ✅ (ADR-0018, 0019, 0020) | p155-done |
 | P13 | ✅ | p13-done |
 | P17 | ✅ cierre documental; integración pendiente | — |
-| P18 | Siguiente: S1 | — |
+| P18 | ✅ cierre documental; integración pendiente | — |
 | P16 | Cierre después de P20 | — |
 
 ## Ola 0 — decisiones del 2026-10-29

@@ -2,6 +2,13 @@
 
 Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 
+## Cierre documental de P18 (2026-10-31)
+
+- **`git log main..HEAD` es la fuente fiable para el cierre de una fase:** lista exacta de lo que entra al merge, sin depender de la memoria de cada agente. En P18 fueron 17 commits sobre la rama de fase (ver bitácora § P18.S7).
+- **Un rate limit del proveedor tumba el executor y el run entero** (esta sesión arrancó tras un `claude terminó con código 1` por rate limit). Ya estaba anotado que el daemon no detecta la muerte del proceso; además conviene reintentar la tarea con otro modelo en vez de reintentar el mismo.
+- **Declarar la meta incumplida en el cierre, no esconderla:** la meta de −40 % solo se alcanzó en la ruta `same_provider` (−74,4 %); rotation (−30,5 %) y fallback (−34,2 %) quedan cortas porque lo que sobra es diff ya en contexto mínimo. El cierre documental deja la decisión (aceptar o seguir recortando) explícita en STATUS en vez de declarar éxito parcial como total.
+- **Los cierres documentales no necesitan gate:** con la revisión de código ya hecha y los resultados de cada paso en la bitácora, la sesión de cierre toca solo docs y no corre Cargo (mismo patrón que el cierre de P17).
+
 ## Entorno / harness (2026-10-29, P17.S5)
 
 - **Correr `cargo nextest` dentro del harness de Symphony sin quitar `SYMPHONY_USER_HOME` rompe los tests de plugins del daemon** de forma determinista: el daemon hijo hereda la variable y `SymphonyHome::user_for` resuelve el dir de plugins al home real del usuario, no al temporal del test («`todo-check` no está instalado en ~/.symphony/plugins»). En scripts: `Remove-Item Env:SYMPHONY_USER_HOME` antes de correr los tests. Aplica a cualquier agente que ejecute la suite dentro de Symphony.

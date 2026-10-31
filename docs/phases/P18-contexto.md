@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | EN CURSO |
+| Estado | CERRADA (cierre documental; gate, merge y tag a cargo del integrador) |
 | Rama | phase/p18-contexto |
-| Inicio / cierre | 2026-10-30 / — |
-| Agentes que trabajaron | codex/gpt-6.1 (P18.S1 parte 1), codex/gpt-6-luna (P18.S4 parte 1), kimi-code (P18.S4 cierre), kimi-code/kimi-for-coding (P18.S3: WIP #95 y cierre #96) |
-| Tag | — |
+| Inicio / cierre | 2026-10-30 / 2026-10-31 |
+| Agentes que trabajaron | codex/gpt-6.1 (P18.S1 parte 1), codex/gpt-6-luna (P18.S4 parte 1), kimi-code (P18.S4 cierre), kimi-code/kimi-for-coding (P18.S3: WIP #95 y cierre #96; P18.S7 cierre documental), codex/gpt-6 (P18.S1 fase 1), claude/opus-5.5 (P18.S1 parte 3 y P18.S7 revisión de cierre) |
+| Tag | — (`p18-done` lo crea el integrador tras el gate) |
 | Docs usados | PLAN § P18, ADR-0013 (enmienda 2026-10-30, D2), DECISIONES-2026-10-29 (29–30, 50), CONSTRAINTS §6, LEARNINGS.md |
 
 ## P18.S3 · Sesiones cortas con compactación automática — ✅
@@ -180,3 +180,28 @@ El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-ba
   - `symphony init` imprime «creado: .symphony/project.toml…» aunque ya existiera; `project_init` del server fija Flintstone/animaciones/3 sin opción por IPC.
   - Sin prueba L2 del texto exacto que recibe el CLI en el run de compactación (cubierto por la unitaria del prompt).
 - **Entorno:** dentro de un agente de Symphony hay que quitar todas las `SYMPHONY_*` (no solo `SYMPHONY_LIVE`) antes de `cargo nextest -p symphony-daemon`: con `SYMPHONY_USER_HOME` heredado fallan `lifecycle_single_instance_and_methods` y `system_view_and_performance_profile_work_without_a_project`.
+
+## P18.S7 · Cierre documental — ✅
+
+- **Agente:** kimi-code/kimi-for-coding · **Fecha:** 2026-10-31 · rama `symphony/m9ndhjq7/agent-103`. Solo documentación; sin Cargo ni live, por instrucción expresa. La revisión de cierre del código la hizo claude/opus-5.5 (sección anterior); esta sesión cierra la fase en los docs.
+- **Qué se hizo:** se actualizó este encabezado (estado CERRADA), `docs/progress/STATUS.md` (P18 cerrada documentalmente, siguiente P19), `docs/progress/SESSIONS.md` y `docs/progress/LEARNINGS.md`. El gate completo, el merge `--no-ff` a `main` y el tag `p18-done` quedan a cargo del integrador (PLAN §4.6), como en el cierre de P17.
+- **Commits de la fase (`git log main..HEAD`, de más nuevo a más viejo):**
+  - `aa0d67e` fix: [P18.S7] revisión de cierre: grafo fuera de /compact, project.toml de init con efecto, dedup del handoff y chat.get sin reconstruir el grafo
+  - `c5fc207` perf: [P18.S1] recortes deterministas del handoff en BALANCED y tabla antes/despues
+  - `bfb999a` perf: [P18.S1] benchmark de handoff con fixtures realistas y nueva linea base
+  - `0aa48e0` Revert "fix: [P18.S1] conserva apertura del handoff"
+  - `b09a67d` fix: [P18.S1] conserva apertura del handoff
+  - `e41e0a6` perf: [P18.S1] conserva la apertura al deduplicar el handoff
+  - `672f940` feat: [P18.S3] compactacion automatica al tope de tareas por sesion
+  - `0651c6d` docs: [P18] pausa del 2026-10-30: estado de P17-P18, hallazgos de Symphony y cola secuencial
+  - `e66ad7c` feat: [P18.S6] segundo cerebro del daemon en .symphony/brain/
+  - `a440358` feat: [P18.S4] grafo del proyecto al iniciar con refresco por fase
+  - `7db0abc` chore: [P18.S1] saca del repo un plan de agente de .symphony (ignorado)
+  - `ac90131` perf: [P18.S1] registra segundo gate fallido y relevo de recortes
+  - `933fba9` perf: [P18.S1] evita repetir objetivo y plan en el handoff
+  - `16f8227` docs: [P18.S3] enmienda de ADR-0013 D2
+  - `610eae7` feat: [P18.S5] actualiza init de proyectos
+  - `8d9fca6` feat: [P18.S2] activa Flintstone por defecto en el harness
+  - `96b6719` feat: [P18.S1] benchmark fijo de tokens de contexto
+- **Cifra de tokens antes/después (P18.S1 parte 3, BALANCED, estimación determinista ~4 caracteres/token; tabla completa en `docs/research/tokens-p18-base.md` § «Antes/después»):** rotation_context 16.016 → 11.127 (**−30,5 %**), fallback_quota 6.390 → 4.207 (**−34,2 %**), manual_switch 1.602 → 1.561 (**−2,6 %**), same_provider 6.468 → 1.654 (**−74,4 %**). RAW/SAFE sin cambios (0 %). Frente a RAW, BALANCED queda en −57,6 %, −74,1 %, −26,2 % y −86,0 %. **Meta −40 % por ruta: cumplida solo en `same_provider`.** Las demás rutas quedan cortas porque lo que sobra es diff ya en contexto mínimo o conversaciones sin nada repetible; no se forzó el porcentaje con pérdida.
+- **Pendientes al cierre:** (1) gate completo de la rama (`cargo xtask check`, a cargo del integrador); (2) merge `--no-ff` a `main` y tag `p18-done`; (3) medición L3 del ahorro real de `/compact` (P18.S3), pendiente del OK de Leo; (4) bajos documentados en la revisión de cierre (§ anterior); (5) meta −40 % no alcanzada en rotation/fallback/manual — aceptar las cifras o seguir recortando es decisión del orquestador (quedó anotada en STATUS).

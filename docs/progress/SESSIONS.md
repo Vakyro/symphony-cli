@@ -2,6 +2,8 @@
 
 Registro append-only. Una línea al inicio y un resumen al cierre de cada sesión.
 
+- 2026-10-31 · kimi-code/kimi-for-coding · cierre · P18.S7: cierre documental de P18 — bitácora con los 17 commits de `git log main..HEAD` y las cifras de tokens antes/después (BALANCED: −30,5 % / −34,2 % / −2,6 % / −74,4 % por ruta; meta −40 % solo en same_provider), STATUS con P18 cerrada y siguiente P19, SESSIONS y LEARNINGS. Revisión de cierre del código hecha antes por claude/opus-5.5 (4 medios arreglados). Solo docs; sin Cargo ni live. Gate, merge `--no-ff` y tag `p18-done` a cargo del integrador.
+
 - 2026-10-30 · codex/gpt-6 · inicio y cierre · P17.S7: retomado el worktree limpio del executor anterior; cierre documental de P17 con commits de S4/S5/S6/S8 comprobados en `git log main..HEAD`, decisiones de S5 y ADR-0022/0023, STATUS con siguiente P18.S1 y aprendizajes del dogfooding. Solo los cuatro documentos pedidos; sin Cargo ni live. Gate, merge y tag de fase a cargo del integrador.
 
 - 2026-10-29 · codex/gpt-6 · inicio y pausa · P17.S5 daemon replanteada: implementación parcial de salida observada y vistas IPC; nextest del daemon falló dos veces en tests no relacionados, con LEAK en una cancelación. Pendiente completar IPC L2 con fake-agent y clippy.
