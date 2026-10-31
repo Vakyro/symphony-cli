@@ -1,11 +1,11 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-30 · por Claude Code (orquestador; trabajo hecho por agentes de Symphony)
+**Actualizado:** 2026-10-31 · por codex/gpt-6 · P18.S1 parte 3, fase 1 detenida en validación
 **Fase actual:** P18 · Contexto y ahorro de tokens (rama `phase/p18-contexto`, pusheada). **P17 cerrada** (`p17-done`, merge `5f19f0e` en `main`, gate 805 ✅).
 **Paso actual:** P18 en curso (S3 ✅ el 2026-10-31). Hechos: S1 benchmark (🟡 recortes), S2 Flintstone por defecto, S3 sesiones cortas con compactación automática, S4 grafo, S5 `/init`, S6 segundo cerebro, enmienda ADR-0013 D2. Pendientes: recortes realistas, gate, revisión y docs de cierre (S7).
-**Estado del paso:** sin gate completo en la rama de P18. Hay un test de handoff en rojo desde el recorte de #90 (`handoff_combines_the_ch…`, ver bitácora P18 § parte 2).
+**Estado del paso:** sin gate completo en P18. Corregida la pérdida de la apertura del mensaje en handoff; `handoff_combines_the_checkpoint_with_live_git` pasó solo sin modificarlo. Fase 1 de la parte 3 detenida tras dos corridas fallidas de la suite: fixture nueva corregida y después `cpu_keeps_beating_after_a_busy_child_ends` (`NO_HEARTBEAT` frente a `COMPLETED`), 166 passed, 1 failed, 3 skipped; clippy pendiente. Ver bitácora P18 § parte 3.
 **Responsable:** el siguiente orquestador.
-**Siguiente:** retomar la cola `.symphony/tmp/q-p18c.txt` (sin las líneas ya hechas; ver `docs/progress/DOGFOOD.md` § Cola secuencial). Orden: (1) arreglar el test de handoff y rehacer el benchmark con fixtures realistas para medir el −40 % (el actual es sintético: «x» repetidas); (2) gate completo; (3) revisión de cierre; (4) docs de cierre, merge y `p18-done`. Después P19 → P20 → P16. Plan completo con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
+**Siguiente:** retomar la cola `.symphony/tmp/q-p18c.txt` (sin las líneas ya hechas; ver `docs/progress/DOGFOOD.md` § Cola secuencial). Orden: (1) resolver la validación pendiente de la corrección de handoff (parte 3, fase 1) y después rehacer el benchmark con fixtures realistas para medir el −40 % (el actual es sintético: «x» repetidas); (2) gate completo; (3) revisión de cierre; (4) docs de cierre, merge y `p18-done`. Después P19 → P20 → P16. Plan completo con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
 **Seguimientos:** P17 dejó puntos bajos en «Revisión de cierre» de `docs/phases/P17-tui.md`. Hallazgos de Symphony del día en `docs/progress/LEARNINGS.md` § 2026-10-30.
 **P16:** sigue pendiente del veredicto de uso, de S4 en `main` y de P18–P20 para completar los docs as-built y publicar.
 
@@ -125,6 +125,10 @@ Formato: paso · qué hace falta · comando exacto si aplica.
 - P11.5.S9.2 · Handoff entre modelos a media tarea en los cuatro modos de contexto con proveedores reales (Claude/Codex): con OpenCode gratuito dio 429 en 3 corridas. Comando: `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_handoff` (ya existe para otros pares).
 
 ## Handoff para el siguiente agente
+
+### P18.S1 parte 3 · fase 1 · 2026-10-31 · codex/gpt-6 · agent-097
+
+Corrección en `crates/context/src/handoff.rs`: al referenciar mensajes multilínea idénticos al checkpoint se conserva su primera línea; solo se sustituye si la representación completa ahorra caracteres. Test L2 original intacto, pasó solo (1 passed, 110 skipped). Test nuevo de apertura, ahorro, conservación del plan y modos RAW/SAFE. Primera suite: 35 passed, 1 failed por espacio final en la fixture nueva; corregido el dato sin relajar la aserción. Segunda suite: 166 passed, 1 failed, 3 skipped, 53 no ejecutados; falla `cpu_keeps_beating_after_a_busy_child_ends` con `NO_HEARTBEAT` frente a `COMPLETED`. No se investigó su causa ni se modificó ese test. Todas las llamadas Cargo con SYMPHONY_* y CARGO_BUILD_BUILD_DIR eliminadas. Parada tras dos intentos, plan temporal [!]; pendientes clippy acotado y suite completa aprobada. No se inició fase 2 (fixtures/línea base), ni fase 3 (recortes/tabla). Reanudar la validación requiere nueva sesión autorizada. Sin xtask ni live; sin cambio de rama asignada.
 
 ### P18.S1 parte 2 · 2026-10-30 · codex · agent-090
 

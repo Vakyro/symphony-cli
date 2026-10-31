@@ -186,12 +186,18 @@ fn render_conversation(input: &HandoffInput, mode: ContextMode) -> (String, u8) 
         };
         let original = m.text.trim();
         // Solo texto idéntico y completo en el checkpoint; nunca inferimos equivalencia.
-        let text = checkpoint
+        let replacement = checkpoint
             .iter()
-            .find(|(text, reference)| {
-                summarize && original == *text && reference.chars().count() < text.chars().count()
+            .find(|(text, _)| summarize && original == *text)
+            .map(|(_, reference)| {
+                // La primera línea conserva el contexto del turno antes de remitir al checkpoint.
+                original.split_once('\n').map_or_else(
+                    || reference.to_string(),
+                    |(first, _)| format!("{first}\n{reference}"),
+                )
             })
-            .map_or(original, |(_, reference)| *reference);
+            .filter(|text| text.chars().count() < original.chars().count());
+        let text = replacement.as_deref().unwrap_or(original);
         let line = format!("**{who}:** {}", clip(text, each, None));
         let len = line.chars().count();
         if total.is_some_and(|t| !kept.is_empty() && used + len > t) {
@@ -685,6 +691,53 @@ mod tests {
             render_conversation(&input, ContextMode::Aggressive).1,
             fidelity::CLIPPED
         );
+    }
+
+    #[test]
+    fn checkpoint_reference_keeps_the_opening_line_and_only_saves_space() {
+        let mut input = fixed();
+        for (opening, rest) in [
+            (
+                "Voy por partes.",
+                "- [x] leer\n- [ ] correr los tests de auth",
+            ),
+            (
+                "Decisión: conservar la API pública.",
+                "Comprobar los límites. ".repeat(30).trim_end(),
+            ),
+            (
+                "Introducción larga que no conviene sustituir por una referencia.",
+                "ok",
+            ),
+        ] {
+            let plan = format!("{opening}\n{rest}");
+            input.plan_tail = Some(plan.clone());
+            input.conversation = vec![ChatMessage {
+                speaker: Speaker::Assistant,
+                text: plan.clone(),
+            }];
+            for mode in [ContextMode::Balanced, ContextMode::Aggressive] {
+                let candidate = format!("{opening}\n[igual al Último plan del executor anterior]");
+                let (conversation, fid) = render_conversation(&input, mode);
+                let saves = candidate.chars().count() < plan.chars().count();
+                let expected = if saves { &candidate } else { &plan };
+                assert_eq!(conversation, format!("**Asistente:** {expected}"));
+                assert_eq!(
+                    fid,
+                    if saves {
+                        fidelity::COMPRESSED
+                    } else {
+                        fidelity::FULL
+                    }
+                );
+                assert!(assemble(&input, mode).prompt.contains(&plan));
+            }
+            for mode in [ContextMode::Raw, ContextMode::Safe] {
+                let (conversation, fid) = render_conversation(&input, mode);
+                assert_eq!(conversation, format!("**Asistente:** {plan}"));
+                assert_eq!(fid, fidelity::FULL);
+            }
+        }
     }
 
     #[test]

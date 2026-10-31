@@ -135,3 +135,13 @@ Leo paró el trabajo al final del día. Estado de la rama `phase/p18-contexto`:
 
 ## Notas para el siguiente agente
 El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-base.md`. No lanzar CLIs reales; el benchmark es sintético y local.
+
+## P18.S1 · Parte 3, fase 1: apertura del handoff corregida; validación detenida
+
+- **Agente:** codex/gpt-6 · **Fecha:** 2026-10-31 · rama asignada `symphony/m9ndhjq7/agent-097` conservada según DOGFOOD.
+- **Causa raíz:** la sustitución de mensajes idénticos al plan eliminaba también la apertura conversacional. `render_conversation` conserva ahora la primera línea de mensajes multilínea antes de la referencia y compara el tamaño de toda esa representación; si no ahorra, conserva el mensaje completo. Coincidencia exacta, autor, orden, límites y fidelidades siguen vigentes. RAW/SAFE sin cambios.
+- **Alcance:** solo `crates/context/src/handoff.rs`; el daemon consume el ensamblador compartido. No se modificaron callers, interfaces, dependencias, snapshots ni aserciones existentes. Test nuevo para apertura, ahorro, conservación del plan y RAW/SAFE.
+- **Prueba L2:** `cargo nextest run -p symphony-daemon --test runtime handoff_combines_the_checkpoint_with_live_git` → **1 passed, 110 skipped** (70,161 s), con la corrección compilada y el test original intacto.
+- **Suite:** `cargo nextest run -p symphony-context -p symphony-daemon -E 'not(binary(daemon))'`. Intento 1: **35 passed, 1 failed, 3 skipped, 184 no ejecutados**; la fixture nueva tenía un espacio al final y la plantilla aplica `trim()`. Se quitó ese espacio en el dato, sin relajar la aserción de conservación completa. Intento 2: **166 passed, 1 failed, 3 skipped, 53 no ejecutados**; falló `cpu_keeps_beating_after_a_busy_child_ends`, runtime.rs:2184, `NO_HEARTBEAT` en vez de `COMPLETED`. La prueba nueva de contexto ya no falló. No se atribuye este segundo fallo a una causa ambiental sin investigarlo.
+- **Entorno:** antes de cada Cargo se eliminaron todas las variables `SYMPHONY_*` y `CARGO_BUILD_BUILD_DIR`. `cargo fmt -p symphony-context` y `git diff --check` correctos. No se ejecutaron clippy posterior, xtask ni live.
+- **Parada:** dos intentos fallidos de validación; tarea marcada `[!]` en el plan temporal solicitado, sin tercer intento. Corrección guardada, fase 1 sin aprobar. Pendientes clippy acotado y suite aprobada; no se iniciaron las fases 2–3 (fixtures realistas, línea base, optimizaciones y tabla antes/después). No se afirma alcanzar el 40 %.
