@@ -2,11 +2,11 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | CERRADA (cierre documental; gate, merge y tag a cargo del integrador) |
+| Estado | CERRADA (gate, L3, integración y tag completados) |
 | Rama | phase/p18-contexto |
 | Inicio / cierre | 2026-10-30 / 2026-10-31 |
-| Agentes que trabajaron | codex/gpt-6.1 (P18.S1 parte 1), codex/gpt-6-luna (P18.S4 parte 1), kimi-code (P18.S4 cierre), kimi-code/kimi-for-coding (P18.S3: WIP #95 y cierre #96; P18.S7 cierre documental), codex/gpt-6 (P18.S1 fase 1), claude/opus-5.5 (P18.S1 parte 3 y P18.S7 revisión de cierre) |
-| Tag | — (`p18-done` lo crea el integrador tras el gate) |
+| Agentes que trabajaron | codex/gpt-6.1 (P18.S1 parte 1), codex/gpt-6-luna (P18.S4 parte 1), kimi-code (P18.S4 cierre), kimi-code/kimi-for-coding (P18.S3: WIP #95 y cierre #96; P18.S7 cierre documental), codex/gpt-6 (P18.S1 fase 1), claude/opus-5.5 (P18.S1 parte 3 y P18.S7 revisión de cierre), codex (integración y gate) |
+| Tag | `p18-done` (creado tras el gate y el merge) |
 | Docs usados | PLAN § P18, ADR-0013 (enmienda 2026-10-30, D2), DECISIONES-2026-10-29 (29–30, 50), CONSTRAINTS §6, LEARNINGS.md |
 
 ## P18.S3 · Sesiones cortas con compactación automática — ✅
@@ -19,7 +19,7 @@
   - **Corrección de este intento (bug del WIP de #95):** `close_phase_and_continue` borraba la base del contador (`clear_plan_done`) *antes* de leerla (`done_since`), así que la cuenta de tareas de la sesión caía a «todas las del plan»: cualquier cierre con ≥3 tareas hechas en total compactaba (aunque la sesión hubiera hecho 1) y el run de compactación, al cerrarse, volvía a pedir compactación **sin fin**. Se movió el borrado después de la lectura y `confirm_next` dejó de recomputar `compact_due` contra la base ya consumida: usa `awaits_compact`, la decisión exacta guardada al cerrar. La limpieza de la base también se añadió en `archive_plan` y `stop_on_failed_plan`. El resto del WIP (adapters, IPC, TUI, tests) se mantuvo: solo necesitó `rustfmt`.
 - **Archivos clave:** `crates/daemon/src/plan.rs` (contador, decisión, `start_compact_run`, `confirm_next`), `crates/daemon/src/executor.rs` (`note_plan_done` en `start_successor`/`continue_session`, `awaits_compact` en `inspect`), `crates/daemon/src/runtime.rs` (campos `plan_done`/`awaiting_compact`), `crates/daemon/src/server.rs` (`agent.long_session`), `crates/adapters/common/src/lib.rs` (`slash_compact`), `crates/adapters/claude/src/lib.rs`, `crates/testkit/src/fake_adapter.rs` (proveedor `fake-compact`), `crates/tui/src/app.rs`, `crates/tui/src/ui.rs`.
 - **Pruebas (corridas en este intento):** L2 con fake-agent en `crates/daemon/tests/runtime.rs`: `three_tasks_in_a_session_wait_for_compact_then_handoff` (3 tareas → READY con decisión pendiente → confirmar da handoff del assembler → COMPLETED) y `a_compact_capable_provider_runs_slash_compact_on_the_same_session` (`/compact` sobre la misma sesión del CLI), ambos en verde. Test de la TUI `compact_prompt_offers_compact_or_long_session` dentro de `cargo nextest run -p symphony-tui`: **149 passed**. `cargo nextest run -p symphony-daemon -E 'not(binary(daemon))'`: **167 passed, 1 skipped**; el único fallo es `handoff_combines_the_checkpoint_with_live_git`, regresión preexistente documentada de P18.S1 (falla igual sin este cambio). `cargo nextest run -p symphony-adapter-common -p symphony-adapter-claude -p symphony-testkit`: **45 passed**. `cargo clippy -p symphony-daemon -p symphony-tui -p symphony-adapter-common -p symphony-adapter-claude -p symphony-testkit -- -D warnings` y `cargo fmt --check` verdes, todo con las variables `SYMPHONY_*` fuera del ambiente. No se corrió `cargo xtask check` (lo corre quien integra) ni tests live (la medición L3 con Codex sigue pendiente del OK de Leo, como dice la enmienda).
-- **Pendiente:** medición live (L3) del ahorro real de tokens con la compactación, pendiente del permiso de Leo (PLAN P18.S3 «Verifica: medición live con Codex pendiente»).
+- **Estado al cierre de la sesión original:** medición live (L3) todavía pendiente; completada por el integrador en 2026-10-31 (ver sección final).
 
 ## P18.S4 · Grafo del proyecto al iniciar — ✅
 - **Agente:** codex/gpt-6-luna (parte 1, sin verificar) + kimi-code (verificación y cierre) · **Fecha:** 2026-10-30.
@@ -112,9 +112,9 @@ Comando de baseline arriba; conteos completos en `docs/research/tokens-p18-base.
 - **Handoff:** corregir la deduplicación conservando el prefijo requerido de conversación; verificar tests existentes sin debilitarlos y luego medir. Requiere nueva autorización para reanudar tras la parada solicitada. Logs locales en `target/p18-validation/`.
 
 ## Estado final
-P18.S1 parte 2 sigue incompleta: recortes implementados en el commit anterior, pero con una regresión confirmada en el contrato de conversación. Benchmark posterior pendiente; no se afirma alcanzar el 40 %. No se inició otra fase.
+P18 está completa funcionalmente y el gate de integración pasó el 2026-10-31: `cargo xtask check` con fmt y Clippy limpios y 827 tests aprobados (4 omitidos), usando dos workers de nextest para evitar timeouts ambientales en Windows. S1 terminó con benchmark realista y los ahorros medidos al cierre; el objetivo de −40 % se acepta como aspiración por ruta, no como gate rígido: no se recortó más donde hacerlo podía perder contenido. La revisión S7 corrigió los hallazgos medios y documentó los bajos. La prueba live L3 pasó; P18 se integró con merge `--no-ff`, tag `p18-done` y push (ver sección final).
 
-## Pausa del 2026-10-30 (orquestador)
+## Pausa del 2026-10-30 (registro histórico; superado por el cierre final)
 
 Leo paró el trabajo al final del día. Estado de la rama `phase/p18-contexto`:
 
@@ -129,12 +129,12 @@ Leo paró el trabajo al final del día. Estado de la rama `phase/p18-contexto`:
 | S6 segundo cerebro | ✅ (`.symphony/brain/`, ignorado) | `e66ad7c` |
 | Enmienda ADR-0013 D2 | ✅ | `16f8227` |
 
-**El benchmark no sirve para la meta del 40 %:** sus fixtures son sintéticos (mensajes de 800 «x», diff de «x»), así que ningún compresor puede mostrar ahorro. Hay que rehacerlo con contenido realista (tool calls, salidas largas de cargo, diffs unificados, logs repetidos, hechos ya presentes en el checkpoint) antes de recortar más.
+**En esa pausa, el benchmark no servía para medir la meta del 40 %:** sus fixtures eran sintéticos. Se sustituyeron por fixtures realistas en P18.S1 parte 3; ver la línea base y los resultados posteriores.
 
-**Para retomar:** (1) S3 a partir de `a84603d` (`git cherry-pick a84603d`, terminar y verificar); (2) arreglar el test de handoff y rehacer el benchmark realista; (3) gate completo; (4) revisión de cierre; (5) docs, merge y `p18-done`.
+**Acciones de esa pausa (ya completadas):** S3 se integró; se corrigió el test de handoff, se rehízo y midió el benchmark; se completaron los recortes, la revisión de cierre y el gate. La integración quedó completada después de esa pausa.
 
 ## Notas para el siguiente agente
-El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-base.md`. No lanzar CLIs reales; el benchmark es sintético y local.
+El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-base.md`. La nota «no lanzar CLIs reales» pertenecía a la pausa; cualquier medición live se registra por separado y requiere el permiso de Leo.
 
 ## P18.S1 · Parte 3, fase 1: apertura del handoff corregida; validación detenida
 
@@ -184,7 +184,7 @@ El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-ba
 ## P18.S7 · Cierre documental — ✅
 
 - **Agente:** kimi-code/kimi-for-coding · **Fecha:** 2026-10-31 · rama `symphony/m9ndhjq7/agent-103`. Solo documentación; sin Cargo ni live, por instrucción expresa. La revisión de cierre del código la hizo claude/opus-5.5 (sección anterior); esta sesión cierra la fase en los docs.
-- **Qué se hizo:** se actualizó este encabezado (estado CERRADA), `docs/progress/STATUS.md` (P18 cerrada documentalmente, siguiente P19), `docs/progress/SESSIONS.md` y `docs/progress/LEARNINGS.md`. El gate completo, el merge `--no-ff` a `main` y el tag `p18-done` quedan a cargo del integrador (PLAN §4.6), como en el cierre de P17.
+- **Qué se hizo:** se actualizó este encabezado (estado CERRADA), `docs/progress/STATUS.md` (P18 cerrada documentalmente, siguiente P19), `docs/progress/SESSIONS.md` y `docs/progress/LEARNINGS.md`. El gate, merge, tag y L3 estaban pendientes en esa sesión; se completaron después por el integrador.
 - **Commits de la fase (`git log main..HEAD`, de más nuevo a más viejo):**
   - `aa0d67e` fix: [P18.S7] revisión de cierre: grafo fuera de /compact, project.toml de init con efecto, dedup del handoff y chat.get sin reconstruir el grafo
   - `c5fc207` perf: [P18.S1] recortes deterministas del handoff en BALANCED y tabla antes/despues
@@ -204,7 +204,7 @@ El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-ba
   - `8d9fca6` feat: [P18.S2] activa Flintstone por defecto en el harness
   - `96b6719` feat: [P18.S1] benchmark fijo de tokens de contexto
 - **Cifra de tokens antes/después (P18.S1 parte 3, BALANCED, estimación determinista ~4 caracteres/token; tabla completa en `docs/research/tokens-p18-base.md` § «Antes/después»):** rotation_context 16.016 → 11.127 (**−30,5 %**), fallback_quota 6.390 → 4.207 (**−34,2 %**), manual_switch 1.602 → 1.561 (**−2,6 %**), same_provider 6.468 → 1.654 (**−74,4 %**). RAW/SAFE sin cambios (0 %). Frente a RAW, BALANCED queda en −57,6 %, −74,1 %, −26,2 % y −86,0 %. **Meta −40 % por ruta: cumplida solo en `same_provider`.** Las demás rutas quedan cortas porque lo que sobra es diff ya en contexto mínimo o conversaciones sin nada repetible; no se forzó el porcentaje con pérdida.
-- **Pendientes al cierre:** (1) gate completo de la rama (`cargo xtask check`, a cargo del integrador); (2) merge `--no-ff` a `main` y tag `p18-done`; (3) medición L3 del ahorro real de `/compact` (P18.S3), pendiente del OK de Leo; (4) bajos documentados en la revisión de cierre (§ anterior); (5) meta −40 % no alcanzada en rotation/fallback/manual — aceptar las cifras o seguir recortando es decisión del orquestador (quedó anotada en STATUS).
+- **Pendientes en esa sesión:** (1) gate completo de la rama; (2) merge `--no-ff` y tag `p18-done`; (3) medición L3; (4) bajos documentados en la revisión de cierre (§ anterior); (5) aceptar las cifras bajo −40 % en algunas rutas. Los puntos 1–3 y 5 se resolvieron en el cierre posterior; los hallazgos bajos quedan como seguimiento no bloqueante.
 
 ## P18 · Reintento del gate tras el fallo de `RATE_LIMITED`
 
@@ -214,4 +214,16 @@ El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-ba
 - **Verificación dirigida:** `cargo nextest run -p symphony-daemon --test runtime a_run_that_goes_silent_after_a_rate_limit_is_closed_with_that_cause --no-capture` → **1 passed**.
 - **Gate:** `cargo xtask check` con todas las variables `SYMPHONY_*` y `CARGO_BUILD_BUILD_DIR` retiradas, y `NEXTEST_TEST_THREADS=2` → `fmt` ✅, Clippy ✅, **827 tests passed, 4 skipped** ✅. Sin `SYMPHONY_LIVE`.
 - **Flakes observadas al validar:** el primer gate tras el cambio encontró un timeout/`LEAK` en `recovery_center_and_tui_views_over_ipc`; el test pasó aislado (1 passed) y en el gate final con dos workers. El test de rate limit corregido también pasó en el gate final.
-- **Pendiente:** integración `--no-ff` en `main`, tag `p18-done` y push. La referencia remota de la rama de fase sigue 8 commits detrás; no se hizo push en esta sesión.
+- **Estado al final de este reintento:** gate aprobado; la integración y publicación se completaron en el cierre posterior.
+
+## P18.S3 · Medición live L3 con Codex
+
+- **Fecha/agente:** 2026-10-31 · codex.
+- **Prueba:** `SYMPHONY_LIVE=1 cargo nextest run -p symphony-cli --test live_compact --no-capture`, modelo `openai/gpt-6-luna`, failover desactivado; **1 passed** en 121,15 s.
+- **Resultado:** dos runs completados con sesiones Codex distintas; el nuevo prompt retuvo la decisión `violeta-731`, la restricción `no usar red` y `compact-a.txt`. Uso reportado por Codex: 269861 tokens de entrada, 0 de salida, fuente `REPORTED`.
+- **Límite de la medición:** confirma el compact/handoff en sesiones nuevas y el contexto retenido; no mide ahorro comparativo frente a una corrida live idéntica sin compactación. No se hicieron reintentos ni se activó failover.
+
+## P18 · Integración final
+
+- **Gate:** `cargo xtask check` ✅; fmt, Clippy y 828 tests pasaron, 4 omitidos; `NEXTEST_TEST_THREADS=2`, variables `SYMPHONY_*` y `CARGO_BUILD_BUILD_DIR` retiradas.
+- **Integración:** merge `--no-ff` de `phase/p18-contexto` en `main`, tag `p18-done` y push de `main`, rama de fase y tag completados. Sin release `v*`.
