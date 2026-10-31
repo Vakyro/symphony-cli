@@ -166,7 +166,7 @@ impl ClaudeAdapter {
                 spec = spec
                     .args(["--tools", ""])
                     .arg("--append-system-prompt")
-                    .arg(symphony_adapter_common::HARNESS_PROMPT);
+                    .arg(symphony_adapter_common::harness_prompt(req));
             }
         }
         for m in symphony_adapter_common::extra_mcp(req) {
@@ -300,6 +300,11 @@ impl ProviderAdapter for ClaudeAdapter {
 
     fn encode_user_message(&self, text: &str) -> Option<Vec<u8>> {
         Some(user_message(text))
+    }
+
+    /// Claude Code es el único CLI con `/compact` real (ADR-0013 D2, enmienda 2026-10-30).
+    fn slash_compact(&self) -> Option<&'static str> {
+        Some("/compact")
     }
 
     fn parse_stream_line(&self, line: &str) -> Vec<AgentEvent> {

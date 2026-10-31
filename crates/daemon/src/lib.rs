@@ -2,6 +2,7 @@
 
 pub mod attach;
 pub mod batch;
+pub mod brain;
 pub mod bus;
 pub mod chat_merge;
 pub mod checkpoint;
@@ -20,6 +21,7 @@ pub mod merge;
 pub mod migrate;
 pub mod plan;
 pub mod plugins;
+mod project_graph;
 pub mod providers;
 pub mod recorder;
 pub mod resources;

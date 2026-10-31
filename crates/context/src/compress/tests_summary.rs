@@ -32,6 +32,9 @@ static PYTEST: LazyLock<Option<Regex>> =
     LazyLock::new(|| re(r"^=+ (.*\b(?:passed|failed|error|errors)\b.*) in [\d.]+s"));
 static JEST: LazyLock<Option<Regex>> =
     LazyLock::new(|| re(r"^\s*Tests:?\s+(.*\b(?:passed|failed)\b.*)$"));
+/// `Summary [ 13.4s] 52 tests run: 52 passed, 2 skipped` de cargo-nextest.
+static NEXTEST: LazyLock<Option<Regex>> =
+    LazyLock::new(|| re(r"^\s*Summary \[[^\]]*\] [\d/]+ tests? run: (.*)$"));
 static NUM_WORD: LazyLock<Option<Regex>> =
     LazyLock::new(|| re(r"(\d+) (passed|failed|skipped|todo|errors?|xfailed|xpassed)"));
 
@@ -71,9 +74,24 @@ pub fn summarize(text: &str) -> Option<String> {
     let mut found = false;
     let mut failures: Vec<&str> = Vec::new();
     let mut detail: Vec<&str> = Vec::new();
+    // nextest repite el `test result:` de cada binario fallido: su `Summary` manda.
+    let mut nextest: Option<Counts> = None;
+    let mut after_panic = false;
 
     for line in text.lines() {
-        if let Some(c) = CARGO.as_ref().and_then(|r| r.captures(line)) {
+        if after_panic
+            && detail.len() < MAX_DETAIL
+            && !line.trim().is_empty()
+            && !is_important(line)
+        {
+            // El mensaje del pánico va en la línea siguiente a `panicked at`.
+            detail.push(line.trim());
+        }
+        after_panic = line.contains("panicked at");
+        if let Some(c) = NEXTEST.as_ref().and_then(|r| r.captures(line)) {
+            let n = nextest.get_or_insert_with(Counts::default);
+            found |= add_words(n, &c[1]);
+        } else if let Some(c) = CARGO.as_ref().and_then(|r| r.captures(line)) {
             counts.passed += c[1].parse().unwrap_or(0);
             counts.failed += c[2].parse().unwrap_or(0);
             counts.skipped += c[3].parse().unwrap_or(0);
@@ -84,12 +102,16 @@ pub fn summarize(text: &str) -> Option<String> {
             found |= add_words(&mut counts, &c[1]);
         } else if is_failure_name(line) {
             failures.push(line.trim());
-        } else if is_important(line) && detail.len() < MAX_DETAIL {
+        } else if is_important(line) && detail.len() < MAX_DETAIL && !detail.contains(&line.trim())
+        {
             detail.push(line.trim());
         }
     }
     if !found {
         return None;
+    }
+    if let Some(n) = nextest {
+        counts = n;
     }
 
     let total = counts.passed + counts.failed + counts.skipped;
@@ -105,7 +127,13 @@ pub fn summarize(text: &str) -> Option<String> {
     if counts.skipped > 0 {
         let _ = write!(out, ", {} omitidas", counts.skipped);
     }
-    failures.dedup();
+    let mut unique: Vec<&str> = Vec::new();
+    for f in failures {
+        if !unique.contains(&f) {
+            unique.push(f);
+        }
+    }
+    let failures = unique;
     for f in failures.iter().take(MAX_FAILURES) {
         let _ = write!(out, "\n  ✗ {f}");
     }

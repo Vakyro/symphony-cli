@@ -1,0 +1,34 @@
+<<<usuario>>>
+Arreglar el test de handoff que falla (handoff_combines_the_checkpoint_with_live_git) sin relajar aserciones y medir el ahorro del handoff en BALANCED.
+<<<asistente>>>
+→ Bash: cargo clippy -p symphony-context -- -D warnings
+```
+    Checking symphony-core v0.9.0 (C:\proj\symphony-cli\crates\core)
+    Checking symphony-object-store v0.9.0 (C:\proj\symphony-cli\crates\object-store)
+    Checking symphony-context v0.9.0 (C:\proj\symphony-cli\crates\context)
+warning: this `if` statement can be collapsed
+   --> crates\context\src\handoff.rs:203:9
+    |
+203 | /         if total.is_some_and(|t| !kept.is_empty() && used + len > t) {
+204 | |             break;
+205 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+
+error: could not compile `symphony-context` (lib) due to 1 previous error
+```
+
+Resumen de dónde quedé, por si me corta la cuota:
+
+- [x] `render_conversation` conserva la primera línea del mensaje antes de la referencia al plan.
+- [x] `handoff_combines_the_checkpoint_with_live_git` pasa con la aserción original intacta.
+- [ ] clippy de `symphony-context` con `-D warnings` (el `if` colapsable de handoff.rs:203).
+- [ ] benchmark P18 con fixtures realistas y tabla antes/después en docs/research/tokens-p18-base.md.
+- [ ] bitácora en docs/phases/P18-contexto.md y STATUS.
+
+Siguiente comando: `cargo clippy -p symphony-context -- -D warnings`. No toques los tests de runtime: el fallo de `cpu_keeps_beating_after_a_busy_child_ends` es del binario daemon y no tiene que ver con el handoff.
+<<<usuario>>>
+cambio a otro modelo; continúa desde aquí

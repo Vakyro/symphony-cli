@@ -223,6 +223,18 @@ fn skill_prefix(provider: &str) -> Option<char> {
 /// es lo primero del mensaje (probado: dentro del prompt de handoff no se aplica), así que si el
 /// mensaje empieza por el prefijo de skill del proveedor destino, esa invocación se sube al
 /// inicio y el resto del handoff pasa como sus argumentos.
+/// Prompt del run con el contexto estructural del grafo (P18.S4), solo en sesiones nuevas.
+/// Una sesión reanudada ya lo recibió en su primer prompt; pegarlo otra vez gasta tokens
+/// en cada mensaje y, tras `/compact`, lo convierte en las instrucciones de compactación
+/// (el resumen se centraría en el grafo y podría soltar las decisiones). P18.S7.
+fn with_graph_context(prompt: &str, resumed: bool, graph: impl FnOnce() -> String) -> String {
+    if resumed {
+        prompt.to_string()
+    } else {
+        format!("{prompt}{}", graph())
+    }
+}
+
 // ponytail: los argumentos de la skill incluyen todo el handoff; suficiente para skills de estilo
 // o de tarea. `/skill` escrito para el otro proveedor no se traduce.
 fn with_user_message(prompt: &str, message: &str, provider: &str) -> String {
@@ -417,6 +429,10 @@ impl Runtime {
     }
 
     async fn launch_inner(&self, l: Launch) -> Result<(), String> {
+        self.refresh_graph(&l.worktree, Some(l.project_id.to_string()));
+        let prompt = with_graph_context(&l.prompt, l.resume_session.is_some(), || {
+            self.graph_context(&l.worktree)
+        });
         let main_workspace = self.watch_main_workspace(l.project_id).await;
         let mut env = vec![
             ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
@@ -444,13 +460,32 @@ impl Runtime {
                 });
         if harness == symphony_core::HarnessMode::Symphony {
             env.push((symphony_adapter_common::ENV_HARNESS.into(), "1".into()));
+            // `[harness] style` del `project.toml` (lo escribe `symphony init`) pisa el global.
+            let style = self
+                .project_config(l.project_id)
+                .and_then(|p| p.harness)
+                .map(|h| h.style)
+                .or_else(|| {
+                    symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(
+                        &self.home,
+                    ))
+                    .ok()
+                    .map(|c| c.harness.style)
+                })
+                .unwrap_or_default();
+            if style == symphony_core::HarnessStyle::Normal {
+                env.push((
+                    symphony_adapter_common::ENV_HARNESS_STYLE.into(),
+                    "normal".into(),
+                ));
+            }
         }
         env.extend(crate::gc::cargo_env(&self.home, &l.worktree));
         env.extend(self.shared_env(&l).await);
         let spawn_req = SpawnRequest {
             worktree: l.worktree.clone(),
             model: l.cli_model.clone(),
-            prompt: l.prompt.clone(),
+            prompt: prompt.clone(),
             session_id: None,
             hook: self.hook.clone(),
             env,
@@ -506,7 +541,7 @@ impl Runtime {
                 }
                 other => other.map_err(|e| e.to_string()),
             };
-            let framed = l.adapter.frame_prompt(&l.prompt, &l.worktree);
+            let framed = l.adapter.frame_prompt(&prompt, &l.worktree);
             exited_early(proc.write_stdin(&l.adapter.encode_prompt(&framed)).await)?;
             if l.adapter.close_stdin_after_prompt() {
                 exited_early(proc.close_stdin().await)?;
@@ -928,6 +963,8 @@ impl Runtime {
             if let Err(e) = result {
                 tracing::error!(agent = %agent, error = %e, "no se pudo cerrar el run");
             }
+            // El run ya quedó persistido: el segundo cerebro refleja el cierre (P18.S6).
+            self.refresh_brain();
             return;
         }
         // Una señal que Symphony no mandó (abort, OOM killer) es un crash: `FAILED`.
@@ -1059,6 +1096,8 @@ impl Runtime {
         if let Err(e) = result {
             tracing::error!(agent = %agent, error = %e, "no se pudo cerrar el run");
         }
+        // El run (y su motivo de fallo) ya quedó persistido: cerebro al día (P18.S6).
+        self.refresh_brain();
     }
 
     /// El mejor reemplazo según la política del agente (P10.S5, IDEA §5.7): el router elige entre
@@ -1498,6 +1537,8 @@ impl Runtime {
                 repo::get_worktree(c, wt)
             })?
             .path;
+        // Contador de tareas por sesión (P18.S3): base = tareas hechas del plan ahora.
+        self.note_plan_done(run, agent.task_id, Path::new(&worktree));
         let launch = Launch {
             adapter,
             project_id: agent.project_id,
@@ -2012,6 +2053,7 @@ impl Runtime {
             .path;
 
         let run = RunId::new();
+        self.note_plan_done(run, agent.task_id, Path::new(&worktree));
         let (task_id, state) = (agent.task_id, agent.state);
         let (provider, model_id) = (model.provider_id.clone(), model.model_id.clone());
         self.writer
@@ -2048,6 +2090,9 @@ impl Runtime {
         };
         // Si no arranca, `launch` ya dejó al agente `FAILED` con razón y recovery item.
         self.launch(launch).await.map_err(AgentOpError)?;
+        // Retomar la sesión con un mensaje es una sesión larga de facto: la decisión de
+        // compactación pendiente queda resuelta por el usuario (P18.S3).
+        self.set_awaiting_compact(agent_id, false);
         Ok(run)
     }
 
@@ -2360,6 +2405,7 @@ impl Runtime {
                 "context_mode": agent.context_mode.as_str(),
                 "priority": agent.priority,
                 "is_live": is_live,
+                "awaits_compact": self.awaits_compact(agent_id),
             },
             "task": {
                 "id": task.id.to_string(),
@@ -2416,7 +2462,14 @@ impl Runtime {
 
 #[cfg(test)]
 mod skill_tests {
-    use super::with_user_message;
+    use super::{with_graph_context, with_user_message};
+
+    #[test]
+    fn el_grafo_no_se_pega_a_sesiones_reanudadas_ni_al_compact() {
+        let graph = || "\n\nContexto estructural del proyecto".to_string();
+        assert_eq!(with_graph_context("/compact", true, graph), "/compact");
+        assert!(with_graph_context("objetivo", false, graph).ends_with("estructural del proyecto"));
+    }
 
     #[test]
     fn a_skill_invocation_moves_to_the_front_for_its_own_provider() {

@@ -1,0 +1,756 @@
+<<<usuario>>>
+Implementa la compactación automática al tope de tareas por sesión (P18.S3) y verifica con los tests del daemon.
+<<<asistente>>>
+Iteración 1: compilo y corro los tests de runtime.
+
+→ Bash: cargo nextest run -p symphony-daemon --test runtime handoff_
+```
+   Compiling cfg-if v1.0.5
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+   Compiling getrandom v0.4.3
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling find-msvc-tools v0.1.13
+   Compiling shlex v2.0.1
+   Compiling memchr v2.8.3
+   Compiling windows-link v0.2.1
+   Compiling regex-syntax v0.8.11
+   Compiling thiserror v2.0.21
+   Compiling serde_core v1.0.229
+   Compiling windows-targets v0.53.5
+   Compiling jobserver v0.1.35
+   Compiling windows-sys v0.60.2
+   Compiling aho-corasick v1.1.5
+   Compiling cc v1.4.7
+   Compiling syn v3.0.6
+   Compiling syn v2.0.119
+   Compiling pin-project-lite v0.2.17
+   Compiling equivalent v1.0.2
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.17.1
+   Compiling cpufeatures v0.3.1
+   Compiling zmij v1.0.23
+   Compiling windows-sys v0.61.2
+   Compiling regex-automata v0.4.18
+   Compiling rand_core v0.10.1
+   Compiling socket2 v0.6.5
+   Compiling bytes v1.12.1
+   Compiling serde v1.0.229
+   Compiling itoa v1.0.18
+   Compiling chacha20 v0.10.2
+   Compiling windows-result v0.4.1
+   Compiling windows-strings v0.5.1
+   Compiling mio v1.2.3
+   Compiling futures-core v0.3.34
+   Compiling rustversion v1.0.23
+   Compiling winnow v1.0.4
+   Compiling rand v0.10.3
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling indexmap v2.14.2
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling ulid v3.0.0
+   Compiling winapi v0.3.9
+   Compiling libc v0.2.189
+   Compiling slab v0.4.12
+   Compiling serde_json v1.0.151
+   Compiling futures-task v0.3.34
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling encoding_rs v0.8.42
+   Compiling windows-threading v0.2.1
+   Compiling ntapi v0.4.3
+   Compiling futures-sink v0.3.34
+   Compiling tree-sitter-language v0.1.8
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling pkg-config v0.3.34
+   Compiling simdutf8 v0.1.5
+   Compiling thiserror-impl v2.0.21
+   Compiling tokio-macros v2.7.2
+   Compiling serde_derive v1.0.229
+   Compiling tokio v1.54.1
+   Compiling regex v1.13.1
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling futures-macro v0.3.34
+   Compiling scopeguard v1.2.0
+   Compiling core_detect v1.0.0
+   Compiling multiversion_no_op v1.0.0
+   Compiling windows-core v0.62.2
+   Compiling futures-util v0.3.34
+   Compiling windows-numerics v0.3.1
+   Compiling windows-future v0.3.2
+   Compiling windows-collections v0.3.2
+   Compiling async-trait v0.1.92
+   Compiling mutants v0.0.4
+   Compiling getrandom v0.3.4
+   Compiling windows v0.62.2
+   Compiling once_cell v1.21.4
+   Compiling crossbeam-utils v0.8.23
+   Compiling vcpkg v0.2.15
+   Compiling bitflags v2.13.2
+   Compiling libsqlite3-sys v0.38.2
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling log v0.4.34
+   Compiling symphony-core v0.9.0 (C:\proj\symphony-cli\crates\core)
+   Compiling winapi-util v0.1.11
+   Compiling crossbeam-epoch v0.9.21
+   Compiling fastrand v2.5.0
+   Compiling tokio-util v0.7.19
+   Compiling tokio-stream v0.1.19
+   Compiling processkit v3.3.4
+   Compiling tempfile v3.27.0
+   Compiling same-file v1.0.6
+   Compiling tracing-core v0.1.36
+   Compiling tracing-attributes v0.1.31
+   Compiling blake3 v1.8.7
+   Compiling hashlink v0.12.2
+   Compiling crossbeam-deque v0.8.8
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling fallible-iterator v0.3.0
+   Compiling smallvec v1.16.1
+   Compiling zstd-safe v8.2.0
+   Compiling rusqlite v0.40.2
+   Compiling tree-sitter v0.27.0
+   Compiling walkdir v2.5.0
+   Compiling tree-sitter-python v0.25.0
+   Compiling tree-sitter-javascript v0.25.0
+   Compiling tree-sitter-typescript v0.23.2
+   Compiling tree-sitter-rust v0.24.2
+   Compiling tracing v0.1.44
+   Compiling bstr v1.13.1
+   Compiling lazy_static v1.5.0
+   Compiling rusqlite_migration v2.6.0
+   Compiling constant_time_eq v0.4.2
+   Compiling zerocopy v0.8.58
+   Compiling arrayvec v0.7.8
+   Compiling globset v0.4.20
+   Compiling sharded-slab v0.1.7
+   Compiling rand_core v0.9.5
+   Compiling matchers v0.2.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling thread_local v1.1.10
+   Compiling streaming-iterator v0.1.9
+   Compiling widestring v1.2.1
+   Compiling num-conv v0.2.2
+   Compiling powerfmt v0.2.0
+   Compiling time-core v0.1.9
+   Compiling recvmsg v1.0.0
+   Compiling autocfg v1.5.1
+   Compiling doctest-file v1.1.1
+   Compiling deranged v0.5.8
+   Compiling num-traits v0.2.19
+   Compiling tracing-subscriber v0.3.23
+   Compiling interprocess v2.4.4
+   Compiling zstd v0.14.3
+   Compiling ignore v0.4.33
+   Compiling time v0.3.55
+   Compiling crossbeam-channel v0.5.17
+   Compiling notify-types v2.1.0
+   Compiling miette-derive v7.6.0
+   Compiling unicode-width v0.1.14
+   Compiling symlink v0.1.0
+   Compiling notify v8.2.0
+   Compiling miette v7.6.0
+   Compiling symphony-protocol v0.9.0 (C:\proj\symphony-cli\crates\protocol)
+   Compiling symphony-context v0.9.0 (C:\proj\symphony-cli\crates\context)
+   Compiling tracing-appender v0.2.5
+   Compiling ppv-lite86 v0.2.21
+   Compiling symphony-store v0.9.0 (C:\proj\symphony-cli\crates\store)
+   Compiling symphony-object-store v0.9.0 (C:\proj\symphony-cli\crates\object-store)
+   Compiling symphony-git v0.9.0 (C:\proj\symphony-cli\crates\git)
+   Compiling symphony-router v0.9.0 (C:\proj\symphony-cli\crates\router)
+   Compiling symphony-scheduler v0.9.0 (C:\proj\symphony-cli\crates\scheduler)
+   Compiling bit-vec v0.8.0
+   Compiling wait-timeout v0.2.1
+   Compiling quick-error v1.2.3
+   Compiling fnv v1.0.7
+   Compiling bit-set v0.8.0
+   Compiling rusty-fork v0.3.1
+   Compiling rand_chacha v0.9.0
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.5
+   Compiling unarray v0.1.4
+   Compiling proptest v1.11.0
+   Compiling sysinfo v0.39.6
+   Compiling symphony-process v0.9.0 (C:\proj\symphony-cli\crates\process)
+   Compiling symphony-adapter-common v0.9.0 (C:\proj\symphony-cli\crates\adapters\common)
+   Compiling symphony-plugins v0.9.0 (C:\proj\symphony-cli\crates\plugins)
+   Compiling symphony-adapter-codex v0.9.0 (C:\proj\symphony-cli\crates\adapters\codex)
+   Compiling symphony-adapter-kimi v0.9.0 (C:\proj\symphony-cli\crates\adapters\kimi)
+   Compiling symphony-adapter-opencode v0.9.0 (C:\proj\symphony-cli\crates\adapters\opencode)
+   Compiling symphony-adapter-claude v0.9.0 (C:\proj\symphony-cli\crates\adapters\claude)
+   Compiling symphony-adapter-copilot v0.9.0 (C:\proj\symphony-cli\crates\adapters\copilot)
+   Compiling symphony-adapter-antigravity v0.9.0 (C:\proj\symphony-cli\crates\adapters\antigravity)
+   Compiling symphony-testkit v0.9.0 (C:\proj\symphony-cli\crates\testkit)
+   Compiling symphony-daemon v0.9.0 (C:\proj\symphony-cli\crates\daemon)
+warning: linker stdout: Creando biblioteca C:\proj\symphony-cli\target\debug\deps\symphonyd.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `symphony-daemon` (bin "symphonyd") generated 1 warning
+warning: linker stdout: Creando biblioteca C:\proj\symphony-cli\target\debug\deps\runtime-b9213fcb5d65e958.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `symphony-daemon` (test "runtime") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7m 17s
+────────────
+ Nextest run ID 02f31b36-f068-42ae-9bc5-8d4996f00a37 with nextest profile: default
+    Starting 14 tests across 1 binary (97 tests skipped)
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_anthropic
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_google
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_github
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_anthropic
+        SLOW [>120.000s] (─────) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_google
+        SLOW [>120.000s] (─────) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_github
+        PASS [ 121.228s] ( 1/14) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        PASS [ 121.297s] ( 2/14) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        PASS [ 123.562s] ( 3/14) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        PASS [ 133.966s] ( 4/14) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        PASS [   7.719s] ( 5/14) symphony-daemon::runtime handoff_skips_missing_checkpoint_blobs_and_records_recovery_once
+        PASS [ 147.185s] ( 6/14) symphony-daemon::runtime handoff_matrix_from_anthropic
+        PASS [ 147.453s] ( 7/14) symphony-daemon::runtime handoff_matrix_from_github
+        PASS [  23.916s] ( 8/14) symphony-daemon::runtime handoff_of_a_ten_turn_conversation_keeps_every_turn_in_raw
+        PASS [ 149.520s] ( 9/14) symphony-daemon::runtime handoff_matrix_from_google
+        PASS [   7.944s] (10/14) symphony-daemon::runtime handoff_uses_live_worktree_and_task_when_every_checkpoint_has_invalid_json
+        PASS [   5.071s] (11/14) symphony-daemon::runtime project_facts_ipc_and_handoff_integration
+        PASS [  34.542s] (12/14) symphony-daemon::runtime handoff_matrix_from_openai
+        PASS [  35.227s] (13/14) symphony-daemon::runtime handoff_matrix_from_moonshot
+        PASS [ 156.789s] (14/14) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+────────────
+     Summary [ 156.795s] 14 tests run: 14 passed (8 slow), 97 skipped
+```
+<<<usuario>>>
+sigue con la iteración 2
+<<<asistente>>>
+Iteración 2: compilo y corro los tests de runtime.
+
+→ Bash: cargo nextest run -p symphony-daemon --test runtime handoff_
+```
+   Compiling cfg-if v1.0.5
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+   Compiling getrandom v0.4.3
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling find-msvc-tools v0.1.13
+   Compiling shlex v2.0.1
+   Compiling memchr v2.8.3
+   Compiling windows-link v0.2.1
+   Compiling regex-syntax v0.8.11
+   Compiling thiserror v2.0.21
+   Compiling serde_core v1.0.229
+   Compiling windows-targets v0.53.5
+   Compiling jobserver v0.1.35
+   Compiling windows-sys v0.60.2
+   Compiling aho-corasick v1.1.5
+   Compiling cc v1.4.7
+   Compiling syn v3.0.6
+   Compiling syn v2.0.119
+   Compiling pin-project-lite v0.2.17
+   Compiling equivalent v1.0.2
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.17.1
+   Compiling cpufeatures v0.3.1
+   Compiling zmij v1.0.23
+   Compiling windows-sys v0.61.2
+   Compiling regex-automata v0.4.18
+   Compiling rand_core v0.10.1
+   Compiling socket2 v0.6.5
+   Compiling bytes v1.12.1
+   Compiling serde v1.0.229
+   Compiling itoa v1.0.18
+   Compiling chacha20 v0.10.2
+   Compiling windows-result v0.4.1
+   Compiling windows-strings v0.5.1
+   Compiling mio v1.2.3
+   Compiling futures-core v0.3.34
+   Compiling rustversion v1.0.23
+   Compiling winnow v1.0.4
+   Compiling rand v0.10.3
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling indexmap v2.14.2
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling ulid v3.0.0
+   Compiling winapi v0.3.9
+   Compiling libc v0.2.189
+   Compiling slab v0.4.12
+   Compiling serde_json v1.0.151
+   Compiling futures-task v0.3.34
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling encoding_rs v0.8.42
+   Compiling windows-threading v0.2.1
+   Compiling ntapi v0.4.3
+   Compiling futures-sink v0.3.34
+   Compiling tree-sitter-language v0.1.8
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling pkg-config v0.3.34
+   Compiling simdutf8 v0.1.5
+   Compiling thiserror-impl v2.0.21
+   Compiling tokio-macros v2.7.2
+   Compiling serde_derive v1.0.229
+   Compiling tokio v1.54.1
+   Compiling regex v1.13.1
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling futures-macro v0.3.34
+   Compiling scopeguard v1.2.0
+   Compiling core_detect v1.0.0
+   Compiling multiversion_no_op v1.0.0
+   Compiling windows-core v0.62.2
+   Compiling futures-util v0.3.34
+   Compiling windows-numerics v0.3.1
+   Compiling windows-future v0.3.2
+   Compiling windows-collections v0.3.2
+   Compiling async-trait v0.1.92
+   Compiling mutants v0.0.4
+   Compiling getrandom v0.3.4
+   Compiling windows v0.62.2
+   Compiling once_cell v1.21.4
+   Compiling crossbeam-utils v0.8.23
+   Compiling vcpkg v0.2.15
+   Compiling bitflags v2.13.2
+   Compiling libsqlite3-sys v0.38.2
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling log v0.4.34
+   Compiling symphony-core v0.9.0 (C:\proj\symphony-cli\crates\core)
+   Compiling winapi-util v0.1.11
+   Compiling crossbeam-epoch v0.9.21
+   Compiling fastrand v2.5.0
+   Compiling tokio-util v0.7.19
+   Compiling tokio-stream v0.1.19
+   Compiling processkit v3.3.4
+   Compiling tempfile v3.27.0
+   Compiling same-file v1.0.6
+   Compiling tracing-core v0.1.36
+   Compiling tracing-attributes v0.1.31
+   Compiling blake3 v1.8.7
+   Compiling hashlink v0.12.2
+   Compiling crossbeam-deque v0.8.8
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling fallible-iterator v0.3.0
+   Compiling smallvec v1.16.1
+   Compiling zstd-safe v8.2.0
+   Compiling rusqlite v0.40.2
+   Compiling tree-sitter v0.27.0
+   Compiling walkdir v2.5.0
+   Compiling tree-sitter-python v0.25.0
+   Compiling tree-sitter-javascript v0.25.0
+   Compiling tree-sitter-typescript v0.23.2
+   Compiling tree-sitter-rust v0.24.2
+   Compiling tracing v0.1.44
+   Compiling bstr v1.13.1
+   Compiling lazy_static v1.5.0
+   Compiling rusqlite_migration v2.6.0
+   Compiling constant_time_eq v0.4.2
+   Compiling zerocopy v0.8.58
+   Compiling arrayvec v0.7.8
+   Compiling globset v0.4.20
+   Compiling sharded-slab v0.1.7
+   Compiling rand_core v0.9.5
+   Compiling matchers v0.2.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling thread_local v1.1.10
+   Compiling streaming-iterator v0.1.9
+   Compiling widestring v1.2.1
+   Compiling num-conv v0.2.2
+   Compiling powerfmt v0.2.0
+   Compiling time-core v0.1.9
+   Compiling recvmsg v1.0.0
+   Compiling autocfg v1.5.1
+   Compiling doctest-file v1.1.1
+   Compiling deranged v0.5.8
+   Compiling num-traits v0.2.19
+   Compiling tracing-subscriber v0.3.23
+   Compiling interprocess v2.4.4
+   Compiling zstd v0.14.3
+   Compiling ignore v0.4.33
+   Compiling time v0.3.55
+   Compiling crossbeam-channel v0.5.17
+   Compiling notify-types v2.1.0
+   Compiling miette-derive v7.6.0
+   Compiling unicode-width v0.1.14
+   Compiling symlink v0.1.0
+   Compiling notify v8.2.0
+   Compiling miette v7.6.0
+   Compiling symphony-protocol v0.9.0 (C:\proj\symphony-cli\crates\protocol)
+   Compiling symphony-context v0.9.0 (C:\proj\symphony-cli\crates\context)
+   Compiling tracing-appender v0.2.5
+   Compiling ppv-lite86 v0.2.21
+   Compiling symphony-store v0.9.0 (C:\proj\symphony-cli\crates\store)
+   Compiling symphony-object-store v0.9.0 (C:\proj\symphony-cli\crates\object-store)
+   Compiling symphony-git v0.9.0 (C:\proj\symphony-cli\crates\git)
+   Compiling symphony-router v0.9.0 (C:\proj\symphony-cli\crates\router)
+   Compiling symphony-scheduler v0.9.0 (C:\proj\symphony-cli\crates\scheduler)
+   Compiling bit-vec v0.8.0
+   Compiling wait-timeout v0.2.1
+   Compiling quick-error v1.2.3
+   Compiling fnv v1.0.7
+   Compiling bit-set v0.8.0
+   Compiling rusty-fork v0.3.1
+   Compiling rand_chacha v0.9.0
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.5
+   Compiling unarray v0.1.4
+   Compiling proptest v1.11.0
+   Compiling sysinfo v0.39.6
+   Compiling symphony-process v0.9.0 (C:\proj\symphony-cli\crates\process)
+   Compiling symphony-adapter-common v0.9.0 (C:\proj\symphony-cli\crates\adapters\common)
+   Compiling symphony-plugins v0.9.0 (C:\proj\symphony-cli\crates\plugins)
+   Compiling symphony-adapter-codex v0.9.0 (C:\proj\symphony-cli\crates\adapters\codex)
+   Compiling symphony-adapter-kimi v0.9.0 (C:\proj\symphony-cli\crates\adapters\kimi)
+   Compiling symphony-adapter-opencode v0.9.0 (C:\proj\symphony-cli\crates\adapters\opencode)
+   Compiling symphony-adapter-claude v0.9.0 (C:\proj\symphony-cli\crates\adapters\claude)
+   Compiling symphony-adapter-copilot v0.9.0 (C:\proj\symphony-cli\crates\adapters\copilot)
+   Compiling symphony-adapter-antigravity v0.9.0 (C:\proj\symphony-cli\crates\adapters\antigravity)
+   Compiling symphony-testkit v0.9.0 (C:\proj\symphony-cli\crates\testkit)
+   Compiling symphony-daemon v0.9.0 (C:\proj\symphony-cli\crates\daemon)
+warning: linker stdout: Creando biblioteca C:\proj\symphony-cli\target\debug\deps\symphonyd.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `symphony-daemon` (bin "symphonyd") generated 1 warning
+warning: linker stdout: Creando biblioteca C:\proj\symphony-cli\target\debug\deps\runtime-b9213fcb5d65e958.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `symphony-daemon` (test "runtime") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7m 17s
+────────────
+ Nextest run ID 02f31b36-f068-42ae-9bc5-8d4996f00a37 with nextest profile: default
+    Starting 14 tests across 1 binary (97 tests skipped)
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_anthropic
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_google
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_github
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_anthropic
+        SLOW [>120.000s] (─────) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_google
+        SLOW [>120.000s] (─────) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_github
+        PASS [ 121.228s] ( 1/14) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        PASS [ 121.297s] ( 2/14) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        PASS [ 123.562s] ( 3/14) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        PASS [ 133.966s] ( 4/14) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        PASS [   7.719s] ( 5/14) symphony-daemon::runtime handoff_skips_missing_checkpoint_blobs_and_records_recovery_once
+        PASS [ 147.185s] ( 6/14) symphony-daemon::runtime handoff_matrix_from_anthropic
+        PASS [ 147.453s] ( 7/14) symphony-daemon::runtime handoff_matrix_from_github
+        PASS [  23.916s] ( 8/14) symphony-daemon::runtime handoff_of_a_ten_turn_conversation_keeps_every_turn_in_raw
+        PASS [ 149.520s] ( 9/14) symphony-daemon::runtime handoff_matrix_from_google
+        PASS [   7.944s] (10/14) symphony-daemon::runtime handoff_uses_live_worktree_and_task_when_every_checkpoint_has_invalid_json
+        PASS [   5.071s] (11/14) symphony-daemon::runtime project_facts_ipc_and_handoff_integration
+        PASS [  34.542s] (12/14) symphony-daemon::runtime handoff_matrix_from_openai
+        PASS [  35.227s] (13/14) symphony-daemon::runtime handoff_matrix_from_moonshot
+        PASS [ 156.789s] (14/14) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+────────────
+     Summary [ 156.795s] 14 tests run: 14 passed (8 slow), 97 skipped
+```
+<<<usuario>>>
+sigue con la iteración 3
+<<<asistente>>>
+Iteración 3: compilo y corro los tests de runtime.
+
+→ Bash: cargo nextest run -p symphony-daemon --test runtime handoff_
+```
+   Compiling cfg-if v1.0.5
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+   Compiling getrandom v0.4.3
+   Compiling windows_x86_64_msvc v0.53.1
+   Compiling find-msvc-tools v0.1.13
+   Compiling shlex v2.0.1
+   Compiling memchr v2.8.3
+   Compiling windows-link v0.2.1
+   Compiling regex-syntax v0.8.11
+   Compiling thiserror v2.0.21
+   Compiling serde_core v1.0.229
+   Compiling windows-targets v0.53.5
+   Compiling jobserver v0.1.35
+   Compiling windows-sys v0.60.2
+   Compiling aho-corasick v1.1.5
+   Compiling cc v1.4.7
+   Compiling syn v3.0.6
+   Compiling syn v2.0.119
+   Compiling pin-project-lite v0.2.17
+   Compiling equivalent v1.0.2
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.17.1
+   Compiling cpufeatures v0.3.1
+   Compiling zmij v1.0.23
+   Compiling windows-sys v0.61.2
+   Compiling regex-automata v0.4.18
+   Compiling rand_core v0.10.1
+   Compiling socket2 v0.6.5
+   Compiling bytes v1.12.1
+   Compiling serde v1.0.229
+   Compiling itoa v1.0.18
+   Compiling chacha20 v0.10.2
+   Compiling windows-result v0.4.1
+   Compiling windows-strings v0.5.1
+   Compiling mio v1.2.3
+   Compiling futures-core v0.3.34
+   Compiling rustversion v1.0.23
+   Compiling winnow v1.0.4
+   Compiling rand v0.10.3
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling indexmap v2.14.2
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling ulid v3.0.0
+   Compiling winapi v0.3.9
+   Compiling libc v0.2.189
+   Compiling slab v0.4.12
+   Compiling serde_json v1.0.151
+   Compiling futures-task v0.3.34
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling encoding_rs v0.8.42
+   Compiling windows-threading v0.2.1
+   Compiling ntapi v0.4.3
+   Compiling futures-sink v0.3.34
+   Compiling tree-sitter-language v0.1.8
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling pkg-config v0.3.34
+   Compiling simdutf8 v0.1.5
+   Compiling thiserror-impl v2.0.21
+   Compiling tokio-macros v2.7.2
+   Compiling serde_derive v1.0.229
+   Compiling tokio v1.54.1
+   Compiling regex v1.13.1
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling futures-macro v0.3.34
+   Compiling scopeguard v1.2.0
+   Compiling core_detect v1.0.0
+   Compiling multiversion_no_op v1.0.0
+   Compiling windows-core v0.62.2
+   Compiling futures-util v0.3.34
+   Compiling windows-numerics v0.3.1
+   Compiling windows-future v0.3.2
+   Compiling windows-collections v0.3.2
+   Compiling async-trait v0.1.92
+   Compiling mutants v0.0.4
+   Compiling getrandom v0.3.4
+   Compiling windows v0.62.2
+   Compiling once_cell v1.21.4
+   Compiling crossbeam-utils v0.8.23
+   Compiling vcpkg v0.2.15
+   Compiling bitflags v2.13.2
+   Compiling libsqlite3-sys v0.38.2
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling log v0.4.34
+   Compiling symphony-core v0.9.0 (C:\proj\symphony-cli\crates\core)
+   Compiling winapi-util v0.1.11
+   Compiling crossbeam-epoch v0.9.21
+   Compiling fastrand v2.5.0
+   Compiling tokio-util v0.7.19
+   Compiling tokio-stream v0.1.19
+   Compiling processkit v3.3.4
+   Compiling tempfile v3.27.0
+   Compiling same-file v1.0.6
+   Compiling tracing-core v0.1.36
+   Compiling tracing-attributes v0.1.31
+   Compiling blake3 v1.8.7
+   Compiling hashlink v0.12.2
+   Compiling crossbeam-deque v0.8.8
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling fallible-iterator v0.3.0
+   Compiling smallvec v1.16.1
+   Compiling zstd-safe v8.2.0
+   Compiling rusqlite v0.40.2
+   Compiling tree-sitter v0.27.0
+   Compiling walkdir v2.5.0
+   Compiling tree-sitter-python v0.25.0
+   Compiling tree-sitter-javascript v0.25.0
+   Compiling tree-sitter-typescript v0.23.2
+   Compiling tree-sitter-rust v0.24.2
+   Compiling tracing v0.1.44
+   Compiling bstr v1.13.1
+   Compiling lazy_static v1.5.0
+   Compiling rusqlite_migration v2.6.0
+   Compiling constant_time_eq v0.4.2
+   Compiling zerocopy v0.8.58
+   Compiling arrayvec v0.7.8
+   Compiling globset v0.4.20
+   Compiling sharded-slab v0.1.7
+   Compiling rand_core v0.9.5
+   Compiling matchers v0.2.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling thread_local v1.1.10
+   Compiling streaming-iterator v0.1.9
+   Compiling widestring v1.2.1
+   Compiling num-conv v0.2.2
+   Compiling powerfmt v0.2.0
+   Compiling time-core v0.1.9
+   Compiling recvmsg v1.0.0
+   Compiling autocfg v1.5.1
+   Compiling doctest-file v1.1.1
+   Compiling deranged v0.5.8
+   Compiling num-traits v0.2.19
+   Compiling tracing-subscriber v0.3.23
+   Compiling interprocess v2.4.4
+   Compiling zstd v0.14.3
+   Compiling ignore v0.4.33
+   Compiling time v0.3.55
+   Compiling crossbeam-channel v0.5.17
+   Compiling notify-types v2.1.0
+   Compiling miette-derive v7.6.0
+   Compiling unicode-width v0.1.14
+   Compiling symlink v0.1.0
+   Compiling notify v8.2.0
+   Compiling miette v7.6.0
+   Compiling symphony-protocol v0.9.0 (C:\proj\symphony-cli\crates\protocol)
+   Compiling symphony-context v0.9.0 (C:\proj\symphony-cli\crates\context)
+   Compiling tracing-appender v0.2.5
+   Compiling ppv-lite86 v0.2.21
+   Compiling symphony-store v0.9.0 (C:\proj\symphony-cli\crates\store)
+   Compiling symphony-object-store v0.9.0 (C:\proj\symphony-cli\crates\object-store)
+   Compiling symphony-git v0.9.0 (C:\proj\symphony-cli\crates\git)
+   Compiling symphony-router v0.9.0 (C:\proj\symphony-cli\crates\router)
+   Compiling symphony-scheduler v0.9.0 (C:\proj\symphony-cli\crates\scheduler)
+   Compiling bit-vec v0.8.0
+   Compiling wait-timeout v0.2.1
+   Compiling quick-error v1.2.3
+   Compiling fnv v1.0.7
+   Compiling bit-set v0.8.0
+   Compiling rusty-fork v0.3.1
+   Compiling rand_chacha v0.9.0
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.5
+   Compiling unarray v0.1.4
+   Compiling proptest v1.11.0
+   Compiling sysinfo v0.39.6
+   Compiling symphony-process v0.9.0 (C:\proj\symphony-cli\crates\process)
+   Compiling symphony-adapter-common v0.9.0 (C:\proj\symphony-cli\crates\adapters\common)
+   Compiling symphony-plugins v0.9.0 (C:\proj\symphony-cli\crates\plugins)
+   Compiling symphony-adapter-codex v0.9.0 (C:\proj\symphony-cli\crates\adapters\codex)
+   Compiling symphony-adapter-kimi v0.9.0 (C:\proj\symphony-cli\crates\adapters\kimi)
+   Compiling symphony-adapter-opencode v0.9.0 (C:\proj\symphony-cli\crates\adapters\opencode)
+   Compiling symphony-adapter-claude v0.9.0 (C:\proj\symphony-cli\crates\adapters\claude)
+   Compiling symphony-adapter-copilot v0.9.0 (C:\proj\symphony-cli\crates\adapters\copilot)
+   Compiling symphony-adapter-antigravity v0.9.0 (C:\proj\symphony-cli\crates\adapters\antigravity)
+   Compiling symphony-testkit v0.9.0 (C:\proj\symphony-cli\crates\testkit)
+   Compiling symphony-daemon v0.9.0 (C:\proj\symphony-cli\crates\daemon)
+warning: linker stdout: Creando biblioteca C:\proj\symphony-cli\target\debug\deps\symphonyd.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `symphony-daemon` (bin "symphonyd") generated 1 warning
+warning: linker stdout: Creando biblioteca C:\proj\symphony-cli\target\debug\deps\runtime-b9213fcb5d65e958.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `symphony-daemon` (test "runtime") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7m 17s
+────────────
+ Nextest run ID 02f31b36-f068-42ae-9bc5-8d4996f00a37 with nextest profile: default
+    Starting 14 tests across 1 binary (97 tests skipped)
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_anthropic
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_google
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+        SLOW [> 60.000s] (─────) symphony-daemon::runtime handoff_matrix_from_github
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_anthropic
+        SLOW [>120.000s] (─────) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_google
+        SLOW [>120.000s] (─────) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+        SLOW [>120.000s] (─────) symphony-daemon::runtime handoff_matrix_from_github
+        PASS [ 121.228s] ( 1/14) symphony-daemon::runtime a_handoff_flags_a_checkpoint_older_than_the_last_activity
+        PASS [ 121.297s] ( 2/14) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git
+        PASS [ 123.562s] ( 3/14) symphony-daemon::runtime handoff_carries_the_conversation_without_nesting_earlier_handoffs
+        PASS [ 133.966s] ( 4/14) symphony-daemon::runtime a_context_transformer_rewrites_the_handoff_and_a_broken_one_is_ignored
+        PASS [   7.719s] ( 5/14) symphony-daemon::runtime handoff_skips_missing_checkpoint_blobs_and_records_recovery_once
+        PASS [ 147.185s] ( 6/14) symphony-daemon::runtime handoff_matrix_from_anthropic
+        PASS [ 147.453s] ( 7/14) symphony-daemon::runtime handoff_matrix_from_github
+        PASS [  23.916s] ( 8/14) symphony-daemon::runtime handoff_of_a_ten_turn_conversation_keeps_every_turn_in_raw
+        PASS [ 149.520s] ( 9/14) symphony-daemon::runtime handoff_matrix_from_google
+        PASS [   7.944s] (10/14) symphony-daemon::runtime handoff_uses_live_worktree_and_task_when_every_checkpoint_has_invalid_json
+        PASS [   5.071s] (11/14) symphony-daemon::runtime project_facts_ipc_and_handoff_integration
+        PASS [  34.542s] (12/14) symphony-daemon::runtime handoff_matrix_from_openai
+        PASS [  35.227s] (13/14) symphony-daemon::runtime handoff_matrix_from_moonshot
+        PASS [ 156.789s] (14/14) symphony-daemon::runtime handoff_evaluation_forced_kill_by_context_mode
+────────────
+     Summary [ 156.795s] 14 tests run: 14 passed (8 slow), 97 skipped
+```
+<<<usuario>>>
+sigue con la iteración 4
+<<<asistente>>>
+Abro el compresor de logs para reutilizarlo.
+
+→ Read: crates/context/src/compress/log.rs
+```rust
+//! `LogCollapser`: logs largos → lo que importa. Quita secuencias ANSI y las líneas de progreso
+//! (`\r`), colapsa repeticiones y recorta lo aburrido. Las primeras 80 líneas que parecen un
+//! fallo (y su contexto) se conservan tal cual; a partir de ahí caen en el recorte genérico.
+
+use std::sync::LazyLock;
+
+use regex::Regex;
+use symphony_core::{AnsiMode, sanitize};
+
+/// Líneas que se conservan siempre (fallos, avisos, pilas de llamadas).
+static IMPORTANT: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(error|errors|fail|failed|failure|failures|panic|panicked|exception|traceback|fatal|denied|cannot|unable|warning|warn|unhandled|segfault|abort(ed)?)\b|^\s+at\s|\bE[0-9]{4}\b|ERR!|✗|✖|FAILED",
+    )
+    .ok()
+});
+
+/// Números, ids hexadecimales y horas: dos líneas que solo difieren en eso son «la misma».
+static VOLATILE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"[0-9a-fA-F]{7,}|\d+(?:[.:,-]\d+)*").ok());
+// Las expresiones son constantes: si no compilaran, el test `patterns_compile` lo detecta.
+
+/// Líneas a partir de las cuales se recorta lo del medio.
+const KEEP_ALL_UP_TO: usize = 150;
+const HEAD: usize = 25;
+const TAIL: usize = 40;
+const MAX_IMPORTANT: usize = 80;
+
+pub fn is_important(line: &str) -> bool {
+    IMPORTANT.as_ref().is_some_and(|r| r.is_match(line))
+}
+
+fn shape(line: &str) -> String {
+    let line = line.trim();
+    VOLATILE.as_ref().map_or_else(
+        || line.to_string(),
+        |r| r.replace_all(line, "#").into_owned(),
+    )
+}
+```
+
+Resumen de dónde quedé, por si me corta la cuota:
+
+- [x] `render_conversation` conserva la primera línea del mensaje antes de la referencia al plan.
+- [x] `handoff_combines_the_checkpoint_with_live_git` pasa con la aserción original intacta.
+- [ ] clippy de `symphony-context` con `-D warnings` (el `if` colapsable de handoff.rs:203).
+- [ ] benchmark P18 con fixtures realistas y tabla antes/después en docs/research/tokens-p18-base.md.
+- [ ] bitácora en docs/phases/P18-contexto.md y STATUS.
+
+Siguiente comando: `cargo clippy -p symphony-context -- -D warnings`. No toques los tests de runtime: el fallo de `cpu_keeps_beating_after_a_busy_child_ends` es del binario daemon y no tiene que ver con el handoff.

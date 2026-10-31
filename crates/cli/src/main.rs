@@ -599,6 +599,9 @@ async fn run(cli: Cli, home: SymphonyHome) -> miette::Result<()> {
                 res["kind"].as_str().unwrap_or(""),
                 res["root"].as_str().unwrap_or("")
             );
+            println!("creado: .symphony/project.toml");
+            println!("creado: .symphony/.gitignore (incluye brain/)");
+            println!("configurado: harness Flintstone, animaciones activas, compact cada 3 tareas");
         }
         Some(Cmd::Spawn {
             task,

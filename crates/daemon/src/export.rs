@@ -36,7 +36,7 @@ fn civil(ms: i64) -> (i64, u32, u32, i64, i64, i64) {
     (y, m, d, rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-fn stamp(ms: i64) -> String {
+pub(crate) fn stamp(ms: i64) -> String {
     let (y, mo, d, h, mi, s) = civil(ms);
     format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02} UTC")
 }

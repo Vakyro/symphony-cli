@@ -2332,9 +2332,6 @@ kind = "hang"
 async fn a_run_that_goes_silent_after_a_rate_limit_is_closed_with_that_cause() {
     let script = r#"
 [[step]]
-kind = "say"
-text = "trabajando"
-[[step]]
 kind = "rate_limit"
 retry_after_ms = 60000
 [[step]]
@@ -2344,7 +2341,7 @@ kind = "hang"
         &[("fake", script)],
         None,
         Duration::from_millis(100),
-        Duration::from_millis(1500),
+        Duration::from_secs(5),
     )
     .await;
     let created = e
@@ -4521,6 +4518,124 @@ async fn the_plan_file_never_reaches_git() {
     );
     let status = git(&created.worktree, &["status", "--porcelain"]);
     assert!(!status.contains(".symphony"), "{status}");
+    e.writer.shutdown();
+}
+
+// --- P18.S3: compactación automática cada N tareas (enmienda ADR-0013 D2) -------------
+
+/// Fase 1 con tres tareas (el tope por defecto) y una segunda fase: la primera sesión
+/// completa exactamente 3 tareas y Symphony pide la decisión de compactación.
+const THREE_THEN_TWO: &str = r##"
+[[step]]
+kind = "plan"
+content = "# Plan: rotación\n## Fase 1: primera\n- [ ] uno\n- [ ] dos\n- [ ] tres\n## Fase 2: segunda\n- [ ] cuatro\n- [ ] cinco\n"
+"##;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn three_tasks_in_a_session_wait_for_compact_then_handoff() {
+    let e = env(THREE_THEN_TWO, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Compactar cada tres",
+            Execution::Exact("fake/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    // La sesión cerró con 3 tareas hechas: el agente espera la decisión (no sigue solo).
+    wait_state(&e, &agent, "READY").await;
+    e.runtime.wait_executors().await;
+    let why: String = one(
+        &e,
+        &format!("SELECT state_reason FROM agents WHERE id = '{agent}'"),
+    );
+    assert!(why.contains("3 tareas"), "{why}");
+    assert!(why.contains("sesión larga"), "{why}");
+    let runs = run_rows(&e, &agent);
+    assert_eq!(
+        runs,
+        vec![(
+            1,
+            "HANDED_OFF".into(),
+            "PHASE_DONE".into(),
+            "fake/fast".into()
+        )],
+        "una sola sesión, cerrada en el tope"
+    );
+    let inspect = e.runtime.inspect(created.agent_id).await.unwrap();
+    assert_eq!(
+        inspect["agent"]["awaits_compact"].as_bool(),
+        Some(true),
+        "el inspect expone la decisión pendiente"
+    );
+
+    // Confirmar compacta: fake no tiene `/compact`, así que la sesión nueva arranca con el
+    // handoff completo del assembler (decisiones, constraints, archivos tocados y plan).
+    let run = e.runtime.start_next_phase(created.agent_id).await.unwrap();
+    assert_ne!(run, created.run.clone().unwrap().0);
+    let inspect = e.runtime.inspect(created.agent_id).await.unwrap();
+    assert_eq!(inspect["agent"]["awaits_compact"].as_bool(), Some(false));
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    let second = first_user_message(&e, &agent, 2);
+    assert!(
+        second.starts_with("Retomas una tarea"),
+        "handoff del assembler, no el prompt de fase: {second}"
+    );
+    assert!(second.contains("Compactar cada tres"), "{second}");
+    assert!(
+        !second.contains("fase 2 de 2"),
+        "el prompt acotado a fase es para las rotaciones sin compactar"
+    );
+    let task: String = one(
+        &e,
+        &format!("SELECT status FROM tasks WHERE id = '{}'", created.task_id),
+    );
+    assert_eq!(task, "DONE");
+    e.writer.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_compact_capable_provider_runs_slash_compact_on_the_same_session() {
+    let e = env_with(&[("fake-compact", THREE_THEN_TWO)], None).await;
+    let created = e
+        .runtime
+        .create_agent(req(
+            &e,
+            "Compactar con el proveedor",
+            Execution::Exact("fake-compact/fast".into()),
+        ))
+        .await
+        .unwrap();
+    let agent = created.agent_id.to_string();
+    wait_state(&e, &agent, "READY").await;
+    e.runtime.wait_executors().await;
+
+    // Confirmar compacta: el run retoma la sesión viva del CLI y le manda `/compact`.
+    e.runtime.start_next_phase(created.agent_id).await.unwrap();
+    wait_state(&e, &agent, "COMPLETED").await;
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+    assert_eq!(first_user_message(&e, &agent, 2), "/compact");
+    let sessions: Vec<String> = {
+        let conn = rusqlite::Connection::open_with_flags(
+            &e.db,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut stmt = conn
+            .prepare("SELECT cli_session_id FROM agent_runs WHERE agent_id = ?1 ORDER BY seq")
+            .unwrap();
+        stmt.query_map([agent.clone()], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(sessions.len(), 2, "run de compactación + run que termina");
+    assert_eq!(sessions[0], sessions[1], "misma sesión del CLI, compactada");
     e.writer.shutdown();
 }
 

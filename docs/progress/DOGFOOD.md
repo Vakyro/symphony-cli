@@ -59,6 +59,17 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
 | 2026-10-26 | Antigravity · `google/gemini-4-argon-high` | P13.S6 adapters, comandos y plugins | ✅ comandos verificados contra `--help`; ❌ reemplazó el capítulo de problemas existente por uno más corto (la tarea no decía que existía) | Tareas: revisar lo que ya hay |
 | 2026-10-26 | Codex `gpt-6.1-sol` → Antigravity `claude-sonnet-5-5-high` → `gemini-4-argon-medium` | P13.S5 arreglos del executor | ✅ 4 hallazgos corregidos con test y 8 diferidos con buenas razones; pasó por tres modelos con `switch` (Codex sin créditos, Antigravity-Anthropic sin cuota por 4,5 días) | Agent ≠ Model en vivo |
 | 2026-10-26 | OpenCode · `opencode/flint-40b-free` | P13.S5 auditoría de process/git/protocol | ⚠️ no evaluable: 503 del endpoint gratis | — |
+| 2026-10-29 | Kimi · `moonshot/kimi-for-coding` | P17.S4 mascota (#61, #64) | ❌ dos veces sale con código 75 sin commit; el 2.º dejó 200 líneas sin verificar | Kimi código 75 deja el trabajo sin commit; se rescató con un commit `wip` + agente terminador |
+| 2026-10-29 | Codex · `openai/gpt-6-luna` | P17.S5 procesos (#62, #65) | ❌ #62 paró con razón: el daemon no ejecuta el shell del agente; #65 dejó 390 líneas sin commit | La tarea estaba mal planteada; se replanteó a derivar procesos de `tool_calls` |
+| 2026-10-29 | Antigravity · `google/gemini-4-argon-medium` | Ola 0 docs (#63) | ❌ cuota individual agotada (reinicio 48 h) | Leo creía Gemini sano; la salud real se ve solo al lanzar |
+| 2026-10-29 | Codex · `openai/gpt-5.6-luna` · `gpt-6-luna` · Kimi | Ola 0 docs (#66), terminar S4 (#67), S6 daemon (#69), S5 TUI (#73), ADR-0023 (#75), S8 harness (#77) | ✅ todos a la primera | — |
+| 2026-10-29 | Codex · `openai/gpt-6.1-sol` · `gpt-6-astra` | arreglo de integración (#70, #71), revisión de cierre P17 (#80, #84) | ❌ paran al primer rechazo del guard del shell (`sed -n '/…/p'` leído como ruta absoluta) | **Bug del guard arreglado** (`9131432`, `969a04c`); copia estable actualizada |
+| 2026-10-29/30 | Kimi · `moonshot/kimi-for-coding` | arreglo de integración (#72), terminar S5 (#68), S6 TUI (#74), S8 render (#76), gate P17 (#78), docs de cierre (#83) | ✅ | #78: todo verde, sin commit (el driver lo tomó como fallo; corregido) |
+| 2026-10-30 | Codex · `openai/gpt-6-luna` | revisión de cierre P17 (#85) | ✅ encontró mezcla de uso entre proyectos | ❌ subió el protocolo IPC a v2 sin necesidad; revertido por el integrador (`c5d470f`) |
+| 2026-10-30 | Codex · `openai/gpt-5.6-luna` | docs de cierre P17 (#82) | ❌ `codex terminó con código 1` | Era «Selected model is at capacity» (`server_overloaded`): Symphony lo trata como crash, sin failover |
+| 2026-10-30 | Codex · `gpt-6-luna` · `gpt-5.6-luna` · `gpt-6-astra` | P18.S1 benchmark (#86), S2 (#87), S5 (#88), ADR-0013 (#89), recortes (#90), S4 grafo (#93) | ✅ salvo #90: recorte chico, un test en rojo, benchmark sintético | #90 commiteó un `.symphony/plan/*.md` (ignorado); sacado del repo |
+| 2026-10-30 | Codex · `gpt-6-luna` | P18.S3 `/compact` (#91) | ❌ paró en la fase 1 sin código | El fallback `opencode-go/deepseek-v4-pro` no pudo lanzarse (OpenCode sin salud) |
+| 2026-10-30 | Kimi · `moonshot/kimi-for-coding` | P18.S6 (#94), P18.S3 (#95) | ✅ #94; ❌ #95 colgado: el proceso de Kimi murió y el daemon lo dejó RUNNING > 1 h | Falta detectar la muerte del executor; WIP guardado en `a84603d` |
 
 ## Hallazgos (lo que se arregla)
 
@@ -139,3 +150,21 @@ Symphony: siete problemas reales encontrados en un día, cinco arreglados.
 - **2026-10-26 · AGENTS.md pide el gate completo al empezar.** Con varios agentes compilando a
   la vez se vence o choca. Para delegados, quien integra corre el gate; el agente verifica solo
   su crate (reglas de delegación).
+
+## Cola secuencial (2026-10-29)
+
+Para delegar sin supervisión se usa `docs/progress/cola-secuencial.sh` (copia de trabajo en `.symphony/tmp/drive.sh`). Lee una cola, una línea por tarea: `modelo|respaldo|título|tarea`. Por cada línea:
+
+1. Lanza el agente con `symphony spawn` (reglas de este archivo en `-d`).
+2. Espera a que termine. Si lleva más de 20 min en `WAITING_PROVIDER`, lo mata.
+3. Integra sus commits a la rama actual por cherry-pick. Si hay conflicto, aborta y la cola para.
+4. Si falló, guarda el trabajo sin commit como `wip` y reintenta una vez con el modelo de respaldo, pidiéndole primero que haga cherry-pick del `wip`.
+5. Si terminó `COMPLETED` sin commits, lo anota como `SIN-CAMBIOS` y sigue.
+
+Escribe eventos en `.symphony/tmp/drive.log` (`START`, `INTEGRADO`, `FALLO`, `FALLO2`, `CONFLICT`, `SIN-CAMBIOS`, `KILL`, `COLA-FIN`). Uso: `nohup docs/progress/cola-secuencial.sh <cola.txt> &`. Las colas usadas están en `.symphony/tmp/q-*.txt`.
+
+Cuidados:
+- No editar el script con `sed -i` mientras corre: bash lo lee por partes.
+- Para cambiar la cola en marcha, reescribir el archivo en el mismo inodo (`cat nuevo > cola`) y sin tocar las líneas ya leídas.
+- Un agente colgado en RUNNING sin proceso del proveedor no lo detecta nadie: comprobar si hay procesos de kimi/codex/cargo cuando no hay eventos en más de una hora.
+- La RAM (16 GB) limita a un agente compilando a la vez. Claude Code mata los vigías en segundo plano cuando falta memoria.

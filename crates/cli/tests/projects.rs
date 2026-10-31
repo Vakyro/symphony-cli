@@ -223,6 +223,15 @@ fn a_plain_folder_becomes_a_document_project() {
     assert!(out.contains("(document)"), "{out}");
     let toml = std::fs::read_to_string(folder.join(".symphony/project.toml")).unwrap();
     assert!(toml.contains("kind = \"document\""), "{toml}");
+    assert!(
+        toml.contains("harness = { style = \"flintstone\" }"),
+        "{toml}"
+    );
+    assert!(toml.contains("ui = { animations = true }"), "{toml}");
+    assert!(toml.contains("compact_every_tasks = 3"), "{toml}");
+    let ignore = std::fs::read_to_string(folder.join(".symphony/.gitignore")).unwrap();
+    assert!(ignore.contains("brain/"), "{ignore}");
+    assert!(out.contains("configurado: harness Flintstone"), "{out}");
     // El repo tiene un commit inicial: sin él no hay worktrees.
     git(&folder, &["rev-parse", "--verify", "HEAD"]);
 

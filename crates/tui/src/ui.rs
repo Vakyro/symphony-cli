@@ -1635,7 +1635,7 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
         || "—".to_string(),
         |at| format!("hace {}", ago(app.now_ms, at)),
     );
-    let head = vec![
+    let mut head = vec![
         Line::from(vec![
             bold(format!("AGENTE #{}  ", ins["agent"]["number"])),
             colored(state.clone(), state_color(&state)).add_modifier(Modifier::BOLD),
@@ -1655,6 +1655,16 @@ fn agent(app: &App, f: &mut Frame, area: Rect) {
             Span::raw(checkpoint),
         ]),
     ];
+    if a.awaits_compact() {
+        head.push(Line::from(vec![
+            bold("Compactación: "),
+            Span::raw("la sesión llegó a su tope de tareas · "),
+            bold("Enter"),
+            Span::raw(" compactar y seguir · "),
+            bold("L"),
+            Span::raw(" sesión larga"),
+        ]));
+    }
     let [top, tabs, body] = Layout::vertical([
         Constraint::Length(head.len() as u16 + 2),
         Constraint::Length(1),

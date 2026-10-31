@@ -295,6 +295,21 @@ pub const HARNESS_PROMPT: &str = "You are working inside Symphony. Your tools ar
 read, write, edit, glob, grep and shell (server symphony-context); other built-in tools are not available. \
 Paths are relative to your working directory. Read a file before editing it, and use shell for git, builds, \
 tests and anything else. In chat replies, use [[symphony:title]], [[symphony:bullet]], [[symphony:highlight]], [[symphony:warning]], [[symphony:error]] or [[symphony:table]] spans when a visual distinction helps; leave ordinary text unmarked.";
+pub const ENV_HARNESS_STYLE: &str = "SYMPHONY_HARNESS_STYLE";
+pub const FLINTSTONE_PROMPT: &str = " Reply in Flintstone style: be compressed and direct, with no filler. Keep only the answer and necessary details.";
+
+pub fn harness_prompt(req: &SpawnRequest) -> String {
+    let mut prompt = HARNESS_PROMPT.to_owned();
+    if req
+        .env
+        .iter()
+        .find(|(key, _)| key == ENV_HARNESS_STYLE)
+        .is_none_or(|(_, value)| value != "normal")
+    {
+        prompt.push_str(FLINTSTONE_PROMPT);
+    }
+    prompt
+}
 
 /// El broker (`symphony mcp serve`) en el mismo ejecutable que el hook, con las variables del
 /// agente que tiene que ver (`SYMPHONY_*`: ningún CLI se las pasa solo a un servidor MCP) y el
@@ -470,6 +485,13 @@ pub trait ProviderAdapter: Send + Sync {
     /// acepta entre turnos (Codex, ADR-0005).
     fn encode_user_message(&self, text: &str) -> Option<Vec<u8>>;
 
+    /// Comando de compactación de contexto que el CLI acepta como mensaje sobre su sesión
+    /// viva (ADR-0013 D2, enmienda 2026-10-30). Solo Claude Code tiene `/compact` real; el
+    /// resto de proveedores compacta con un handoff a sesión nueva (assembler de contexto).
+    fn slash_compact(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Una línea de stdout del CLI → eventos. Nunca falla: lo que no entiende lo ignora.
     fn parse_stream_line(&self, line: &str) -> Vec<AgentEvent>;
     /// Una línea de stderr del CLI → eventos (ADR-0009). Por defecto, ninguno: solo la
@@ -501,5 +523,27 @@ mod tests {
             assert!(HARNESS_PROMPT.contains(&format!("[[symphony:{marker}]]")));
         }
         assert!(HARNESS_PROMPT.contains("leave ordinary text unmarked"));
+    }
+
+    #[test]
+    fn harness_prompt_uses_flintstone_by_default_and_can_disable_it() {
+        let req = SpawnRequest {
+            worktree: PathBuf::new(),
+            model: String::new(),
+            prompt: String::new(),
+            session_id: None,
+            hook: None,
+            env: vec![],
+        };
+        assert!(harness_prompt(&req).contains("Flintstone"));
+        let req = SpawnRequest {
+            worktree: PathBuf::new(),
+            model: String::new(),
+            prompt: String::new(),
+            session_id: None,
+            hook: None,
+            env: vec![(ENV_HARNESS_STYLE.into(), "normal".into())],
+        };
+        assert!(!harness_prompt(&req).contains("Flintstone"));
     }
 }

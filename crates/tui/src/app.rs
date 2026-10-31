@@ -567,6 +567,15 @@ impl AgentView {
         (!s.is_null()).then_some(s)
     }
 
+    /// La decisión de compactación pendiente (P18.S3): la sesión llegó al tope de tareas
+    /// (`[plan] compact_every_tasks`) y Symphony espera que el usuario elija entre
+    /// compactar (`agent.next_phase`) y permitir una sesión larga (`agent.long_session`).
+    pub fn awaits_compact(&self) -> bool {
+        self.inspect["agent"]["awaits_compact"]
+            .as_bool()
+            .unwrap_or(false)
+    }
+
     /// La llamada que resuelve la sugerencia pendiente con `action` (`switch`, `keep`, `mute`).
     fn resolve_suggestion(&self, action: &str) -> Option<Call> {
         let id = self.suggestion()?["id"].as_str()?;
@@ -2328,6 +2337,28 @@ impl App {
             return Vec::new();
         }
         let confirm = std::mem::replace(&mut a.confirm_stop, false);
+        // Decisión de compactación pendiente (P18.S3): dos únicas salidas, compactar
+        // (opción por defecto) o permitir la sesión larga confirmada.
+        if a.awaits_compact() {
+            let id = a.id.clone();
+            return match key.code {
+                KeyCode::Enter => {
+                    vec![call(
+                        Req::Control,
+                        "agent.next_phase",
+                        json!({ "agent": id }),
+                    )]
+                }
+                KeyCode::Char('L') => {
+                    vec![call(
+                        Req::Control,
+                        "agent.long_session",
+                        json!({ "agent": id }),
+                    )]
+                }
+                _ => Vec::new(),
+            };
+        }
         let switch_tab = |a: &mut AgentView, tab: Tab| {
             a.tab = tab;
             a.scroll = 0;

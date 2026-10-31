@@ -74,6 +74,12 @@ ADR-0006/0010 dejó esta decisión para P08.S1 «con datos del scheduler». Lo q
 4. **D4: entra todo lo marcado «Sí»**; F12 va aparte, medido antes de P08.S3.
 5. **Benchmark live de P08.S9: se pueden usar todos los proveedores**, con solo 2 mensajes sencillos por agente y el menor gasto de tokens posible.
 
+### Enmienda 2026-10-30 · D2
+
+Por decisión de Leo, para los agentes la sesión corta comprende 3 tareas. Al superar ese límite, Symphony ejecuta **automáticamente** `/compact` o la compactación equivalente del proveedor. Si el proveedor no ofrece compactación, Symphony hace handoff a una sesión nueva con el contexto del assembler. Una sesión larga solo se permite tras la confirmación explícita del usuario mediante un prompt en la TUI.
+
+La compactación debe preservar las decisiones tomadas, las constraints, los archivos tocados y el plan vigente. La medición live con Codex sigue pendiente.
+
 ## Preguntas que había (resueltas arriba)
 1. ¿D1: archivo de plan (A) o tablas (B)?
 2. ¿D2: apruebas `PHASE_DONE` (cambio de core con migración 004)?

@@ -268,6 +268,7 @@ fn ignore_state_in_git(home: &Path) {
             "*
 !.gitignore
 !project.toml
+brain/
 ",
         ) {
             tracing::warn!(error = %e, "no se pudo escribir {}", path.display());
@@ -619,6 +620,7 @@ async fn dispatch(req: Request, state: &State) -> Response {
         "agent.kill" => agent_kill(req, state).await,
         "agent.switch" => agent_switch(req, state).await,
         "agent.next_phase" => agent_next_phase(req, state).await,
+        "agent.long_session" => agent_long_session(req, state).await,
         "agent.diff" => agent_diff(req, state).await,
         "agent.logs" => agent_logs(req, state).await,
         "agent.export" => agent_export(req, state).await,
@@ -845,10 +847,18 @@ fn chat_get(req: Request, state: &State) -> Response {
     // `project_root` ya es la raíz del repo (la devuelve `project.status`).
     let root = project_root_param(&req.params).display().to_string();
     read_view(req, state, |c| {
-        let agent = repo::project_by_root(c, &root)
-            .ok()
-            .flatten()
+        let project = repo::project_by_root(c, &root).ok().flatten();
+        let agent = project
+            .as_ref()
             .and_then(|p| repo::chat_agent(c, p.id).ok().flatten());
+        let graph_root = agent
+            .as_ref()
+            .and_then(|a| a.worktree_id)
+            .and_then(|id| repo::get_worktree(c, id).ok())
+            .map_or_else(|| PathBuf::from(&root), |w| PathBuf::from(w.path));
+        state
+            .runtime
+            .ensure_graph(&graph_root, project.map(|p| p.id.to_string()));
         Ok(json!({ "agent_id": agent.map(|a| a.id.to_string()) }))
     })
 }
@@ -1085,6 +1095,19 @@ async fn agent_next_phase(req: Request, state: &State) -> Response {
         Err(e) => return Response::error(req.id, "agent_not_found", e),
     };
     match state.runtime.start_next_phase(agent_id).await {
+        Ok(run_id) => Response::ok(req.id, json!({ "ok": true, "run_id": run_id.to_string() })),
+        Err(e) => Response::error(req.id, "agent_error", e.0),
+    }
+}
+
+/// El usuario permitió una sesión larga: la fase siguiente arranca sin compactar
+/// (enmienda ADR-0013 D2, P18.S3).
+async fn agent_long_session(req: Request, state: &State) -> Response {
+    let agent_id = match resolve_agent_id(state, &req.params) {
+        Ok(id) => id,
+        Err(e) => return Response::error(req.id, "agent_not_found", e),
+    };
+    match state.runtime.allow_long_session(agent_id).await {
         Ok(run_id) => Response::ok(req.id, json!({ "ok": true, "run_id": run_id.to_string() })),
         Err(e) => Response::error(req.id, "agent_error", e.0),
     }
@@ -1798,6 +1821,9 @@ async fn project_init(req: Request) -> Response {
                 kind,
                 performance,
                 failover,
+                harness_style: symphony_core::HarnessStyle::Flintstone,
+                animations: true,
+                compact_every_tasks: 3,
             },
         )
         .map(|c| (repo.root().display().to_string(), c.project.name))
