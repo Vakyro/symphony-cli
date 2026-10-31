@@ -39,6 +39,27 @@ Con `SYMPHONY_*` y `CARGO_BUILD_BUILD_DIR` eliminados del entorno del comando, e
 
 Se detuvo el trabajo tras el segundo intento fallido, según la instrucción de esta sesión. No se ejecutó el benchmark posterior: la tabla antes/después y el porcentaje siguen pendientes, no son 0 % medido. `cargo xtask check` completó fmt/clippy del workspace, pero la herramienta lo interrumpió a los 600 s durante la compilación de tests. El clippy acotado tampoco se volvió a ejecutar.
 
+## Benchmark realista · parte 3 (2026-10-31)
+
+La tabla anterior queda como histórico: su carga sintética (mensajes de 800 `z`, diff de `x`) no admite ningún compresor. Desde esta parte el mismo test (`p18_routing_handoff_token_baseline`, mismo comando de reproducción) carga contenido real del repo, fijo en `fixtures/handoff-p18/` (`eol=lf` por `.gitattributes`, así que los conteos no dependen del sistema):
+
+- `*.chat`: conversaciones con llamadas a herramientas (`→ Bash: …`) y sus salidas reales: compilación y `cargo nextest` del L2 de handoff, la suite de `symphony-context`, `git grep`, `git status`, un fallo de nextest con su pánico y un error de clippy. Las rutas absolutas se normalizaron a `C:\proj\symphony-cli`. `<<<usuario>>>`/`<<<asistente>>>` abren cada mensaje.
+- `*.diff`: diffs unificados reales (`git show` de 672f940 + 77b7bb8 con `Cargo.lock`, a440358 y e41e0a6).
+- `new_file_log.rs`: un archivo de código real como archivo nuevo sin commit.
+
+El daemon arma el resto igual que en producción: objetivo = primer mensaje del usuario, `plan_tail` = últimos 2.000 caracteres del último mensaje del asistente (`checkpoint.rs::PLAN_TAIL_MAX`, así que el checkpoint repite ese final), archivos tocados y estado de git desde el diff, dos hechos vigentes, el último comando fallido y dos fallos.
+
+### Línea base realista (código en e41e0a6, antes de los recortes de esta parte)
+
+| Ruta | Mensajes | Chars conversación | Chars diff | RAW | SAFE | BALANCED | AGGRESSIVE |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| rotation_context | 8 | 35.351 | 61.478 | 26.221 | 26.221 | 16.016 | 8.881 |
+| fallback_quota | 8 | 25.799 | 35.841 | 16.247 | 14.542 | 6.390 | 5.190 |
+| manual_switch | 3 | 1.782 | 3.621 | 2.114 | 2.114 | 1.602 | 1.602 |
+| same_provider | 12 | 41.622 | 3.621 | 11.827 | 11.827 | 6.468 | 3.343 |
+
+Lo que ya ahorra BALANCED sale del `GitDiffReducer` y del recorte ciego a 4.000 caracteres por mensaje. Ese recorte corta las salidas largas por el principio y puede dejar fuera justo lo importante (el pánico del test o el error de clippy al final de un bloque); la parte siguiente apunta a colapsar esas salidas con los compresores deterministas en vez de recortarlas, y a no repetir lo que el checkpoint ya trae.
+
 ## Fixtures
 
-Se reutiliza el fixture fijo `fixed()` del módulo de handoff; se fija texto sintético (`x` para el diff), número de mensajes y 800 caracteres por mensaje. La tabla se regenera desde el test; no depende del repo de trabajo, reloj, proveedor, configuración del usuario ni red.
+Hasta la parte 2 se reutilizaba el fixture fijo `fixed()` del módulo de handoff; se fija texto sintético (`x` para el diff), número de mensajes y 800 caracteres por mensaje. La tabla se regenera desde el test; no depende del repo de trabajo, reloj, proveedor, configuración del usuario ni red.

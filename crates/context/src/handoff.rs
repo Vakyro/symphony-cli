@@ -821,28 +821,165 @@ mod tests {
         }
     }
 
-    /// Baseline fijo P18.S1 para las rutas que pasan el tamaño del handoff al router.
+    /// Conversación de una fixture P18: `<<<usuario>>>` / `<<<asistente>>>` abren cada mensaje.
+    fn p18_chat(text: &str) -> Vec<ChatMessage> {
+        let mut out: Vec<ChatMessage> = Vec::new();
+        for line in text.lines() {
+            let speaker = match line {
+                "<<<usuario>>>" => Some(Speaker::User),
+                "<<<asistente>>>" => Some(Speaker::Assistant),
+                _ => None,
+            };
+            match (speaker, out.last_mut()) {
+                (Some(speaker), _) => out.push(ChatMessage {
+                    speaker,
+                    text: String::new(),
+                }),
+                (None, Some(m)) => {
+                    m.text.push_str(line);
+                    m.text.push('\n');
+                }
+                (None, None) => {}
+            }
+        }
+        out
+    }
+
+    /// Una ruta del benchmark P18 armada como la arma el daemon: objetivo de la tarea,
+    /// `plan_tail` = últimos 2.000 caracteres del último mensaje del asistente
+    /// (`checkpoint.rs::PLAN_TAIL_MAX`), git vivo y hechos vigentes.
+    fn p18_input(chat: &str, diff: &str, new_file: bool) -> HandoffInput {
+        let conversation = p18_chat(chat);
+        let objective = conversation
+            .first()
+            .map(|m| m.text.trim().to_string())
+            .unwrap_or_default();
+        let last = conversation
+            .iter()
+            .rev()
+            .find(|m| m.speaker == Speaker::Assistant)
+            .map(|m| m.text.as_str())
+            .unwrap_or_default();
+        let n = last.chars().count();
+        let plan_tail: String = last.chars().skip(n.saturating_sub(2_000)).collect();
+        let files: Vec<String> = diff
+            .lines()
+            .filter_map(|l| l.strip_prefix("diff --git a/"))
+            .filter_map(|l| l.split(" b/").next())
+            .map(str::to_string)
+            .collect();
+        HandoffInput {
+            objective,
+            reason: "El executor anterior se quedó sin cuota.".into(),
+            plan_tail: Some(plan_tail),
+            current_step: Some("Bash: cargo clippy -p symphony-context -- -D warnings".into()),
+            next_step: Some("benchmark P18 con fixtures realistas".into()),
+            last_command: Some(LastCommand {
+                command: "cargo clippy -p symphony-context -- -D warnings".into(),
+                ok: false,
+                exit_code: Some(101),
+            }),
+            failures: vec![
+                "`cargo nextest run -p symphony-context -p symphony-daemon` falló (código 100)"
+                    .into(),
+                "`cargo clippy -p symphony-context -- -D warnings` falló (código 101)".into(),
+            ],
+            git_status: files.iter().map(|f| format!(" M {f}\n")).collect(),
+            files_touched: files,
+            diff: diff.to_string(),
+            diff_uri: Some("ctx://diff/AGENT/p18".into()),
+            new_files: if new_file {
+                vec![NewFile {
+                    path: "crates/context/src/compress/log.rs".into(),
+                    content: Some(
+                        include_str!("../../../fixtures/handoff-p18/new_file_log.rs").into(),
+                    ),
+                }]
+            } else {
+                Vec::new()
+            },
+            conversation,
+            facts: vec![
+                ProjectFact {
+                    key: "gate".into(),
+                    value: "cargo xtask check antes de cada commit".into(),
+                    kind: "CONVENTION".into(),
+                },
+                ProjectFact {
+                    key: "idioma".into(),
+                    value: "docs, comentarios y commits en español".into(),
+                    kind: "CONVENTION".into(),
+                },
+            ],
+        }
+    }
+
+    /// Las cuatro rutas del benchmark P18 con contenido real del repo (`fixtures/handoff-p18/`).
+    fn p18_routes() -> [(&'static str, HandoffInput); 4] {
+        [
+            (
+                "rotation_context",
+                p18_input(
+                    include_str!("../../../fixtures/handoff-p18/rotation_context.chat"),
+                    include_str!("../../../fixtures/handoff-p18/rotation_context.diff"),
+                    true,
+                ),
+            ),
+            (
+                "fallback_quota",
+                p18_input(
+                    include_str!("../../../fixtures/handoff-p18/fallback_quota.chat"),
+                    include_str!("../../../fixtures/handoff-p18/fallback_quota.diff"),
+                    false,
+                ),
+            ),
+            (
+                "manual_switch",
+                p18_input(
+                    include_str!("../../../fixtures/handoff-p18/manual_switch.chat"),
+                    include_str!("../../../fixtures/handoff-p18/manual_switch.diff"),
+                    false,
+                ),
+            ),
+            (
+                "same_provider",
+                p18_input(
+                    include_str!("../../../fixtures/handoff-p18/same_provider.chat"),
+                    include_str!("../../../fixtures/handoff-p18/manual_switch.diff"),
+                    false,
+                ),
+            ),
+        ]
+    }
+
+    /// Benchmark fijo P18.S1 para las rutas que pasan el tamaño del handoff al router.
     #[test]
-    #[ignore = "imprime el baseline reproducible P18.S1; no verifica comportamiento"]
+    #[ignore = "imprime el benchmark reproducible P18.S1; no verifica comportamiento"]
     fn p18_routing_handoff_token_baseline() {
-        let scenarios = [
-            ("rotation_context", 1usize, 70_000usize),
-            ("fallback_quota", 8, 30_000),
-            ("manual_switch", 3, 8_000),
-            ("same_provider", 12, 1_000),
-        ];
-        println!("ruta | escenario fijo | RAW | SAFE | BALANCED | AGGRESSIVE");
-        for (route, messages, chars) in scenarios {
-            let mut input = fixed();
-            input.diff = "x".repeat(chars);
-            input.conversation = chat(messages, 800);
+        println!(
+            "ruta | mensajes | chars conversación | chars diff | RAW | SAFE | BALANCED | AGGRESSIVE"
+        );
+        for (route, input) in p18_routes() {
+            let chars: usize = input.conversation.iter().map(|m| m.text.len()).sum();
             println!(
-                "{route} | {messages} mensajes, diff={chars} chars | {} | {} | {} | {}",
+                "{route} | {} | {chars} | {} | {} | {} | {} | {}",
+                input.conversation.len(),
+                input.diff.len(),
                 assemble(&input, ContextMode::Raw).tokens_sent,
                 assemble(&input, ContextMode::Safe).tokens_sent,
                 assemble(&input, ContextMode::Balanced).tokens_sent,
                 assemble(&input, ContextMode::Aggressive).tokens_sent,
             );
+        }
+    }
+
+    #[test]
+    fn p18_fixtures_load_as_alternating_conversations() {
+        for (route, input) in p18_routes() {
+            assert!(input.conversation.len() >= 3, "{route}");
+            assert_eq!(input.conversation[0].speaker, Speaker::User, "{route}");
+            assert!(input.diff.starts_with("diff --git "), "{route}");
+            assert!(!input.plan_tail.as_deref().unwrap_or_default().is_empty());
         }
     }
 
