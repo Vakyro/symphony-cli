@@ -54,6 +54,21 @@ impl Runtime {
             &self.home,
             self.writer.clone(),
             self.scheduling.get().cloned(),
+            false,
+        );
+    }
+
+    /// Como `refresh_graph`, pero solo si la raíz aún no tiene grafo (P18.S7). Para lecturas
+    /// que se sondean (`chat.get` en cada tick de la TUI sin agente de chat): repetir el
+    /// refresco reconstruiría el grafo entero sin parar y tendría ocupado el slot pesado.
+    pub(crate) fn ensure_graph(&self, root: &Path, project: Option<String>) {
+        self.graphs.request(
+            root,
+            project,
+            &self.home,
+            self.writer.clone(),
+            self.scheduling.get().cloned(),
+            true,
         );
     }
 
@@ -79,6 +94,7 @@ impl Graphs {
         home: &Path,
         writer: WriterHandle,
         scheduling: Option<Arc<Scheduling>>,
+        only_if_new: bool,
     ) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
@@ -87,7 +103,9 @@ impl Graphs {
             return;
         };
         if let Some(w) = workers.get(root) {
-            w.tx.send_replace(project);
+            if !only_if_new {
+                w.tx.send_replace(project);
+            }
             return;
         }
         let (tx, mut rx) = watch::channel(project);
@@ -261,5 +279,34 @@ mod tests {
         .await
         .unwrap();
         assert_ne!(uri(&root), uri(&root.join("otro")));
+    }
+
+    /// P18.S7: `ensure_graph` (lecturas sondeadas) no vuelve a pedir reconstrucción.
+    #[tokio::test]
+    async fn ensure_graph_no_reconstruye_si_ya_hay_grafo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (root, home) = (tmp.path().join("repo"), tmp.path().join(".symphony"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let db = home.join("db");
+        let writer = Writer::start(&db).unwrap();
+        let objects = ObjectStore::new(symphony_core::SymphonyHome::at(&home).objects_dir());
+        let runtime = Runtime::new(
+            &home,
+            writer.handle(),
+            symphony_store::open(&db).unwrap(),
+            crate::bus::EventBus::new(writer.handle(), 16, objects),
+            Vec::new(),
+            None,
+        );
+        let _held = runtime.graphs.slots.acquire().await.unwrap();
+        runtime.ensure_graph(&root, None);
+        let rx = runtime.graphs.workers.lock().unwrap()[&root].tx.subscribe();
+        for _ in 0..5 {
+            runtime.ensure_graph(&root, None);
+        }
+        assert!(!rx.has_changed().unwrap(), "ensure_graph pidió otra pasada");
+        runtime.refresh_graph(&root, None);
+        assert!(rx.has_changed().unwrap());
     }
 }

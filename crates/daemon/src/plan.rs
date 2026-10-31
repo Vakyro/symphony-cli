@@ -266,6 +266,29 @@ impl Runtime {
             .unwrap_or_default()
     }
 
+    /// `project.toml` del proyecto, si existe y se puede leer (P18.S7).
+    pub(crate) fn project_config(
+        &self,
+        project: symphony_core::ProjectId,
+    ) -> Option<symphony_core::ProjectConfig> {
+        let root = {
+            let c = self.reader.lock().ok()?;
+            repo::get_project(&c, project).ok()?.root_path
+        };
+        symphony_core::load_project(Path::new(&root)).ok().flatten()
+    }
+
+    /// `[plan]` global con el `compact_every_tasks` que `symphony init` escribe en el
+    /// `project.toml` (P18.S7). Solo ese campo: el resto de un `[plan]` de proyecto son
+    /// valores por defecto de serde y pisarían la config del usuario (p. ej. `enabled`).
+    pub(crate) fn plan_config_for(&self, project: symphony_core::ProjectId) -> PlanConfig {
+        let mut cfg = self.plan_config();
+        if let Some(p) = self.project_config(project).and_then(|p| p.plan) {
+            cfg.compact_every_tasks = p.compact_every_tasks;
+        }
+        cfg
+    }
+
     /// Primer prompt de un agente: con las reglas del plan por fases, salvo en el chat o con
     /// el plan apagado.
     pub(crate) fn planned_prompt(&self, task: TaskId, is_chat: bool, objective: &str) -> String {
@@ -287,7 +310,7 @@ impl Runtime {
     /// El CLI salió bien: ¿el plan pide otra fase, se detuvo o terminó? Devuelve `true` si
     /// ya se ocupó del agente (no hay que completarlo).
     pub(crate) async fn advance_plan(&self, l: &Launch) -> bool {
-        let cfg = self.plan_config();
+        let cfg = self.plan_config_for(l.project_id);
         if !cfg.enabled || self.task_is_chat(l.task_id) {
             return false;
         }
@@ -506,7 +529,7 @@ impl Runtime {
         let reason = if compact {
             format!(
                 "La sesión llegó a sus {} tareas: sesión nueva con el contexto preservado.",
-                self.plan_config().compact_every_tasks
+                self.plan_config_for(agent.project_id).compact_every_tasks
             )
         } else {
             format!(
@@ -719,6 +742,66 @@ mod tests {
 
     fn task() -> TaskId {
         TaskId::new()
+    }
+
+    /// P18.S7: lo que `symphony init` escribe en `project.toml` (`compact_every_tasks`,
+    /// `[harness] style`) tiene efecto; antes el daemon solo leía la config global.
+    #[tokio::test]
+    async fn el_project_toml_de_init_pisa_compact_y_estilo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (root, home) = (tmp.path().join("repo"), tmp.path().join("home"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        symphony_core::init_project(
+            &root,
+            &symphony_core::ProjectInit {
+                name: "demo",
+                default_branch: "main",
+                kind: symphony_core::ProjectKind::Document,
+                performance: symphony_core::PerformanceProfile::Eco,
+                failover: symphony_core::FailoverPolicy::SameProvider,
+                harness_style: symphony_core::HarnessStyle::Normal,
+                animations: true,
+                compact_every_tasks: 7,
+            },
+        )
+        .unwrap();
+        let db = home.join("db");
+        let writer = symphony_store::Writer::start(&db).unwrap();
+        let project = symphony_core::ProjectId::new();
+        let root_s = root.display().to_string();
+        writer
+            .handle()
+            .write(Box::new(move |t| {
+                t.execute(
+                    "INSERT INTO projects (id,name,root_path,default_branch,created_at)
+                     VALUES (?1,'demo',?2,'main',0)",
+                    rusqlite::params![project.to_string(), root_s],
+                )?;
+                Ok(())
+            }))
+            .await
+            .unwrap();
+        let objects = symphony_object_store::ObjectStore::new(
+            symphony_core::SymphonyHome::at(&home).objects_dir(),
+        );
+        let runtime = Runtime::new(
+            &home,
+            writer.handle(),
+            symphony_store::open(&db).unwrap(),
+            crate::bus::EventBus::new(writer.handle(), 16, objects),
+            Vec::new(),
+            None,
+        );
+        let cfg = runtime.plan_config_for(project);
+        assert_eq!(cfg.compact_every_tasks, 7);
+        // El resto del `[plan]` sigue siendo el global.
+        assert_eq!(cfg.enabled, runtime.plan_config().enabled);
+        let style = runtime.project_config(project).and_then(|p| p.harness);
+        assert_eq!(
+            style.map(|h| h.style),
+            Some(symphony_core::HarnessStyle::Normal)
+        );
     }
 
     #[test]

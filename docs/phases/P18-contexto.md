@@ -163,3 +163,20 @@ El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-ba
 - **Meta −40 %:** solo en same_provider. Rotation y fallback quedan cortas porque el resto es diff ya en contexto mínimo; manual_switch no tiene nada repetido que colapsar. No se forzó con pérdida.
 - **Verificación:** `cargo nextest run -p symphony-context` 57 passed, 2 skipped; `p18_ --run-ignored all` 3 passed; clippy `--all-targets -D warnings` y fmt limpios. Tests de regresión nuevos: `p18_balanced_keeps_failures_openings_and_authors`, `a_message_ending_with_the_plan_keeps_its_head_and_points_to_the_plan` y los de `compress`. Sin xtask ni live.
 - **Siguiente:** gate completo de P18, S7 (revisión y cierre).
+
+## P18.S7 · Revisión de cierre (PLAN §4.6)
+
+- **Agente:** claude/opus-5.5 · **Fecha:** 2026-10-31 · rama `symphony/m9ndhjq7/agent-101`. Revisado `git diff main...HEAD` (benchmark, recortes, Flintstone, `/init`, compact automático, grafo, segundo cerebro).
+- **Sin hallazgos ALTOS.** Sin `unwrap/expect/panic` nuevos en runtime; el grafo y el cerebro solo escriben desde el daemon (writer para la base); `.symphony/brain/` queda ignorado (raíz `.gitignore` y el `*` de `.symphony/.gitignore`); el arranque solo encola el grafo.
+- **MEDIOS arreglados (un test cada uno):**
+  1. El contexto del grafo se pegaba también a los prompts de sesiones reanudadas: en el run de compactación quedaba `/compact <grafo>`, y Claude toma ese texto como instrucciones del resumen (podía centrarse en la estructura y soltar decisiones). Ahora solo va en sesiones nuevas (`executor.rs::with_graph_context`; test `el_grafo_no_se_pega_a_sesiones_reanudadas_ni_al_compact`).
+  2. `symphony init` escribe `[harness] style` y `[plan] compact_every_tasks` en `project.toml`, pero el daemon solo leía `config.toml`: no tenían efecto. Ahora el estilo del proyecto pisa el global y `compact_every_tasks` del proyecto pisa solo ese campo (`plan.rs::plan_config_for`; test `el_project_toml_de_init_pisa_compact_y_estilo`).
+  3. Handoff BALANCED/AGGRESSIVE: un bloque repetido se cambiaba por «igual a la de un mensaje posterior» aunque la copia posterior se recortara por el tope por mensaje → se perdía la salida. Un mensaje recortado ya no sirve de referencia (`handoff.rs`; test `dedup_no_remite_a_un_bloque_que_el_recorte_corta`).
+  4. `chat.get` se sondea en cada tick de la TUI mientras no hay agente de chat y cada llamada pedía reconstruir el grafo entero (slot pesado ocupado sin fin). Ahora usa `ensure_graph`, que solo lo crea si falta (test `ensure_graph_no_reconstruye_si_ya_hay_grafo`).
+- **BAJOS (pendientes, sin arreglar):**
+  - `brain.rs`: celdas de tabla sin escapar `|` ni backticks (un comando con `|` rompe la fila); `refresh_brain` hace I/O síncrono en el hilo async con el lector bloqueado (barato; `spawn_blocking` si crece).
+  - `squeeze_blocks`: un bloque repetido dentro del mismo mensaje se etiqueta «de un mensaje posterior» aunque esté en el mismo.
+  - `plan_done` en memoria: tras reiniciar el daemon la base cae a 0 y la siguiente rotación pide compactar aunque la sesión hiciera menos tareas (documentado como conservador).
+  - `symphony init` imprime «creado: .symphony/project.toml…» aunque ya existiera; `project_init` del server fija Flintstone/animaciones/3 sin opción por IPC.
+  - Sin prueba L2 del texto exacto que recibe el CLI en el run de compactación (cubierto por la unitaria del prompt).
+- **Entorno:** dentro de un agente de Symphony hay que quitar todas las `SYMPHONY_*` (no solo `SYMPHONY_LIVE`) antes de `cargo nextest -p symphony-daemon`: con `SYMPHONY_USER_HOME` heredado fallan `lifecycle_single_instance_and_methods` y `system_view_and_performance_profile_work_without_a_project`.

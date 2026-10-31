@@ -858,7 +858,7 @@ fn chat_get(req: Request, state: &State) -> Response {
             .map_or_else(|| PathBuf::from(&root), |w| PathBuf::from(w.path));
         state
             .runtime
-            .refresh_graph(&graph_root, project.map(|p| p.id.to_string()));
+            .ensure_graph(&graph_root, project.map(|p| p.id.to_string()));
         Ok(json!({ "agent_id": agent.map(|a| a.id.to_string()) }))
     })
 }

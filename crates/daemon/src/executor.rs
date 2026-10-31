@@ -223,6 +223,18 @@ fn skill_prefix(provider: &str) -> Option<char> {
 /// es lo primero del mensaje (probado: dentro del prompt de handoff no se aplica), así que si el
 /// mensaje empieza por el prefijo de skill del proveedor destino, esa invocación se sube al
 /// inicio y el resto del handoff pasa como sus argumentos.
+/// Prompt del run con el contexto estructural del grafo (P18.S4), solo en sesiones nuevas.
+/// Una sesión reanudada ya lo recibió en su primer prompt; pegarlo otra vez gasta tokens
+/// en cada mensaje y, tras `/compact`, lo convierte en las instrucciones de compactación
+/// (el resumen se centraría en el grafo y podría soltar las decisiones). P18.S7.
+fn with_graph_context(prompt: &str, resumed: bool, graph: impl FnOnce() -> String) -> String {
+    if resumed {
+        prompt.to_string()
+    } else {
+        format!("{prompt}{}", graph())
+    }
+}
+
 // ponytail: los argumentos de la skill incluyen todo el handoff; suficiente para skills de estilo
 // o de tarea. `/skill` escrito para el otro proveedor no se traduce.
 fn with_user_message(prompt: &str, message: &str, provider: &str) -> String {
@@ -418,7 +430,9 @@ impl Runtime {
 
     async fn launch_inner(&self, l: Launch) -> Result<(), String> {
         self.refresh_graph(&l.worktree, Some(l.project_id.to_string()));
-        let prompt = format!("{}{}", l.prompt, self.graph_context(&l.worktree));
+        let prompt = with_graph_context(&l.prompt, l.resume_session.is_some(), || {
+            self.graph_context(&l.worktree)
+        });
         let main_workspace = self.watch_main_workspace(l.project_id).await;
         let mut env = vec![
             ("SYMPHONY_AGENT_ID".into(), l.agent_id.to_string()),
@@ -446,10 +460,19 @@ impl Runtime {
                 });
         if harness == symphony_core::HarnessMode::Symphony {
             env.push((symphony_adapter_common::ENV_HARNESS.into(), "1".into()));
-            let style =
-                symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(&self.home))
+            // `[harness] style` del `project.toml` (lo escribe `symphony init`) pisa el global.
+            let style = self
+                .project_config(l.project_id)
+                .and_then(|p| p.harness)
+                .map(|h| h.style)
+                .or_else(|| {
+                    symphony_core::load_or_create(&symphony_core::SymphonyHome::user_for(
+                        &self.home,
+                    ))
+                    .ok()
                     .map(|c| c.harness.style)
-                    .unwrap_or_default();
+                })
+                .unwrap_or_default();
             if style == symphony_core::HarnessStyle::Normal {
                 env.push((
                     symphony_adapter_common::ENV_HARNESS_STYLE.into(),
@@ -2439,7 +2462,14 @@ impl Runtime {
 
 #[cfg(test)]
 mod skill_tests {
-    use super::with_user_message;
+    use super::{with_graph_context, with_user_message};
+
+    #[test]
+    fn el_grafo_no_se_pega_a_sesiones_reanudadas_ni_al_compact() {
+        let graph = || "\n\nContexto estructural del proyecto".to_string();
+        assert_eq!(with_graph_context("/compact", true, graph), "/compact");
+        assert!(with_graph_context("objetivo", false, graph).ends_with("estructural del proyecto"));
+    }
 
     #[test]
     fn a_skill_invocation_moves_to_the_front_for_its_own_provider() {

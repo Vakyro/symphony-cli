@@ -211,8 +211,16 @@ fn render_conversation(input: &HandoffInput, mode: ContextMode) -> (String, u8) 
             })
             .filter(|text| text.chars().count() < original.chars().count());
         let referenced_text = replacement.as_deref().unwrap_or(original);
+        // Un mensaje recortado puede perder sus bloques: no sirven de referencia para los
+        // anteriores (se deduplicarían contra un texto que no llega al handoff). P18.S7.
+        let seen_before = summarize.then(|| seen_blocks.clone());
         let squeezed = summarize.then(|| squeeze_blocks(referenced_text, &mut seen_blocks));
         let text = squeezed.as_deref().unwrap_or(referenced_text);
+        if is_clipped(text, each)
+            && let Some(before) = seen_before
+        {
+            seen_blocks = before;
+        }
         let line = format!("**{who}:** {}", clip(text, each, None));
         let len = line.chars().count();
         if total.is_some_and(|t| !kept.is_empty() && used + len > t) {
@@ -896,6 +904,31 @@ mod tests {
     }
 
     /// Conversación de una fixture P18: `<<<usuario>>>` / `<<<asistente>>>` abren cada mensaje.
+    /// P18.S7: un bloque repetido solo se cambia por referencia si la copia posterior llega
+    /// entera; si el mensaje posterior se recorta, la anterior se conserva.
+    #[test]
+    fn dedup_no_remite_a_un_bloque_que_el_recorte_corta() {
+        let mut input = fixed();
+        let block = format!("```\n{}\n```", "salida única del test ".repeat(20));
+        input.conversation = vec![
+            ChatMessage {
+                speaker: Speaker::Assistant,
+                text: format!("Salida:\n{block}"),
+            },
+            ChatMessage {
+                speaker: Speaker::Assistant,
+                text: format!("{}\n{block}", "relleno ".repeat(600)),
+            },
+        ];
+        let (text, _) = render_conversation(&input, ContextMode::Balanced);
+        assert!(!text.contains("[salida igual a la de un mensaje posterior]"));
+        assert!(text.contains("salida única del test salida única"));
+        // Sin recorte, la referencia sí ahorra la copia repetida.
+        input.conversation[1].text = format!("Otra vez:\n{block}");
+        let (text, _) = render_conversation(&input, ContextMode::Balanced);
+        assert!(text.contains("[salida igual a la de un mensaje posterior]"));
+    }
+
     fn p18_chat(text: &str) -> Vec<ChatMessage> {
         let mut out: Vec<ChatMessage> = Vec::new();
         for line in text.lines() {
