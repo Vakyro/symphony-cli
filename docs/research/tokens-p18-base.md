@@ -42,7 +42,3 @@ Se detuvo el trabajo tras el segundo intento fallido, según la instrucción de 
 ## Fixtures
 
 Se reutiliza el fixture fijo `fixed()` del módulo de handoff; se fija texto sintético (`x` para el diff), número de mensajes y 800 caracteres por mensaje. La tabla se regenera desde el test; no depende del repo de trabajo, reloj, proveedor, configuración del usuario ni red.
-
-## Cifra final P18.S1 · integración (2026-10-31)
-
-El benchmark reproducido tras corregir la apertura del handoff terminó **1 passed**. La cifra final es igual a la línea base previa: rotation_context 18.026/18.026/15.546/5.546; fallback_quota 9.460/9.460/9.460/6.980; manual_switch 2.936 en los cuatro modos; same_provider 3.029 en los cuatro modos (RAW/SAFE/BALANCED/AGGRESSIVE). El cambio corrige fidelidad conversacional y no altera estos cuatro escenarios fijos; por tanto el ahorro medido en esta carga sigue sin poder atribuirse como porcentaje del objetivo del 40 %.
