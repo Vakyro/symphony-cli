@@ -177,6 +177,63 @@ fn patterns_compile() {
     assert!(tests_summary::summarize("test result: ok. 1 passed; 0 failed; 0 ignored").is_some());
 }
 
+#[test]
+fn nextest_summary_wins_over_the_inner_test_result_and_keeps_the_panic() {
+    let mut out = String::from("    Starting 23 tests across 2 binaries\n");
+    for i in 0..19 {
+        out.push_str(&format!(
+            "        PASS [   0.0{i}s] symphony-context t{i}\n"
+        ));
+    }
+    out.push_str(
+        "        FAIL [  70.161s] symphony-daemon::runtime handoff_x\n\
+         test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 110 filtered out\n\
+         thread 'handoff_x' panicked at crates\\daemon\\tests\\runtime.rs:1686:5:\n\
+         el handoff conserva la conversación\n\
+         failures:\n\
+         failures:\n\
+              Summary [ 124.010s] 20/223 tests run: 19 passed, 1 failed, 3 skipped\n\
+                 FAIL [  70.161s] symphony-daemon::runtime handoff_x\n",
+    );
+    let c = compress(&out, Hint::Auto);
+    assert_eq!(c.compressor, Compressor::TestSummary);
+    assert!(
+        c.text
+            .starts_with("23 pruebas: 19 pasaron, 1 falló, 3 omitidas"),
+        "{}",
+        c.text
+    );
+    assert_eq!(
+        c.text.matches("handoff_x").count(),
+        2,
+        "un FAIL (sin repetir) y el pánico"
+    );
+    assert!(c.text.contains("el handoff conserva la conversación"));
+    assert_eq!(c.text.matches("failures:").count(), 1);
+}
+
+#[test]
+fn diff_keeps_one_line_of_context_and_drops_redundant_headers() {
+    let d = "diff --git a/src/a.rs b/src/a.rs\nindex 1..2 100644\n--- a/src/a.rs\n+++ b/src/a.rs\n\
+             @@ -1,9 +1,9 @@\n c1\n c2\n c3\n c4\n-viejo\n+nuevo\n c5\n c6\n c7\n\
+             diff --git a/src/n.rs b/src/n.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/n.rs\n\
+             @@ -0,0 +1 @@\n+fn n() {}\n";
+    let out = diff::reduce(d);
+    assert!(
+        !out.contains("index 1..2") && !out.contains("--- a/src/a.rs"),
+        "{out}"
+    );
+    assert!(!out.contains("+++ b/src/a.rs"));
+    assert!(out.contains("new file mode 100644\n--- /dev/null"), "{out}");
+    assert!(
+        out.contains(
+            " [… 3 líneas sin cambios]\n c4\n-viejo\n+nuevo\n c5\n [… 2 líneas sin cambios]"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("c1") && !out.contains("c7"));
+}
+
 proptest! {
     #[test]
     fn never_panics_and_never_inflates(text in "\\PC{0,2000}", hint in 0u8..5) {

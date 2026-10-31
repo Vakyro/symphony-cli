@@ -78,30 +78,70 @@ fn parse(text: &str) -> (Vec<String>, Vec<FileDiff>) {
     (preamble, files)
 }
 
-/// Recorta cada hunk largo a su principio y su final.
+/// Líneas de contexto que se conservan junto a cada cambio (como `git diff -U1`).
+const CONTEXT: usize = 1;
+
+fn is_change(line: &str) -> bool {
+    line.starts_with('+') || line.starts_with('-')
+}
+
+/// Deja `CONTEXT` líneas sin cambios alrededor de cada cambio; las demás se cuentan en un aviso
+/// (una sola línea suelta se queda: el aviso no sería más corto).
+fn trim_context<'a>(hunk: &[&'a String]) -> Vec<std::borrow::Cow<'a, str>> {
+    let n = hunk.len();
+    let keep: Vec<bool> = (0..n)
+        .map(|i| {
+            !hunk[i].starts_with(' ')
+                || hunk[i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(n)]
+                    .iter()
+                    .any(|l| is_change(l))
+        })
+        .collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if keep[i] {
+            out.push(hunk[i].as_str().into());
+            i += 1;
+            continue;
+        }
+        let run = keep[i..].iter().take_while(|k| !**k).count();
+        if run == 1 {
+            out.push(hunk[i].as_str().into());
+        } else {
+            out.push(format!(" [… {run} líneas sin cambios]").into());
+        }
+        i += run;
+    }
+    out
+}
+
+/// Recorta el contexto de cada hunk y cada hunk largo a su principio y su final.
 fn trim_hunks(body: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut hunk: Vec<&String> = Vec::new();
-    let flush = |hunk: &mut Vec<&String>, out: &mut Vec<String>| {
+    let flush = |hunk: &[&String], out: &mut Vec<String>| {
+        let trimmed = trim_context(hunk);
+        let hunk: Vec<&str> = trimmed.iter().map(|s| s.as_ref()).collect();
         if hunk.len() > HUNK_MAX {
-            out.extend(hunk[..HUNK_HEAD].iter().map(|s| (*s).clone()));
+            out.extend(hunk[..HUNK_HEAD].iter().map(|s| s.to_string()));
             out.push(format!(
                 "[… {} líneas de este hunk omitidas]",
                 hunk.len() - HUNK_HEAD - HUNK_TAIL
             ));
-            out.extend(hunk[hunk.len() - HUNK_TAIL..].iter().map(|s| (*s).clone()));
+            out.extend(hunk[hunk.len() - HUNK_TAIL..].iter().map(|s| s.to_string()));
         } else {
-            out.extend(hunk.iter().map(|s| (*s).clone()));
+            out.extend(hunk.iter().map(|s| s.to_string()));
         }
-        hunk.clear();
     };
     for line in body {
         if line.starts_with("@@") {
-            flush(&mut hunk, &mut out);
+            flush(&hunk, &mut out);
+            hunk.clear();
         }
         hunk.push(line);
     }
-    flush(&mut hunk, &mut out);
+    flush(&hunk, &mut out);
     out
 }
 
@@ -135,7 +175,14 @@ pub fn reduce(text: &str) -> String {
             ));
             continue;
         }
-        out.extend(f.header.iter().cloned());
+        // `index` y los `---`/`+++` que repiten la ruta de `diff --git` no dicen nada nuevo.
+        let (minus, plus) = (format!("--- a/{}", f.path), format!("+++ b/{}", f.path));
+        out.extend(
+            f.header
+                .iter()
+                .filter(|h| !h.starts_with("index ") && **h != minus && **h != plus)
+                .cloned(),
+        );
         if !f.binary {
             out.extend(trim_hunks(&f.body));
         }

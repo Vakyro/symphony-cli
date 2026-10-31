@@ -153,3 +153,13 @@ El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-ba
 - **Benchmark:** `p18_routing_handoff_token_baseline` carga ahora `fixtures/handoff-p18/` (conversaciones con tool calls y salidas reales de cargo/git, diffs unificados reales con `Cargo.lock`, un archivo de código nuevo, `plan_tail` armado como en `checkpoint.rs`). Test nuevo `p18_fixtures_load_as_alternating_conversations`. Línea base en `docs/research/tokens-p18-base.md` § «Benchmark realista».
 - **Verificación:** `cargo nextest run -p symphony-context p18_ --run-ignored all` → 2 passed; `cargo clippy -p symphony-context -- -D warnings` limpio.
 - **Siguiente (fase 2):** colapsar salidas de herramientas dentro de los mensajes en BALANCED/AGGRESSIVE en vez de recortarlas a ciegas y no repetir el final que ya trae `plan_tail`; meta −40 % por ruta en BALANCED.
+
+## P18.S1 · Parte 3, fases 2–3: recortes deterministas y tabla antes/después
+
+- **Agente:** claude/opus-5.5 · **Fecha:** 2026-10-31 · rama `symphony/m9ndhjq7/agent-099`.
+- **Qué:** en BALANCED/AGGRESSIVE, `handoff.rs::squeeze_blocks` cambia los bloques ``` de salida repetidos en un mensaje posterior por referencia y resume los largos con `compress` (colapso de logs/tests) en vez del recorte ciego por el principio; el final de un mensaje igual al `plan_tail` pasa a referencia conservando la apertura; `compress/diff.rs` deja una línea de contexto por cambio (`-U1`) y cuenta el resto. RAW/SAFE intactos.
+- **Archivos:** `crates/context/src/handoff.rs`, `crates/context/src/compress/{diff.rs,tests.rs,tests_summary.rs}`.
+- **Resultado (BALANCED, antes → después):** rotation_context 16.016 → 11.127 (−30,5 %), fallback_quota 6.390 → 4.207 (−34,2 %), manual_switch 1.602 → 1.561 (−2,6 %), same_provider 6.468 → 1.654 (−74,4 %). Tabla completa por ruta y modo en `docs/research/tokens-p18-base.md` § «Antes/después».
+- **Meta −40 %:** solo en same_provider. Rotation y fallback quedan cortas porque el resto es diff ya en contexto mínimo; manual_switch no tiene nada repetido que colapsar. No se forzó con pérdida.
+- **Verificación:** `cargo nextest run -p symphony-context` 57 passed, 2 skipped; `p18_ --run-ignored all` 3 passed; clippy `--all-targets -D warnings` y fmt limpios. Tests de regresión nuevos: `p18_balanced_keeps_failures_openings_and_authors`, `a_message_ending_with_the_plan_keeps_its_head_and_points_to_the_plan` y los de `compress`. Sin xtask ni live.
+- **Siguiente:** gate completo de P18, S7 (revisión y cierre).

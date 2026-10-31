@@ -60,6 +60,39 @@ El daemon arma el resto igual que en producción: objetivo = primer mensaje del 
 
 Lo que ya ahorra BALANCED sale del `GitDiffReducer` y del recorte ciego a 4.000 caracteres por mensaje. Ese recorte corta las salidas largas por el principio y puede dejar fuera justo lo importante (el pánico del test o el error de clippy al final de un bloque); la parte siguiente apunta a colapsar esas salidas con los compresores deterministas en vez de recortarlas, y a no repetir lo que el checkpoint ya trae.
 
+### Antes/después de los recortes de la parte 3 (2026-10-31)
+
+Recortes, todos deterministas y solo en BALANCED/AGGRESSIVE (RAW/SAFE no cambian):
+
+- Bloques ``` de salida de herramientas dentro de los mensajes: el que ya sale igual en un mensaje posterior se cambia por una referencia, y el largo se resume con `compress` (colapso de logs y de salidas de tests) en vez del recorte ciego por el principio, así que el pánico y el error de clippy del final del bloque se conservan.
+- Un final del mensaje igual al `plan_tail` del checkpoint se cambia por referencia, conservando la apertura del mensaje.
+- `GitDiffReducer`: deja una línea de contexto alrededor de cada cambio (como `git diff -U1`) y cuenta el resto en un aviso.
+
+Tokens estimados (mismo test, mismas fixtures); Δ = después frente a antes:
+
+| Ruta | Modo | Antes (e41e0a6) | Después | Δ |
+|---|---|---:|---:|---:|
+| rotation_context | RAW | 26.221 | 26.221 | 0 % |
+| rotation_context | SAFE | 26.221 | 26.221 | 0 % |
+| rotation_context | BALANCED | 16.016 | 11.127 | **−30,5 %** |
+| rotation_context | AGGRESSIVE | 8.881 | 7.601 | −14,4 % |
+| fallback_quota | RAW | 16.247 | 16.247 | 0 % |
+| fallback_quota | SAFE | 14.542 | 14.542 | 0 % |
+| fallback_quota | BALANCED | 6.390 | 4.207 | **−34,2 %** |
+| fallback_quota | AGGRESSIVE | 5.190 | 4.207 | −18,9 % |
+| manual_switch | RAW | 2.114 | 2.114 | 0 % |
+| manual_switch | SAFE | 2.114 | 2.114 | 0 % |
+| manual_switch | BALANCED | 1.602 | 1.561 | **−2,6 %** |
+| manual_switch | AGGRESSIVE | 1.602 | 1.561 | −2,6 % |
+| same_provider | RAW | 11.827 | 11.827 | 0 % |
+| same_provider | SAFE | 11.827 | 11.827 | 0 % |
+| same_provider | BALANCED | 6.468 | 1.654 | **−74,4 %** |
+| same_provider | AGGRESSIVE | 3.343 | 1.654 | −50,5 % |
+
+Frente a RAW, BALANCED queda en −57,6 %, −74,1 %, −26,2 % y −86,0 %.
+
+**Meta −40 % por ruta en BALANCED: cumplida solo en `same_provider`.** `rotation_context` (−30,5 %) y `fallback_quota` (−34,2 %) quedan cortas: lo que sobra es sobre todo el diff, ya en contexto mínimo; bajar más exige quitar hunks enteros (perder cambios) o resumir código, que no es determinista sin pérdida. `manual_switch` es una conversación de 3 mensajes cortos sin salidas repetidas ni final igual al plan: no hay nada que colapsar sin perder lo necesario. En las rutas grandes AGGRESSIVE ya coincide con BALANCED porque los recortes dejaron todo por debajo de sus topes. Los tests de regresión (`p18_balanced_keeps_failures_openings_and_authors` y los de `compress`) comprueban que se conservan errores, aperturas y autores, sin relajar los existentes.
+
 ## Fixtures
 
 Hasta la parte 2 se reutilizaba el fixture fijo `fixed()` del módulo de handoff; se fija texto sintético (`x` para el diff), número de mensajes y 800 caracteres por mensaje. La tabla se regenera desde el test; no depende del repo de trabajo, reloj, proveedor, configuración del usuario ni red.

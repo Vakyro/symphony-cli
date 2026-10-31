@@ -6,6 +6,8 @@
 //! Además del prompt devuelve **qué entró y con qué fidelidad** ([`Item`]): la tabla
 //! `handoff_items` y `symphony context inspect` salen de ahí.
 
+use std::collections::HashSet;
+
 use symphony_core::ContextMode;
 
 use crate::ast;
@@ -171,6 +173,7 @@ fn render_conversation(input: &HandoffInput, mode: ContextMode) -> (String, u8) 
             "[igual al Último plan del executor anterior]",
         ),
     ];
+    let mut seen_blocks = HashSet::new();
     let mut referenced = false;
     let (total, each) = match conversation_limits(mode) {
         Some((t, e)) => (Some(t), Some(e)),
@@ -188,16 +191,28 @@ fn render_conversation(input: &HandoffInput, mode: ContextMode) -> (String, u8) 
         // Solo texto idéntico y completo en el checkpoint; nunca inferimos equivalencia.
         let replacement = checkpoint
             .iter()
-            .find(|(text, _)| summarize && original == *text)
-            .map(|(_, reference)| {
-                // La primera línea conserva el contexto del turno antes de remitir al checkpoint.
-                original.split_once('\n').map_or_else(
-                    || reference.to_string(),
-                    |(first, _)| format!("{first}\n{reference}"),
-                )
+            .filter(|_| summarize)
+            .find_map(|(text, reference)| {
+                if original == *text {
+                    // La primera línea conserva el contexto del turno antes de remitir al checkpoint.
+                    Some(original.split_once('\n').map_or_else(
+                        || reference.to_string(),
+                        |(first, _)| format!("{first}\n{reference}"),
+                    ))
+                } else if text.chars().count() >= MIN_TAIL_REFERENCE && original.ends_with(text) {
+                    // `plan_tail` es el final del último mensaje: lo de antes queda tal cual.
+                    let head = original[..original.len() - text.len()].trim_end();
+                    Some(format!(
+                        "{head}\n[… el resto del mensaje es igual al Último plan del executor anterior]"
+                    ))
+                } else {
+                    None
+                }
             })
             .filter(|text| text.chars().count() < original.chars().count());
-        let text = replacement.as_deref().unwrap_or(original);
+        let referenced_text = replacement.as_deref().unwrap_or(original);
+        let squeezed = summarize.then(|| squeeze_blocks(referenced_text, &mut seen_blocks));
+        let text = squeezed.as_deref().unwrap_or(referenced_text);
         let line = format!("**{who}:** {}", clip(text, each, None));
         let len = line.chars().count();
         if total.is_some_and(|t| !kept.is_empty() && used + len > t) {
@@ -223,6 +238,65 @@ fn render_conversation(input: &HandoffInput, mode: ContextMode) -> (String, u8) 
         fidelity::FULL
     };
     (out, f)
+}
+
+/// Un final del mensaje igual al `plan_tail` se cambia por referencia desde este tamaño.
+const MIN_TAIL_REFERENCE: usize = 200;
+/// Bloques ``` de salida que se resumen con los compresores deterministas desde este tamaño.
+const MIN_SQUEEZE: usize = 800;
+/// Bloques ``` repetidos que se cambian por referencia desde este tamaño.
+const MIN_DEDUP: usize = 200;
+
+/// Los bloques ``` de un mensaje (salidas de herramientas) en `BALANCED`/`AGGRESSIVE`: el que ya
+/// salió igual en un mensaje posterior se cambia por una referencia (los mensajes se recorren del
+/// más reciente al más viejo, y el más reciente siempre entra), y el largo se resume con
+/// [`compress`] (logs, tests, JSON) en vez de recortarse a ciegas por el principio.
+fn squeeze_blocks(text: &str, seen: &mut HashSet<String>) -> String {
+    if !text.contains("```") {
+        return text.to_string();
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut block: Option<Vec<&str>> = None;
+    for line in text.lines() {
+        let fence = line.trim_start().starts_with("```");
+        match (&mut block, fence) {
+            (None, true) => {
+                out.push(line.to_string());
+                block = Some(Vec::new());
+            }
+            (Some(body), true) => {
+                let body = body.join("\n");
+                let n = body.chars().count();
+                if n >= MIN_DEDUP && !seen.insert(body.clone()) {
+                    out.push("[salida igual a la de un mensaje posterior]".into());
+                } else {
+                    let c = compress(&body, Hint::Auto);
+                    // Solo si ahorra de verdad (≥25 %): un código leído no se toca por dos blancos.
+                    if n >= MIN_SQUEEZE
+                        && c.compressor != Compressor::None
+                        && c.tokens_compressed * 4 <= c.tokens_original * 3
+                    {
+                        out.push(c.text);
+                        out.push(format!(
+                            "[salida de {n} caracteres resumida de forma determinista ({})]",
+                            c.compressor.name()
+                        ));
+                    } else {
+                        out.push(body);
+                    }
+                }
+                out.push(line.to_string());
+                block = None;
+            }
+            (Some(body), false) => body.push(line),
+            (None, false) => out.push(line.to_string()),
+        }
+    }
+    // Un bloque sin cerrar (p. ej. cortado por `plan_tail`) va tal cual.
+    if let Some(body) = block {
+        out.extend(body.into_iter().map(str::to_string));
+    }
+    out.join("\n")
 }
 
 fn is_clipped(text: &str, max: Option<usize>) -> bool {
@@ -971,6 +1045,91 @@ mod tests {
                 assemble(&input, ContextMode::Aggressive).tokens_sent,
             );
         }
+    }
+
+    /// P18.S1 parte 3: los recortes de BALANCED no pierden errores, aperturas ni autores.
+    #[test]
+    fn p18_balanced_keeps_failures_openings_and_authors() {
+        let [_, (_, fallback), _, (_, same)] = p18_routes();
+        let balanced = assemble(&fallback, ContextMode::Balanced);
+        let safe = assemble(&fallback, ContextMode::Safe);
+        let raw = assemble(&fallback, ContextMode::Raw).prompt;
+        for kept in [
+            // El pánico y el nombre del test que falló, dentro de una salida resumida.
+            "el handoff conserva la conversación: **Asistente:** Voy por partes.",
+            "FAIL [  70.161s] ( 16/223) symphony-daemon::runtime handoff_combines_the_checkpoint_with_live_git",
+            "23 pruebas: 19 pasaron, 1 falló, 3 omitidas",
+            // El error de clippy del último comando (va en el plan, una sola vez).
+            "error: could not compile `symphony-context` (lib) due to 1 previous error",
+            // Aperturas y autores de los turnos.
+            "**Asistente:** Empiezo viendo qué toca el ensamblador y quién lo llama.",
+            "**Usuario:** ¿y por qué no lo vimos antes?",
+            "**Asistente:** → Bash: cargo clippy -p symphony-context -- -D warnings",
+        ] {
+            assert!(balanced.prompt.contains(kept), "BALANCED perdió: {kept}");
+            assert!(
+                raw.contains(kept) || kept.starts_with("23 pruebas"),
+                "{kept}"
+            );
+        }
+        // Lo que se resume no entra en BALANCED, pero RAW y SAFE lo conservan.
+        let pass = "PASS [   0.031s] (  1/223) symphony-context compress::tests::patterns_compile";
+        assert!(!balanced.prompt.contains(pass));
+        assert!(raw.contains(pass) && safe.prompt.contains(pass));
+        assert!(
+            balanced
+                .prompt
+                .contains("resumida de forma determinista (TestSummaryCompressor)")
+        );
+        assert!(balanced.tokens_sent < safe.tokens_sent);
+        let conversation = |h: &Handoff| {
+            h.items
+                .iter()
+                .filter(|i| i.section == Section::Decisions)
+                .map(|i| i.fidelity)
+                .min()
+        };
+        assert_eq!(conversation(&balanced), Some(fidelity::COMPRESSED));
+        // SAFE no resume: el turno de 18.850 caracteres se recorta a ciegas por el final.
+        assert_eq!(conversation(&safe), Some(fidelity::CLIPPED));
+
+        // Una salida repetida en turnos viejos remite a la más reciente, que va completa.
+        let (text, _) = render_conversation(&same, ContextMode::Balanced);
+        assert_eq!(
+            text.matches("[salida igual a la de un mensaje posterior]")
+                .count(),
+            4,
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("54 pruebas: 52 pasaron, 2 omitidas").count(),
+            1
+        );
+        let (raw_text, _) = render_conversation(&same, ContextMode::Raw);
+        assert!(!raw_text.contains("[salida igual"));
+    }
+
+    #[test]
+    fn a_message_ending_with_the_plan_keeps_its_head_and_points_to_the_plan() {
+        let mut input = fixed();
+        let plan = "Siguiente: correr los tests de auth y anotar el resultado. ".repeat(5);
+        input.plan_tail = Some(plan.clone());
+        input.conversation = vec![ChatMessage {
+            speaker: Speaker::Assistant,
+            text: format!("Abro con el resumen.\n{plan}"),
+        }];
+        for mode in [ContextMode::Balanced, ContextMode::Aggressive] {
+            let (text, fid) = render_conversation(&input, mode);
+            assert_eq!(
+                text,
+                "**Asistente:** Abro con el resumen.\n[… el resto del mensaje es igual al Último plan del executor anterior]"
+            );
+            assert_eq!(fid, fidelity::COMPRESSED);
+            assert!(assemble(&input, mode).prompt.contains(plan.trim()));
+        }
+        let (text, fid) = render_conversation(&input, ContextMode::Safe);
+        assert!(text.contains(plan.trim()));
+        assert_eq!(fid, fidelity::FULL);
     }
 
     #[test]
