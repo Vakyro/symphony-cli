@@ -1,11 +1,10 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-31 · por codex/gpt-6 · P18.S1 parte 3, fase 1 detenida en validación
+**Actualizado:** 2026-10-31 · por codex/gpt-6 · Integración P18.S1 verificada parcialmente
 **Fase actual:** P18 · Contexto y ahorro de tokens (rama `phase/p18-contexto`, pusheada). **P17 cerrada** (`p17-done`, merge `5f19f0e` en `main`, gate 805 ✅).
 **Paso actual:** P18 en curso (S3 ✅ el 2026-10-31). Hechos: S1 benchmark (🟡 recortes), S2 Flintstone por defecto, S3 sesiones cortas con compactación automática, S4 grafo, S5 `/init`, S6 segundo cerebro, enmienda ADR-0013 D2. Pendientes: recortes realistas, gate, revisión y docs de cierre (S7).
-**Estado del paso:** sin gate completo en P18. Corregida la pérdida de la apertura del mensaje en handoff; `handoff_combines_the_checkpoint_with_live_git` pasó solo sin modificarlo. Fase 1 de la parte 3 detenida tras dos corridas fallidas de la suite: fixture nueva corregida y después `cpu_keeps_beating_after_a_busy_child_ends` (`NO_HEARTBEAT` frente a `COMPLETED`), 166 passed, 1 failed, 3 skipped; clippy pendiente. Ver bitácora P18 § parte 3.
-**Responsable:** el siguiente orquestador.
-**Siguiente:** retomar la cola `.symphony/tmp/q-p18c.txt` (sin las líneas ya hechas; ver `docs/progress/DOGFOOD.md` § Cola secuencial). Orden: (1) resolver la validación pendiente de la corrección de handoff (parte 3, fase 1) y después rehacer el benchmark con fixtures realistas para medir el −40 % (el actual es sintético: «x» repetidas); (2) gate completo; (3) revisión de cierre; (4) docs de cierre, merge y `p18-done`. Después P19 → P20 → P16. Plan completo con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
+**Estado del paso:** P18 sigue sin gate completo. Esta integración corrigió la apertura del mensaje en el handoff; el test específico del daemon pasó (1/1), y fmt y clippy de workspace están verdes. El benchmark P18.S1 reprodujo la tabla fija sin variación. La suite de workspace excedió el límite de 600 s de la herramienta sin resumen. Ver bitácora P18 § integración.
+**Siguiente:** volver a ejecutar la suite de workspace desde el integrador para obtener resultado completo; después rehacer el benchmark con fixtures realistas para medir el −40 % (el actual es sintético), ejecutar el gate completo, revisar el cierre y completar docs, merge y tag de P18. Después P19 → P20 → P16. Plan completo con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
 **Seguimientos:** P17 dejó puntos bajos en «Revisión de cierre» de `docs/phases/P17-tui.md`. Hallazgos de Symphony del día en `docs/progress/LEARNINGS.md` § 2026-10-30.
 **P16:** sigue pendiente del veredicto de uso, de S4 en `main` y de P18–P20 para completar los docs as-built y publicar.
 

@@ -196,7 +196,15 @@ fn render_conversation(input: &HandoffInput, mode: ContextMode) -> (String, u8) 
                     |(first, _)| format!("{first}\n{reference}"),
                 )
             })
-            .filter(|text| text.chars().count() < original.chars().count());
+            .filter(|text| text.chars().count() < original.chars().count())
+            .map(|text| {
+                // Una apertura igual a la primera línea sigue siendo contexto conversacional.
+                if text == original.lines().next().unwrap_or_default() {
+                    original.to_string()
+                } else {
+                    text
+                }
+            });
         let text = replacement.as_deref().unwrap_or(original);
         let line = format!("**{who}:** {}", clip(text, each, None));
         let len = line.chars().count();
@@ -700,6 +708,10 @@ mod tests {
             (
                 "Voy por partes.",
                 "- [x] leer\n- [ ] correr los tests de auth",
+            ),
+            (
+                "Voy por partes.",
+                "Voy por partes.\n- [x] leer\n- [ ] correr los tests de auth",
             ),
             (
                 "Decisión: conservar la API pública.",
