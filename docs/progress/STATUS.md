@@ -1,11 +1,11 @@
 # STATUS — Symphony CLI
 
-**Actualizado:** 2026-10-31 · por codex · follow-up de P18: gate local completo; CI remoto pendiente
-**Fase actual:** P18 ya se mergeó a `main` (`8ab3a47`) y tiene tag `p18-done`. El CI de `main` encontró una carrera en `Runtime::stop`; la corrección está en `phase/p18-contexto`, con gate local completo, esperando CI remoto y segundo merge. **P17 cerrada** (`p17-done`, merge `5f19f0e` en `main`, gate 805 ✅).
-**Paso actual:** P18 completa funcionalmente: S1 benchmark realista y recortes del handoff, S2 Flintstone por defecto, S3 sesiones cortas con compactación automática (enmienda ADR-0013 D2), S4 grafo al iniciar, S5 `/init`, S6 segundo cerebro, S7 revisión de cierre y follow-up de la carrera de cancelación. Detalle en `docs/phases/P18-contexto.md`.
-**Estado del paso:** `cargo xtask check` local ✅ en el follow-up (`fmt`, Clippy y 829 tests pasaron; 4 omitidos), con `NEXTEST_TEST_THREADS=2`. El CI previo de `main` falló en macOS y cobertura en `soak_with_two_restarts`; ambos muestran la misma carrera `COMPLETED → CANCELLED`, corregida en la rama. Falta comprobar CI de la corrección y hacer el segundo merge. La meta de −40 % se acepta como aspiración por ruta: solo `same_provider` la alcanza; no se recortará más a costa de contenido. Cifras S1 (BALANCED, antes → después): rotation_context −30,5 %, fallback_quota −34,2 %, manual_switch −2,6 %, same_provider −74,4 % (tabla en `docs/research/tokens-p18-base.md`). L3 live con Codex pasó: dos runs/sesiones distintas, handoff conservó decisión/restricción/archivos; el proveedor reportó 269861 tokens de entrada y 0 de salida (sin baseline live para calcular ahorro comparativo).
-**Responsable:** integrador de P18 (push y segundo merge); después, orquestador de P19.
-**Siguiente:** cerrar el follow-up de P18; luego iniciar **P19** (`phase/p19-orquestacion`; S1 ya tiene la investigación en PLAN, pendiente de Leo el backend de decisión y el umbral de confianza; S2–S7 no dependen de eso). Después P20 → cierre de P16. Plan con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
+**Actualizado:** 2026-10-31 · por codex/gpt-6.1 · follow-up de P18 integrado y CI de `main` verde
+**Fase actual:** P18 cerrada en `main`: integración inicial `8ab3a47`, corrección de la carrera en `d31711e` y merge final `9549ae1`. CI final `41251278031` ✅ en Windows/macOS/Ubuntu, cobertura, fuzz, GUI, docs, deny y MSRV. El tag `p18-done` permanece en el merge inicial `8ab3a47`; no se publicó release `v*`. **P17 cerrada** (`p17-done`, merge `5f19f0e` en `main`, gate 805 ✅).
+**Paso actual:** P18 completa y cerrada. Iniciar P19.S1 en `phase/p19-orquestacion`; la investigación ya está en PLAN y espera definición de Leo para backend de decisión y umbral de confianza. P19.S2–S7 pueden avanzar en paralelo lógico sin esa decisión.
+**Estado del paso:** `cargo xtask check` local ✅ en el follow-up (`fmt`, Clippy y 829 tests pasaron; 4 omitidos), con `NEXTEST_TEST_THREADS=2`. El CI final de `main` (run `41251278031`) pasó todos los jobs activos, incluida la matriz Windows/macOS/Ubuntu, cobertura y fuzz. La causa fue la carrera `COMPLETED → CANCELLED` en `Runtime::stop`, corregida con una relectura del estado dentro del writer serializado y una prueba de regresión. La meta de −40 % se acepta como aspiración por ruta: solo `same_provider` la alcanza; no se recortará más a costa de contenido. Cifras S1 (BALANCED, antes → después): rotation_context −30,5 %, fallback_quota −34,2 %, manual_switch −2,6 %, same_provider −74,4 % (tabla en `docs/research/tokens-p18-base.md`). L3 live con Codex pasó: dos runs/sesiones distintas, handoff conservó decisión/restricción/archivos; el proveedor reportó 269861 tokens de entrada y 0 de salida (sin baseline live para calcular ahorro comparativo).
+**Responsable:** orquestador de P19.
+**Siguiente:** iniciar **P19** (`phase/p19-orquestacion`; S1 ya tiene la investigación en PLAN, pendiente de Leo el backend de decisión y el umbral de confianza; S2–S7 no dependen de eso). Después P20 → cierre de P16. Plan con modelos por tarea: `docs/progress/PLAN-EJECUCION-2026-10-29.md`. Tags `v*` solo con OK escrito de Leo.
 **Seguimientos:** P17 dejó puntos bajos en «Revisión de cierre» de `docs/phases/P17-tui.md`. Hallazgos de Symphony del día en `docs/progress/LEARNINGS.md` § 2026-10-30.
 **P16:** sigue pendiente del veredicto de uso, de S4 en `main` y de P18–P20 para completar los docs as-built y publicar.
 
@@ -168,8 +168,8 @@ Segundo intento realizado con autorización y entorno SYMPHONY_* aislado: el tra
 | P15 | ✅ (revisión visual → Para Leo) | p15-done |
 | P15.5 | ✅ (ADR-0018, 0019, 0020) | p155-done |
 | P13 | ✅ | p13-done |
-| P17 | ✅ cierre documental; integración pendiente | — |
-| P18 | ✅ cierre documental; integración pendiente | — |
+| P17 | ✅ cerrada e integrada | p17-done |
+| P18 | ✅ cerrada e integrada; CI `main` verde | p18-done |
 | P16 | Cierre después de P20 | — |
 
 ## Ola 0 — decisiones del 2026-10-29

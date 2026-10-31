@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| Estado | Integrada y etiquetada; follow-up de estabilidad con gate local verde, CI remoto pendiente |
+| Estado | Cerrada: follow-up integrado y CI de `main` verde |
 | Rama | phase/p18-contexto |
 | Inicio / cierre | 2026-10-30 / 2026-10-31 |
 | Agentes que trabajaron | codex/gpt-6.1 (P18.S1 parte 1), codex/gpt-6-luna (P18.S4 parte 1), kimi-code (P18.S4 cierre), kimi-code/kimi-for-coding (P18.S3: WIP #95 y cierre #96; P18.S7 cierre documental), codex/gpt-6 (P18.S1 fase 1), claude/opus-5.5 (P18.S1 parte 3 y P18.S7 revisión de cierre), codex (integración y gate) |
@@ -233,4 +233,5 @@ El comando exacto para reproducir la tabla está en `docs/research/tokens-p18-ba
 - **Hallazgo tras el primer merge:** CI de `main` (`41248582160`) falló en macOS y en cobertura dentro de `soak_with_two_restarts`. Ambos fallos tenían la misma causa: `Runtime::stop` leía `RUNNING`, el executor completaba el agente antes de que el writer procesara la cancelación, y la transacción intentaba la transición inválida `COMPLETED → CANCELLED`.
 - **Corrección:** el writer vuelve a consultar el agente dentro de su transacción serializada; si ya llegó a estado terminal, conserva estado, tarea y motivo de fin. La prueba `stopping_an_already_completed_agent_keeps_its_result` verifica que detener un agente completado preserve `COMPLETED`, `DONE` y `COMPLETED`.
 - **Verificación local:** prueba nueva 1 passed; `soak_with_two_restarts` 1 passed; `cargo xtask check` con `NEXTEST_TEST_THREADS=2` → fmt ✅, Clippy ✅, **829 tests passed, 4 skipped** ✅.
-- **Estado:** cambio listo en `phase/p18-contexto`; pendiente publicar el follow-up, esperar CI remoto verde y hacer el segundo merge a `main`. El tag `p18-done` permanece en el merge original `8ab3a47`.
+- **Integración final:** commit de corrección `d31711e` en `phase/p18-contexto`, merge `--no-ff` a `main` `9549ae1`, rama pusheada. CI final de `main` `41251278031` ✅ (Windows/macOS/Ubuntu, coverage, deny, docs, MSRV, GUI y fuzz).
+- **Tag:** `p18-done` permanece en el merge inicial `8ab3a47`; no se movió tras el follow-up. Sin release `v*`.
