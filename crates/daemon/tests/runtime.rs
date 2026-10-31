@@ -488,6 +488,29 @@ async fn stopping_an_agent_frees_its_clean_worktree_and_keeps_the_branch() {
     e.writer.shutdown();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_an_already_completed_agent_keeps_its_result() {
+    let e = env(WORK, None).await;
+    let created = e
+        .runtime
+        .create_agent(req(&e, "Hecho", Execution::Exact("fake/fast".into())))
+        .await
+        .unwrap();
+    e.runtime.wait_executors().await;
+    e.writer.handle().flush().await.unwrap();
+
+    e.runtime.stop(created.agent_id).await.unwrap();
+    e.writer.handle().flush().await.unwrap();
+
+    assert_eq!(one::<String>(&e, "SELECT state FROM agents"), "COMPLETED");
+    assert_eq!(one::<String>(&e, "SELECT status FROM tasks"), "DONE");
+    assert_eq!(
+        one::<String>(&e, "SELECT end_reason FROM agent_runs"),
+        "COMPLETED"
+    );
+    e.writer.shutdown();
+}
+
 /// Disco: un agente completado que nadie integró libera su worktree a los 7 días, no antes.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_completed_agent_keeps_its_worktree_for_a_week() {

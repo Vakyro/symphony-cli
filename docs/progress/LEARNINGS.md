@@ -9,6 +9,11 @@ Trampas descubiertas y comandos útiles. Anota en el momento, no al final.
 - **Declarar la meta incumplida en el cierre, no esconderla:** la meta de −40 % solo se alcanzó en la ruta `same_provider` (−74,4 %); rotation (−30,5 %) y fallback (−34,2 %) quedan cortas porque lo que sobra es diff ya en contexto mínimo. El cierre documental deja la decisión (aceptar o seguir recortando) explícita en STATUS en vez de declarar éxito parcial como total.
 - **Los cierres documentales no necesitan gate:** con la revisión de código ya hecha y los resultados de cada paso en la bitácora, la sesión de cierre toca solo docs y no corre Cargo (mismo patrón que el cierre de P17).
 
+## Follow-up de P18 en CI (2026-10-31)
+
+- **Un estado leído antes de encolar una escritura queda obsoleto:** `Runtime::stop` veía `RUNNING`, pero el executor podía cerrar el run antes de que el writer procesara la cancelación. Volver a consultar el agente dentro de la transacción serializada evita convertir una finalización correcta en `COMPLETED → CANCELLED`.
+- **Mismo fallo en macOS y cobertura no son dos regresiones:** ambas fallaron en `soak_with_two_restarts` con la misma transición inválida; al arreglar la carrera común pasan el test nuevo, el soak y el gate local.
+
 ## Entorno / harness (2026-10-29, P17.S5)
 
 - **Correr `cargo nextest` dentro del harness de Symphony sin quitar `SYMPHONY_USER_HOME` rompe los tests de plugins del daemon** de forma determinista: el daemon hijo hereda la variable y `SymphonyHome::user_for` resuelve el dir de plugins al home real del usuario, no al temporal del test («`todo-check` no está instalado en ~/.symphony/plugins»). En scripts: `Remove-Item Env:SYMPHONY_USER_HOME` antes de correr los tests. Aplica a cualquier agente que ejecute la suite dentro de Symphony.

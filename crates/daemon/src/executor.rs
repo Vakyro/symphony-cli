@@ -2276,9 +2276,12 @@ impl Runtime {
             })
             .await;
         }
-        let task_id = agent.task_id;
         self.writer
             .write(Box::new(move |t| {
+                let current = repo::get_agent(t, agent_id)?;
+                if current.state.is_terminal() {
+                    return Ok(());
+                }
                 let now = now_ms();
                 if let Ok(Some(run)) = repo::current_run(t, agent_id) {
                     let _ = repo::close_run(
@@ -2291,7 +2294,7 @@ impl Runtime {
                     );
                 }
                 repo::set_agent_state(t, agent_id, AgentState::Cancelled, None, now)?;
-                repo::set_task_status(t, task_id, TaskStatus::Cancelled, None, now)?;
+                repo::set_task_status(t, current.task_id, TaskStatus::Cancelled, None, now)?;
                 Ok(())
             }))
             .await
