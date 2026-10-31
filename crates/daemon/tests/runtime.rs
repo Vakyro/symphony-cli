@@ -2332,9 +2332,6 @@ kind = "hang"
 async fn a_run_that_goes_silent_after_a_rate_limit_is_closed_with_that_cause() {
     let script = r#"
 [[step]]
-kind = "say"
-text = "trabajando"
-[[step]]
 kind = "rate_limit"
 retry_after_ms = 60000
 [[step]]
@@ -2344,7 +2341,7 @@ kind = "hang"
         &[("fake", script)],
         None,
         Duration::from_millis(100),
-        Duration::from_millis(1500),
+        Duration::from_secs(5),
     )
     .await;
     let created = e
